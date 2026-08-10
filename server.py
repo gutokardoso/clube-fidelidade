@@ -31,7 +31,7 @@ def rowdict(row):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'ClubeFidelidade/4.0'
+    server_version = 'ClubeFidelidade/5.0'
 
     def log_message(self, fmt, *args):
         print(f'[{self.log_date_time_string()}] {self.address_string()} - {fmt % args}')
@@ -54,6 +54,28 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError('body_too_large')
         raw = self.rfile.read(n) if n else b'{}'
         return json.loads(raw.decode('utf-8') or '{}')
+
+    def _body_payload(self):
+        n = int(self.headers.get('Content-Length', '0') or 0)
+        if n > 1_000_000:
+            raise ValueError('body_too_large')
+        raw = self.rfile.read(n) if n else b''
+        ctype = (self.headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
+        if ctype == 'application/x-www-form-urlencoded':
+            parsed = urllib.parse.parse_qs(raw.decode('utf-8'), keep_blank_values=True)
+            return {k: (v[-1] if v else '') for k, v in parsed.items()}, 'form'
+        if ctype == 'multipart/form-data':
+            raise ValueError('multipart_not_supported')
+        return json.loads(raw.decode('utf-8') or '{}'), 'json'
+
+    def send_redirect(self, location, status=303, headers=None):
+        self.send_response(status)
+        self.send_header('Location', location)
+        self.send_header('Cache-Control', 'no-store')
+        if headers:
+            for k, v in headers.items():
+                self.send_header(k, v)
+        self.end_headers()
 
     def _ip(self):
         return self.headers.get('X-Forwarded-For', self.client_address[0]).split(',')[0].strip()
@@ -104,13 +126,19 @@ class Handler(BaseHTTPRequestHandler):
             template=(STATIC/'join.html').read_text(encoding='utf-8')
             if c:
                 template=template.replace('{{LOGO_TEXT}}',html.escape(str(c['logo_text']))).replace('{{CAMPAIGN_NAME}}',html.escape(str(c['name']))).replace('{{CAMPAIGN_DESC}}',html.escape(f"Complete {c['goal']} selos e ganhe {c['reward_name']}."))
+                template=template.replace('name="campaign_code" value="CAFE5"',f'name="campaign_code" value="{html.escape(code)}"')
                 template=template.replace('</head>',f"<style>:root{{--accent:{html.escape(str(c['primary_color']))}}}</style></head>")
+                if (qs.get('error') or [''])[0]:
+                    template=template.replace('<div id="msg"></div>','<div id="msg"><div class="notice error">Não foi possível criar o cartão. Confira os dados e tente novamente.</div></div>')
             else:
                 template=template.replace('{{LOGO_TEXT}}','CLUBE').replace('{{CAMPAIGN_NAME}}','Campanha não encontrada').replace('{{CAMPAIGN_DESC}}','Confira o QR Code ou fale com o estabelecimento.').replace('<form id="f" class="form">','<form id="f" class="form hidden">')
             return self.send_text(template)
         if path in ['/login','/manager','/attendant','/card']:
             name = path.strip('/') + '.html'
-            return self.send_text((STATIC/name).read_text(encoding='utf-8'))
+            template=(STATIC/name).read_text(encoding='utf-8')
+            if path == '/login' and (qs.get('error') or [''])[0]:
+                template=template.replace('<div id="msg"></div>','<div id="msg"><div class="notice error">E-mail ou senha inválidos.</div></div>')
+            return self.send_text(template)
         if path.startswith('/static/'):
             target = STATIC / path[len('/static/'):]
             if not target.exists() or not target.is_file(): return self.send_text('Not found',404,'text/plain')
@@ -119,7 +147,7 @@ class Handler(BaseHTTPRequestHandler):
             elif target.suffix=='.js': ctype='application/javascript; charset=utf-8'
             elif target.suffix=='.svg': ctype='image/svg+xml'
             return self.send_text(target.read_text(encoding='utf-8'),200,ctype)
-        if path == '/api/health': return self.send_json({'ok':True,'version':'v4','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
+        if path == '/api/health': return self.send_json({'ok':True,'version':'v5','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
         if path == '/api/session':
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
@@ -130,7 +158,8 @@ class Handler(BaseHTTPRequestHandler):
             code=(qs.get('code') or [''])[0].upper().strip()
             with connect(DB_PATH) as conn:
                 c=conn.execute('''SELECT c.*,co.name company_name,co.primary_color,co.logo_text FROM campaigns c JOIN companies co ON co.id=c.company_id WHERE c.code=? AND c.active=1''',(code,)).fetchone()
-                if not c: return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                if not c:
+                    return self.send_redirect('/join?campaign='+urllib.parse.quote(code or 'CAFE5')+'&error=1') if path=='/join' else self.send_json({'ok':False,'error':'campaign_not_found'},404)
                 return self.send_json({'ok':True,'campaign':rowdict(c)})
         if path == '/api/card':
             public_id=(qs.get('id') or [''])[0]
@@ -189,18 +218,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p=urllib.parse.urlparse(self.path); path=p.path
-        try: payload=self._body_json()
-        except Exception: return self.send_json({'ok':False,'error':'invalid_json'},400)
-        if path == '/api/login':
+        try: payload, payload_kind=self._body_payload()
+        except Exception:
+            if path in ['/login','/join']:
+                return self.send_redirect('/login?error=1' if path == '/login' else '/join?error=1')
+            return self.send_json({'ok':False,'error':'invalid_json'},400)
+        if path in ['/api/login','/login']:
             email=str(payload.get('email','')).lower().strip(); password=str(payload.get('password',''))
             with connect(DB_PATH) as conn:
                 u=conn.execute('SELECT * FROM users WHERE email=? AND active=1',(email,)).fetchone()
                 if not u or not verify_password(password,u['password_hash']):
                     audit(conn,u['company_id'] if u else None,u['id'] if u else None,'login_failed',details=email,ip_address=self._ip())
+                    if path == '/login':
+                        return self.send_redirect('/login?error=1')
                     return self.send_json({'ok':False,'error':'invalid_credentials'},401)
                 token,csrf=create_session(conn,u['id']); audit(conn,u['company_id'],u['id'],'login_success',ip_address=self._ip())
                 cookie=f'{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=28800'
                 if os.environ.get('CLUBE_SECURE_COOKIE', '1' if str(DB_PATH).startswith(('postgres://','postgresql://')) else '0')=='1': cookie+='; Secure'
+                if path == '/login':
+                    return self.send_redirect('/manager' if u['role']=='manager' else '/attendant',303,{'Set-Cookie':cookie})
                 return self.send_json({'ok':True,'role':u['role'],'csrf':csrf},200,{'Set-Cookie':cookie})
         if path == '/api/logout':
             with connect(DB_PATH) as conn:
@@ -208,12 +244,14 @@ class Handler(BaseHTTPRequestHandler):
                 if token: conn.execute('DELETE FROM sessions WHERE token=?',(token,))
                 if s: audit(conn,s['company_id'],s['user_id'],'logout',ip_address=self._ip())
             return self.send_json({'ok':True},200,{'Set-Cookie':f'{SESSION_COOKIE}=deleted; Path=/; Max-Age=0; HttpOnly; SameSite=Strict'})
-        if path == '/api/join':
+        if path in ['/api/join','/join']:
             code=str(payload.get('campaign_code','')).upper().strip(); name=str(payload.get('name','')).strip()[:80]; contact=str(payload.get('contact','')).strip()[:120]
-            if len(name)<2: return self.send_json({'ok':False,'error':'invalid_name'},400)
+            if len(name)<2:
+                return self.send_redirect('/join?campaign='+urllib.parse.quote(code or 'CAFE5')+'&error=1') if path=='/join' else self.send_json({'ok':False,'error':'invalid_name'},400)
             with connect(DB_PATH) as conn:
                 c=conn.execute('SELECT * FROM campaigns WHERE code=? AND active=1',(code,)).fetchone()
-                if not c: return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                if not c:
+                    return self.send_redirect('/join?campaign='+urllib.parse.quote(code or 'CAFE5')+'&error=1') if path=='/join' else self.send_json({'ok':False,'error':'campaign_not_found'},404)
                 customer_id=None
                 if contact:
                     existing=conn.execute('''SELECT cu.id FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.contact=?''',(c['id'],contact)).fetchone()
@@ -221,11 +259,12 @@ class Handler(BaseHTTPRequestHandler):
                 if customer_id is None:
                     customer_id=insert_id(conn,'INSERT INTO customers(name,contact,created_at) VALUES(?,?,?)',(name,contact or None,now_ts()))
                 existing=conn.execute('SELECT public_id FROM memberships WHERE customer_id=? AND campaign_id=?',(customer_id,c['id'])).fetchone()
-                if existing: return self.send_json({'ok':True,'public_id':existing['public_id'],'existing':True})
+                if existing:
+                    return self.send_redirect('/card?id='+urllib.parse.quote(existing['public_id'])) if path=='/join' else self.send_json({'ok':True,'public_id':existing['public_id'],'existing':True})
                 public_id='mem_'+random_token(10); qr_token=random_token(24)
                 conn.execute('INSERT INTO memberships(customer_id,campaign_id,public_id,qr_token,created_at) VALUES(?,?,?,?,?)',(customer_id,c['id'],public_id,qr_token,now_ts()))
                 audit(conn,c['company_id'],None,'customer_join','membership',public_id,details=name,ip_address=self._ip())
-                return self.send_json({'ok':True,'public_id':public_id,'existing':False})
+                return self.send_redirect('/card?id='+urllib.parse.quote(public_id)) if path=='/join' else self.send_json({'ok':True,'public_id':public_id,'existing':False})
         with connect(DB_PATH) as conn:
             s=self._require_auth(conn)
             if not s: return
@@ -309,7 +348,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v4 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v5 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()

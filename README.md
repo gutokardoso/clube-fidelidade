@@ -1,8 +1,8 @@
-# Clube Fidelidade v4
+# Clube Fidelidade v5
 
 Sistema white-label de fidelidade digital com perfis de gerente e atendente, campanhas, QR individual, selos, recompensas, histórico/auditoria e controles antifraude.
 
-## O que mudou na v4
+## O que mudou na v5
 
 - Suporte a PostgreSQL via `DATABASE_URL` para produção.
 - Fallback automático para SQLite durante desenvolvimento local.
@@ -53,7 +53,7 @@ CLUBE_SEED_DEMO=0
 ```
 
 6. Faça o deploy. O processo inicializa as tabelas automaticamente.
-7. Abra `/api/health`. A resposta esperada em produção inclui `"version":"v4"` e `"database":"postgresql"`.
+7. Abra `/api/health`. A resposta esperada em produção inclui `"version":"v5"` e `"database":"postgresql"`.
 8. Entre em `/login` com o e-mail e senha definidos em `CLUBE_ADMIN_EMAIL` e `CLUBE_ADMIN_PASSWORD`.
 9. Pelo painel do gerente, crie os atendentes reais. Não é necessário guardar senha de atendente no código.
 
@@ -90,3 +90,7 @@ python3 -m unittest discover -s tests -v
 ```
 
 Os testes automáticos usam SQLite isolado e não precisam de PostgreSQL.
+
+
+## v5 — formulários resilientes
+Login da equipe e adesão do cliente funcionam por POST HTML nativo no servidor, com redirecionamento HTTP 303. Assim, as duas operações essenciais não dependem de JavaScript para funcionar.
