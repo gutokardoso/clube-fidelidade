@@ -1,0 +1,18 @@
+CLUBE FIDELIDADE V1 - VALIDAÇÃO
+
+Data: 2026-08-10
+
+Verificações executadas:
+[OK] Compilação/sintaxe dos módulos Python.
+[OK] Testes unitários de usuário demo, campanha e regra antifraude de intervalo mínimo.
+[OK] Servidor HTTP respondeu /api/health.
+[OK] Cadastro de cliente na campanha CAFE5.
+[OK] Geração/consulta do cartão individual.
+[OK] Login de gerente e sessão autenticada.
+[OK] 5 créditos de selo por gerente.
+[OK] Ao completar 5 selos: progresso voltou a 0 e 1 recompensa foi liberada.
+[OK] Resgate da recompensa.
+[OK] Após o resgate: recompensa disponível voltou a 0.
+
+Observação Wallet:
+A lógica central e os hooks estão preparados, mas Apple Wallet e Google Wallet reais exigem certificados/credenciais oficiais do emissor, que não fazem parte deste ZIP e não devem ser distribuídos dentro do código.
