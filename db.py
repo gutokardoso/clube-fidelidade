@@ -419,7 +419,7 @@ def create_session(conn, user_id: int, ttl=8*60*60):
 def get_session(conn, token: str):
     if not token:
         return None
-    row = conn.execute('''SELECT s.token,s.csrf,s.expires_at,u.id user_id,u.company_id,u.campaign_id,u.name,u.email,u.role,u.active,c.name client_name
+    row = conn.execute('''SELECT s.token,s.csrf,s.expires_at,u.id user_id,u.company_id,u.campaign_id,u.name,u.email,u.role,u.active,c.name client_name,c.logo_image client_logo_image
                           FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN campaigns c ON c.id=u.campaign_id WHERE s.token=?''',(token,)).fetchone()
     if not row or row['expires_at'] < now_ts() or not row['active']:
         return None
