@@ -11,7 +11,7 @@ from pathlib import Path
 
 import qrcode
 
-from db import DEFAULT_DB, init_db, connect, create_session, get_session, audit, insert_id, begin_write, integrity_errors, fetchone_for_update
+from db import DEFAULT_DB, init_db, ensure_configured_staff, connect, create_session, get_session, audit, insert_id, begin_write, integrity_errors, fetchone_for_update
 from security import verify_password, hash_password, random_token, now_ts
 from antifraud import validate_stamp, FraudError
 from wallet import wallet_status, apple_pass_link, google_wallet_link
@@ -31,7 +31,7 @@ def rowdict(row):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'ClubeFidelidade/2.0'
+    server_version = 'ClubeFidelidade/3.0'
 
     def log_message(self, fmt, *args):
         print(f'[{self.log_date_time_string()}] {self.address_string()} - {fmt % args}')
@@ -97,7 +97,18 @@ class Handler(BaseHTTPRequestHandler):
         path = p.path
         qs = urllib.parse.parse_qs(p.query)
         if path == '/': return self.send_text((STATIC/'index.html').read_text(encoding='utf-8'))
-        if path in ['/login','/manager','/attendant','/join','/card']:
+        if path == '/join':
+            code=(qs.get('campaign') or ['CAFE5'])[0].upper().strip()
+            with connect(DB_PATH) as conn:
+                c=conn.execute('''SELECT c.name,c.reward_name,c.goal,co.primary_color,co.logo_text FROM campaigns c JOIN companies co ON co.id=c.company_id WHERE c.code=? AND c.active=1''',(code,)).fetchone()
+            template=(STATIC/'join.html').read_text(encoding='utf-8')
+            if c:
+                template=template.replace('{{LOGO_TEXT}}',html.escape(str(c['logo_text']))).replace('{{CAMPAIGN_NAME}}',html.escape(str(c['name']))).replace('{{CAMPAIGN_DESC}}',html.escape(f"Complete {c['goal']} selos e ganhe {c['reward_name']}."))
+                template=template.replace('</head>',f"<style>:root{{--accent:{html.escape(str(c['primary_color']))}}}</style></head>")
+            else:
+                template=template.replace('{{LOGO_TEXT}}','CLUBE').replace('{{CAMPAIGN_NAME}}','Campanha não encontrada').replace('{{CAMPAIGN_DESC}}','Confira o QR Code ou fale com o estabelecimento.').replace('<form id="f" class="form">','<form id="f" class="form hidden">')
+            return self.send_text(template)
+        if path in ['/login','/manager','/attendant','/card']:
             name = path.strip('/') + '.html'
             return self.send_text((STATIC/name).read_text(encoding='utf-8'))
         if path.startswith('/static/'):
@@ -108,7 +119,7 @@ class Handler(BaseHTTPRequestHandler):
             elif target.suffix=='.js': ctype='application/javascript; charset=utf-8'
             elif target.suffix=='.svg': ctype='image/svg+xml'
             return self.send_text(target.read_text(encoding='utf-8'),200,ctype)
-        if path == '/api/health': return self.send_json({'ok':True,'version':'v2','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
+        if path == '/api/health': return self.send_json({'ok':True,'version':'v3','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
         if path == '/api/session':
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
@@ -294,12 +305,11 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument('--host',default=os.environ.get('HOST','0.0.0.0')); parser.add_argument('--port',type=int,default=int(os.environ.get('PORT','8000'))); parser.add_argument('--init-only',action='store_true'); args=parser.parse_args()
     init_db(DB_PATH,seed=True)
+    ensure_configured_staff(DB_PATH)
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v2 em http://{args.host}:{args.port}')
-    print('Gerente demo: gerente@demo.local / Gerente123!')
-    print('Atendente demo: atendente@demo.local / Atendente123!')
+    print(f'Clube Fidelidade v3 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()

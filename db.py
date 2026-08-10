@@ -330,6 +330,27 @@ def init_db(db_path=None, seed=True):
                      (company_id,'CAFE5','Clube Café','1 café grátis',5,'☕',60,6,500,ts))
 
 
+
+def ensure_configured_staff(db_path=None):
+    target = db_path or DATABASE_URL or DEFAULT_DB
+    if not _is_postgres(target):
+        return
+    email = os.environ.get('CLUBE_ATTENDANT_EMAIL', '').strip().lower()
+    password = os.environ.get('CLUBE_ATTENDANT_PASSWORD', '')
+    name = os.environ.get('CLUBE_ATTENDANT_NAME', 'Atendente').strip() or 'Atendente'
+    if not email or not password:
+        return
+    if '@' not in email or len(password) < 10:
+        raise RuntimeError('CLUBE_ATTENDANT_EMAIL inválido ou CLUBE_ATTENDANT_PASSWORD com menos de 10 caracteres.')
+    with connect(target) as conn:
+        company = conn.execute('SELECT id FROM companies ORDER BY id LIMIT 1').fetchone()
+        if not company:
+            return
+        existing = conn.execute('SELECT id FROM users WHERE email=?',(email,)).fetchone()
+        if not existing:
+            conn.execute('INSERT INTO users(company_id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)',
+                         (company['id'], name, email, hash_password(password), 'attendant', now_ts()))
+
 def create_session(conn, user_id: int, ttl=8*60*60):
     token = random_token(32)
     csrf = random_token(24)

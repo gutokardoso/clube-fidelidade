@@ -5,7 +5,7 @@ VALIDAÇÕES EXECUTADAS
 - Compilação de todos os arquivos Python: OK
 - Testes unitários: 3/3 OK
 - Inicialização local em SQLite: OK
-- GET /api/health: OK (version=v2, database=sqlite)
+- GET /api/health: OK (version=v3, database=sqlite)
 - Login de gerente: OK
 - Cadastro em campanha CAFE5: OK
 - Cartão individual/QR token: OK
