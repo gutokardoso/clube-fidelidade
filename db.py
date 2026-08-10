@@ -332,24 +332,45 @@ def init_db(db_path=None, seed=True):
 
 
 def ensure_configured_staff(db_path=None):
+    """Sincroniza credenciais configuradas por variáveis de ambiente.
+
+    Em produção isto permite trocar a senha no Railway sem precisar apagar o banco.
+    Se o usuário já existe, nome/senha/role são atualizados; se não existe, ele é criado.
+    """
     target = db_path or DATABASE_URL or DEFAULT_DB
-    if not _is_postgres(target):
+    admin_email = os.environ.get('CLUBE_ADMIN_EMAIL', '').strip().lower()
+    admin_password = os.environ.get('CLUBE_ADMIN_PASSWORD', '')
+    admin_name = os.environ.get('CLUBE_ADMIN_NAME', 'Administrador').strip() or 'Administrador'
+    attendant_email = os.environ.get('CLUBE_ATTENDANT_EMAIL', '').strip().lower()
+    attendant_password = os.environ.get('CLUBE_ATTENDANT_PASSWORD', '')
+    attendant_name = os.environ.get('CLUBE_ATTENDANT_NAME', 'Atendente').strip() or 'Atendente'
+
+    configured = []
+    if admin_email or admin_password:
+        if '@' not in admin_email or len(admin_password) < 12:
+            raise RuntimeError('CLUBE_ADMIN_EMAIL inválido ou CLUBE_ADMIN_PASSWORD com menos de 12 caracteres.')
+        configured.append((admin_name, admin_email, admin_password, 'manager'))
+    if attendant_email or attendant_password:
+        if '@' not in attendant_email or len(attendant_password) < 10:
+            raise RuntimeError('CLUBE_ATTENDANT_EMAIL inválido ou CLUBE_ATTENDANT_PASSWORD com menos de 10 caracteres.')
+        configured.append((attendant_name, attendant_email, attendant_password, 'attendant'))
+    if not configured:
         return
-    email = os.environ.get('CLUBE_ATTENDANT_EMAIL', '').strip().lower()
-    password = os.environ.get('CLUBE_ATTENDANT_PASSWORD', '')
-    name = os.environ.get('CLUBE_ATTENDANT_NAME', 'Atendente').strip() or 'Atendente'
-    if not email or not password:
-        return
-    if '@' not in email or len(password) < 10:
-        raise RuntimeError('CLUBE_ATTENDANT_EMAIL inválido ou CLUBE_ATTENDANT_PASSWORD com menos de 10 caracteres.')
+
     with connect(target) as conn:
         company = conn.execute('SELECT id FROM companies ORDER BY id LIMIT 1').fetchone()
         if not company:
             return
-        existing = conn.execute('SELECT id FROM users WHERE email=?',(email,)).fetchone()
-        if not existing:
-            conn.execute('INSERT INTO users(company_id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)',
-                         (company['id'], name, email, hash_password(password), 'attendant', now_ts()))
+        for name, email, password, role in configured:
+            existing = conn.execute('SELECT id FROM users WHERE email=?', (email,)).fetchone()
+            pwd_hash = hash_password(password)
+            if existing:
+                conn.execute('UPDATE users SET name=?, password_hash=?, role=?, active=1 WHERE id=?',
+                             (name, pwd_hash, role, existing['id']))
+            else:
+                conn.execute('INSERT INTO users(company_id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)',
+                             (company['id'], name, email, pwd_hash, role, now_ts()))
+
 
 def create_session(conn, user_id: int, ttl=8*60*60):
     token = random_token(32)

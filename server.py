@@ -31,7 +31,7 @@ def rowdict(row):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'ClubeFidelidade/5.0'
+    server_version = 'ClubeFidelidade/6.0'
 
     def log_message(self, fmt, *args):
         print(f'[{self.log_date_time_string()}] {self.address_string()} - {fmt % args}')
@@ -147,7 +147,7 @@ class Handler(BaseHTTPRequestHandler):
             elif target.suffix=='.js': ctype='application/javascript; charset=utf-8'
             elif target.suffix=='.svg': ctype='image/svg+xml'
             return self.send_text(target.read_text(encoding='utf-8'),200,ctype)
-        if path == '/api/health': return self.send_json({'ok':True,'version':'v5','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
+        if path == '/api/health': return self.send_json({'ok':True,'version':'v6','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
         if path == '/api/session':
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
@@ -218,6 +218,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p=urllib.parse.urlparse(self.path); path=p.path
+        print(f'[FORM] POST {path} ip={self._ip()} content_type={self.headers.get("Content-Type", "")}')
         try: payload, payload_kind=self._body_payload()
         except Exception:
             if path in ['/login','/join']:
@@ -228,11 +229,13 @@ class Handler(BaseHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 u=conn.execute('SELECT * FROM users WHERE email=? AND active=1',(email,)).fetchone()
                 if not u or not verify_password(password,u['password_hash']):
+                    print(f'[AUTH] LOGIN_FAILED email={email} user_found={bool(u)}')
                     audit(conn,u['company_id'] if u else None,u['id'] if u else None,'login_failed',details=email,ip_address=self._ip())
                     if path == '/login':
                         return self.send_redirect('/login?error=1')
                     return self.send_json({'ok':False,'error':'invalid_credentials'},401)
                 token,csrf=create_session(conn,u['id']); audit(conn,u['company_id'],u['id'],'login_success',ip_address=self._ip())
+                print(f'[AUTH] LOGIN_SUCCESS email={email} role={u["role"]}')
                 cookie=f'{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=28800'
                 if os.environ.get('CLUBE_SECURE_COOKIE', '1' if str(DB_PATH).startswith(('postgres://','postgresql://')) else '0')=='1': cookie+='; Secure'
                 if path == '/login':
@@ -263,6 +266,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_redirect('/card?id='+urllib.parse.quote(existing['public_id'])) if path=='/join' else self.send_json({'ok':True,'public_id':existing['public_id'],'existing':True})
                 public_id='mem_'+random_token(10); qr_token=random_token(24)
                 conn.execute('INSERT INTO memberships(customer_id,campaign_id,public_id,qr_token,created_at) VALUES(?,?,?,?,?)',(customer_id,c['id'],public_id,qr_token,now_ts()))
+                print(f'[JOIN] CREATED public_id={public_id} campaign={code} name={name!r}')
                 audit(conn,c['company_id'],None,'customer_join','membership',public_id,details=name,ip_address=self._ip())
                 return self.send_redirect('/card?id='+urllib.parse.quote(public_id)) if path=='/join' else self.send_json({'ok':True,'public_id':public_id,'existing':False})
         with connect(DB_PATH) as conn:
@@ -348,7 +352,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v5 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v6 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()
