@@ -1,79 +1,92 @@
-# Clube Fidelidade v1
+# Clube Fidelidade v2
 
-Primeira versão funcional do sistema de cartão fidelidade digital.
+Sistema white-label de fidelidade digital com perfis de gerente e atendente, campanhas, QR individual, selos, recompensas, histórico/auditoria e controles antifraude.
 
-## Incluído
+## O que mudou na v2
 
-- Login com perfis de **gerente** e **atendente**.
-- Senhas armazenadas com PBKDF2-SHA256 + salt.
-- Sessão HttpOnly/SameSite e proteção CSRF nas operações autenticadas.
-- Campanhas white-label com meta, recompensa, ícone e código.
-- Cadastro público do cliente via campanha.
-- Cartão web individual com progresso e QR Code exclusivo.
-- Leitura do QR pelo atendente via `BarcodeDetector` quando suportado, com entrada manual como fallback.
-- Lançamento de selos exclusivamente pelo backend autenticado.
-- Recompensa automática ao completar a meta.
-- Resgate de recompensa com transação auditável.
-- Antifraude: intervalo mínimo entre créditos, limite por hora/cartão, limite diário/atendente, créditos múltiplos apenas por gerente, idempotência e bloqueio lógico preparado.
-- Dashboard do gerente, criação de campanhas e criação de usuários.
-- Auditoria de transações com usuário, IP, dispositivo, data e estado anterior/novo.
-- Hooks para Apple Wallet e Google Wallet.
+- Suporte a PostgreSQL via `DATABASE_URL` para produção.
+- Fallback automático para SQLite durante desenvolvimento local.
+- Compatibilidade com a porta dinâmica da hospedagem (`PORT`) e bind em `0.0.0.0`.
+- `railway.json` e `Procfile` prontos para deploy.
+- Health check em `/api/health`.
+- Cookies `Secure` ativados automaticamente quando PostgreSQL/produção está configurado.
+- Credenciais demo não são mais criadas automaticamente em produção.
+- Bootstrap seguro do primeiro gerente por variáveis de ambiente.
+- Apple Wallet e Google Wallet continuam preparadas para receber credenciais oficiais.
 
-## Credenciais demo
-
-Gerente:
-- `gerente@demo.local`
-- `Gerente123!`
-
-Atendente:
-- `atendente@demo.local`
-- `Atendente123!`
-
-Troque essas credenciais antes de produção.
-
-## Executar
+## Teste local
 
 Requer Python 3.10+.
 
 ```bash
-python3 -m pip install -r requirements.txt
-python3 server.py --host 127.0.0.1 --port 8000
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 server.py
 ```
 
-Abra `http://127.0.0.1:8000`.
+Abra `http://localhost:8000`.
 
-## Fluxo de teste
+No modo local, se `DATABASE_URL` não estiver definida, o projeto usa SQLite e cria a demonstração:
 
-1. Abra `/join?campaign=CAFE5` e crie um cartão.
-2. Abra o cartão gerado e apresente o QR.
-3. Em outra aba/dispositivo, entre em `/login` como atendente.
-4. Escaneie o QR ou copie o valor `CLUBE:...`.
-5. Adicione um selo.
-6. O cartão passa a mostrar o novo progresso ao recarregar.
-7. Ao atingir 5, o progresso reinicia em 0 e `rewards_available` recebe +1.
-8. O atendente pode resgatar a recompensa uma única vez.
+- Gerente: `gerente@demo.local` / `Gerente123!`
+- Atendente: `atendente@demo.local` / `Atendente123!`
 
-> A campanha demo usa intervalo antifraude de 60 segundos. Um gerente pode superar algumas barreiras operacionais que exigem autorização.
+Para desativar os usuários demo localmente, defina `CLUBE_SEED_DEMO=0` e informe as variáveis de bootstrap.
+
+## Deploy no Railway + PostgreSQL
+
+1. Suba o conteúdo desta pasta para um repositório GitHub.
+2. No Railway, crie um projeto e escolha **Deploy from GitHub Repo**.
+3. No mesmo projeto Railway, adicione um serviço PostgreSQL.
+4. Faça `DATABASE_URL` do serviço da aplicação apontar para a variável fornecida pelo PostgreSQL.
+5. No serviço da aplicação, adicione as variáveis:
+
+```text
+CLUBE_COMPANY_NAME=Nome da empresa
+CLUBE_COMPANY_SLUG=nome-da-empresa
+CLUBE_ADMIN_NAME=Seu nome
+CLUBE_ADMIN_EMAIL=seu-email@dominio.com
+CLUBE_ADMIN_PASSWORD=uma-senha-forte-com-12-ou-mais-caracteres
+CLUBE_SECURE_COOKIE=1
+CLUBE_SEED_DEMO=0
+```
+
+6. Faça o deploy. O processo inicializa as tabelas automaticamente.
+7. Abra `/api/health`. A resposta esperada em produção inclui `"version":"v2"` e `"database":"postgresql"`.
+8. Entre em `/login` com o e-mail e senha definidos em `CLUBE_ADMIN_EMAIL` e `CLUBE_ADMIN_PASSWORD`.
+9. Pelo painel do gerente, crie os atendentes reais. Não é necessário guardar senha de atendente no código.
+
+### Atenção ao primeiro deploy
+
+Se o PostgreSQL estiver vazio e `CLUBE_SEED_DEMO=0`, o servidor exige `CLUBE_ADMIN_EMAIL` válido e `CLUBE_ADMIN_PASSWORD` com no mínimo 12 caracteres. Isso evita publicar o sistema com credenciais demo conhecidas.
+
+## Variáveis de ambiente
+
+Consulte `.env.example`. Nunca faça commit do arquivo `.env` real, certificados, chaves privadas ou credenciais das Wallets.
 
 ## Apple Wallet / Google Wallet
 
-A integração real exige credenciais externas que não podem ser fornecidas no ZIP:
+Os pontos de integração estão em `wallet.py`. Os botões reais dependem das credenciais oficiais de emissor/certificados. Essas credenciais devem ser adicionadas à hospedagem como secrets/variáveis e nunca incluídas no ZIP ou GitHub.
 
-- Apple: conta/certificado de Pass Type ID, Team ID, certificado e chave privada.
-- Google: Wallet Issuer ID + Service Account autorizada.
+## Antifraude implementado
 
-O projeto detecta essas configurações pelas variáveis do `.env.example`. Os endpoints/hook estão isolados em `wallet.py` para que as credenciais sejam ativadas sem alterar a lógica de fidelidade.
+- cartão individual por token aleatório;
+- somente usuário autenticado pode creditar/resgatar;
+- CSRF em operações autenticadas;
+- idempotência para evitar lançamentos duplicados;
+- intervalo mínimo entre selos do mesmo cartão;
+- limite por cartão/hora;
+- limite operacional por atendente/dia;
+- múltiplos selos exigem gerente;
+- cartões podem ser bloqueados pelo gerente;
+- transações e ações administrativas ficam auditadas;
+- senha armazenada por hash, nunca em texto puro no banco.
 
-**Importante:** esta v1 não inclui certificados ou chaves privadas e, por isso, o botão de adicionar à Apple/Google Wallet permanece desabilitado no modo demo. O cartão web + QR + todo o fluxo de fidelidade funciona normalmente.
+## Testes
 
-## Produção
+```bash
+python3 -m unittest discover -s tests -v
+```
 
-Antes de publicar para clientes reais, recomenda-se:
-
-- HTTPS obrigatório (`CLUBE_SECURE_COOKIE=1`).
-- Banco PostgreSQL em vez de SQLite para múltiplas instâncias/escala horizontal.
-- Reverse proxy/WAF e rate limiting na borda.
-- Backup do banco.
-- Gestão de segredos fora do repositório.
-- Política LGPD e consentimento caso sejam coletados e-mail/telefone.
-- Configuração oficial dos emissores Apple/Google Wallet.
+Os testes automáticos usam SQLite isolado e não precisam de PostgreSQL.

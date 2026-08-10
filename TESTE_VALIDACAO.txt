@@ -1,18 +1,25 @@
-CLUBE FIDELIDADE V1 - VALIDAÇÃO
-
+CLUBE FIDELIDADE V2 - TESTE E VALIDAÇÃO
 Data: 2026-08-10
 
-Verificações executadas:
-[OK] Compilação/sintaxe dos módulos Python.
-[OK] Testes unitários de usuário demo, campanha e regra antifraude de intervalo mínimo.
-[OK] Servidor HTTP respondeu /api/health.
-[OK] Cadastro de cliente na campanha CAFE5.
-[OK] Geração/consulta do cartão individual.
-[OK] Login de gerente e sessão autenticada.
-[OK] 5 créditos de selo por gerente.
-[OK] Ao completar 5 selos: progresso voltou a 0 e 1 recompensa foi liberada.
-[OK] Resgate da recompensa.
-[OK] Após o resgate: recompensa disponível voltou a 0.
+VALIDAÇÕES EXECUTADAS
+- Compilação de todos os arquivos Python: OK
+- Testes unitários: 3/3 OK
+- Inicialização local em SQLite: OK
+- GET /api/health: OK (version=v2, database=sqlite)
+- Login de gerente: OK
+- Cadastro em campanha CAFE5: OK
+- Cartão individual/QR token: OK
+- Crédito de 5 selos por gerente: OK
+- Recompensa liberada após atingir meta: OK
+- Resgate de recompensa: OK
+- Recompensa removida após resgate: OK
+- Configuração de PORT/HOST para Railway: OK
+- Suporte PostgreSQL via DATABASE_URL: implementado
+- Lock FOR UPDATE no PostgreSQL para evitar crédito/resgate concorrente no mesmo cartão: implementado
+- Bootstrap de produção sem credenciais demo: implementado
 
-Observação Wallet:
-A lógica central e os hooks estão preparados, mas Apple Wallet e Google Wallet reais exigem certificados/credenciais oficiais do emissor, que não fazem parte deste ZIP e não devem ser distribuídos dentro do código.
+OBSERVAÇÃO
+O teste automatizado executado neste ambiente utilizou SQLite, pois não há um servidor PostgreSQL provisionado localmente. O código PostgreSQL foi validado por compilação e pela camada de compatibilidade; a conexão real deve ser validada após o PostgreSQL ser criado no Railway.
+
+APPLE/GOOGLE WALLET
+Integrações permanecem em modo configuration_required até o fornecimento das credenciais oficiais.

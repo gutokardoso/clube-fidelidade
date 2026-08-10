@@ -4,7 +4,6 @@ import io
 import json
 import os
 import re
-import sqlite3
 import urllib.parse
 from http import cookies
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -12,14 +11,14 @@ from pathlib import Path
 
 import qrcode
 
-from db import DEFAULT_DB, init_db, connect, create_session, get_session, audit
+from db import DEFAULT_DB, init_db, connect, create_session, get_session, audit, insert_id, begin_write, integrity_errors, fetchone_for_update
 from security import verify_password, hash_password, random_token, now_ts
 from antifraud import validate_stamp, FraudError
 from wallet import wallet_status, apple_pass_link, google_wallet_link
 
 BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
-DB_PATH = os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
+DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
 
 
@@ -32,7 +31,7 @@ def rowdict(row):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'ClubeFidelidade/1.0'
+    server_version = 'ClubeFidelidade/2.0'
 
     def log_message(self, fmt, *args):
         print(f'[{self.log_date_time_string()}] {self.address_string()} - {fmt % args}')
@@ -109,7 +108,7 @@ class Handler(BaseHTTPRequestHandler):
             elif target.suffix=='.js': ctype='application/javascript; charset=utf-8'
             elif target.suffix=='.svg': ctype='image/svg+xml'
             return self.send_text(target.read_text(encoding='utf-8'),200,ctype)
-        if path == '/api/health': return self.send_json({'ok':True,'version':'v1'})
+        if path == '/api/health': return self.send_json({'ok':True,'version':'v2','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
         if path == '/api/session':
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
@@ -190,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({'ok':False,'error':'invalid_credentials'},401)
                 token,csrf=create_session(conn,u['id']); audit(conn,u['company_id'],u['id'],'login_success',ip_address=self._ip())
                 cookie=f'{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=28800'
-                if os.environ.get('CLUBE_SECURE_COOKIE','0')=='1': cookie+='; Secure'
+                if os.environ.get('CLUBE_SECURE_COOKIE', '1' if str(DB_PATH).startswith(('postgres://','postgresql://')) else '0')=='1': cookie+='; Secure'
                 return self.send_json({'ok':True,'role':u['role'],'csrf':csrf},200,{'Set-Cookie':cookie})
         if path == '/api/logout':
             with connect(DB_PATH) as conn:
@@ -209,7 +208,7 @@ class Handler(BaseHTTPRequestHandler):
                     existing=conn.execute('''SELECT cu.id FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.contact=?''',(c['id'],contact)).fetchone()
                     if existing: customer_id=existing['id']
                 if customer_id is None:
-                    customer_id=conn.execute('INSERT INTO customers(name,contact,created_at) VALUES(?,?,?)',(name,contact or None,now_ts())).lastrowid
+                    customer_id=insert_id(conn,'INSERT INTO customers(name,contact,created_at) VALUES(?,?,?)',(name,contact or None,now_ts()))
                 existing=conn.execute('SELECT public_id FROM memberships WHERE customer_id=? AND campaign_id=?',(customer_id,c['id'])).fetchone()
                 if existing: return self.send_json({'ok':True,'public_id':existing['public_id'],'existing':True})
                 public_id='mem_'+random_token(10); qr_token=random_token(24)
@@ -224,11 +223,11 @@ class Handler(BaseHTTPRequestHandler):
                 token=str(payload.get('token','')).strip(); token=token[6:] if token.startswith('CLUBE:') else token
                 qty=int(payload.get('quantity',1)); idem=str(payload.get('idempotency_key','')).strip()[:100] or random_token(12); device=str(payload.get('device_id',''))[:100]
                 try:
-                    conn.execute('BEGIN IMMEDIATE')
+                    begin_write(conn)
                     dupe=conn.execute('SELECT id FROM transactions WHERE idempotency_key=?',(idem,)).fetchone()
                     if dupe: return self.send_json({'ok':True,'duplicate':True,'transaction_id':dupe['id']})
-                    m=conn.execute('''SELECT m.*,c.goal,c.min_stamp_interval_sec,c.max_stamps_per_hour,c.max_stamps_per_attendant_day,c.company_id,c.name campaign_name,cu.name customer_name
-                      FROM memberships m JOIN campaigns c ON c.id=m.campaign_id JOIN customers cu ON cu.id=m.customer_id WHERE m.qr_token=? AND c.company_id=?''',(token,s['company_id'])).fetchone()
+                    m=fetchone_for_update(conn,'''SELECT m.*,c.goal,c.min_stamp_interval_sec,c.max_stamps_per_hour,c.max_stamps_per_attendant_day,c.company_id,c.name campaign_name,cu.name customer_name
+                      FROM memberships m JOIN campaigns c ON c.id=m.campaign_id JOIN customers cu ON cu.id=m.customer_id WHERE m.qr_token=? AND c.company_id=?''',(token,s['company_id']))
                     if not m: return self.send_json({'ok':False,'error':'membership_not_found'},404)
                     validate_stamp(conn,m,m,s,qty)
                     prev=m['progress']; rewards=0; new=prev
@@ -236,49 +235,49 @@ class Handler(BaseHTTPRequestHandler):
                         new += 1
                         if new >= m['goal']:
                             rewards += 1; new = 0
-                    cur=conn.execute('''INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,device_id,ip_address,created_at)
+                    tx_id=insert_id(conn,'''INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,device_id,ip_address,created_at)
                       VALUES(?,?,?,?,?,?,?,?,?,?,?)''',(m['id'],s['user_id'],'stamp',qty,prev,new,rewards,idem,device,self._ip(),now_ts()))
                     conn.execute('UPDATE memberships SET progress=?, rewards_available=rewards_available+? WHERE id=?',(new,rewards,m['id']))
                     audit(conn,s['company_id'],s['user_id'],'stamp','membership',m['public_id'],details=f'qty={qty};reward+={rewards}',ip_address=self._ip())
-                    return self.send_json({'ok':True,'transaction_id':cur.lastrowid,'customer_name':m['customer_name'],'previous_progress':prev,'progress':new,'reward_added':rewards})
+                    return self.send_json({'ok':True,'transaction_id':tx_id,'customer_name':m['customer_name'],'previous_progress':prev,'progress':new,'reward_added':rewards})
                 except FraudError as e:
                     audit(conn,s['company_id'],s['user_id'],'stamp_blocked','membership',token,details=e.code,ip_address=self._ip())
                     return self.send_json({'ok':False,'error':e.code,'message':e.message,'requires_manager':e.requires_manager},409)
-                except sqlite3.IntegrityError:
+                except integrity_errors():
                     return self.send_json({'ok':False,'error':'duplicate_request'},409)
             if path == '/api/attendant/redeem':
                 token=str(payload.get('token','')).strip(); token=token[6:] if token.startswith('CLUBE:') else token; idem=str(payload.get('idempotency_key','')).strip()[:100] or random_token(12)
-                conn.execute('BEGIN IMMEDIATE')
+                begin_write(conn)
                 if conn.execute('SELECT id FROM transactions WHERE idempotency_key=?',(idem,)).fetchone(): return self.send_json({'ok':True,'duplicate':True})
-                m=conn.execute('''SELECT m.*,c.company_id,cu.name customer_name FROM memberships m JOIN campaigns c ON c.id=m.campaign_id JOIN customers cu ON cu.id=m.customer_id WHERE m.qr_token=? AND c.company_id=?''',(token,s['company_id'])).fetchone()
+                m=fetchone_for_update(conn,'''SELECT m.*,c.company_id,cu.name customer_name FROM memberships m JOIN campaigns c ON c.id=m.campaign_id JOIN customers cu ON cu.id=m.customer_id WHERE m.qr_token=? AND c.company_id=?''',(token,s['company_id']))
                 if not m: return self.send_json({'ok':False,'error':'membership_not_found'},404)
                 if m['status']!='active': return self.send_json({'ok':False,'error':'membership_blocked'},409)
                 if m['rewards_available']<1: return self.send_json({'ok':False,'error':'no_reward_available'},409)
-                cur=conn.execute('''INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,ip_address,created_at)
+                tx_id=insert_id(conn,'''INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,ip_address,created_at)
                   VALUES(?,?,?,?,?,?,?,?,?,?)''',(m['id'],s['user_id'],'redeem',1,m['progress'],m['progress'],-1,idem,self._ip(),now_ts()))
                 conn.execute('UPDATE memberships SET rewards_available=rewards_available-1 WHERE id=?',(m['id'],))
                 audit(conn,s['company_id'],s['user_id'],'reward_redeem','membership',m['public_id'],ip_address=self._ip())
-                return self.send_json({'ok':True,'transaction_id':cur.lastrowid,'customer_name':m['customer_name']})
+                return self.send_json({'ok':True,'transaction_id':tx_id,'customer_name':m['customer_name']})
             if path == '/api/manager/campaign':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 name=str(payload.get('name','')).strip()[:80]; reward=str(payload.get('reward_name','')).strip()[:100]; code=re.sub(r'[^A-Z0-9_-]','',str(payload.get('code','')).upper())[:24]
                 icon=str(payload.get('icon','☕'))[:8]; goal=int(payload.get('goal',5))
                 if not name or not reward or not code or goal<1 or goal>50: return self.send_json({'ok':False,'error':'invalid_campaign'},400)
                 try:
-                    cur=conn.execute('''INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,min_stamp_interval_sec,max_stamps_per_hour,max_stamps_per_attendant_day,created_at)
+                    new_id=insert_id(conn,'''INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,min_stamp_interval_sec,max_stamps_per_hour,max_stamps_per_attendant_day,created_at)
                      VALUES(?,?,?,?,?,?,?,?,?,?)''',(s['company_id'],code,name,reward,goal,icon,int(payload.get('min_interval',60)),int(payload.get('max_hour',6)),int(payload.get('max_day',500)),now_ts()))
-                except sqlite3.IntegrityError: return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
-                audit(conn,s['company_id'],s['user_id'],'campaign_create','campaign',cur.lastrowid,details=code,ip_address=self._ip())
-                return self.send_json({'ok':True,'campaign_id':cur.lastrowid})
+                except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
+                audit(conn,s['company_id'],s['user_id'],'campaign_create','campaign',new_id,details=code,ip_address=self._ip())
+                return self.send_json({'ok':True,'campaign_id':new_id})
             if path == '/api/manager/staff':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 name=str(payload.get('name','')).strip()[:80]; email=str(payload.get('email','')).lower().strip()[:120]; password=str(payload.get('password','')); role=str(payload.get('role','attendant'))
                 if role not in ('manager','attendant') or len(name)<2 or '@' not in email or len(password)<10: return self.send_json({'ok':False,'error':'invalid_staff'},400)
                 try:
-                    cur=conn.execute('INSERT INTO users(company_id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)',(s['company_id'],name,email,hash_password(password),role,now_ts()))
-                except sqlite3.IntegrityError: return self.send_json({'ok':False,'error':'email_exists'},409)
-                audit(conn,s['company_id'],s['user_id'],'staff_create','user',cur.lastrowid,details=f'{email}:{role}',ip_address=self._ip())
-                return self.send_json({'ok':True,'user_id':cur.lastrowid})
+                    new_id=insert_id(conn,'INSERT INTO users(company_id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)',(s['company_id'],name,email,hash_password(password),role,now_ts()))
+                except integrity_errors(): return self.send_json({'ok':False,'error':'email_exists'},409)
+                audit(conn,s['company_id'],s['user_id'],'staff_create','user',new_id,details=f'{email}:{role}',ip_address=self._ip())
+                return self.send_json({'ok':True,'user_id':new_id})
             if path == '/api/manager/block':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 token=str(payload.get('token','')).strip(); token=token[6:] if token.startswith('CLUBE:') else token; status='blocked' if payload.get('blocked',True) else 'active'
@@ -293,12 +292,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    parser=argparse.ArgumentParser(); parser.add_argument('--host',default='127.0.0.1'); parser.add_argument('--port',type=int,default=8000); parser.add_argument('--init-only',action='store_true'); args=parser.parse_args()
+    parser=argparse.ArgumentParser(); parser.add_argument('--host',default=os.environ.get('HOST','0.0.0.0')); parser.add_argument('--port',type=int,default=int(os.environ.get('PORT','8000'))); parser.add_argument('--init-only',action='store_true'); args=parser.parse_args()
     init_db(DB_PATH,seed=True)
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v1 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v2 em http://{args.host}:{args.port}')
     print('Gerente demo: gerente@demo.local / Gerente123!')
     print('Atendente demo: atendente@demo.local / Atendente123!')
     try: srv.serve_forever()
