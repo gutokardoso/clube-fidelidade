@@ -1,6 +1,6 @@
 import os, sys, tempfile, unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from db import init_db, connect
+from db import init_db, connect, ensure_configured_staff
 from security import verify_password
 from antifraud import validate_stamp, FraudError
 
@@ -29,5 +29,22 @@ class CoreTests(unittest.TestCase):
             c.execute("INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,created_at) VALUES(?,?,?,?,?,?,?,?)",(mid,user0['id'],'stamp',1,0,1,0,int(time.time())))
             with self.assertRaises(FraudError) as ctx: validate_stamp(c,m,camp,user,1)
             self.assertEqual(ctx.exception.code,'too_fast')
+
+    def test_configured_manager_password_is_resynced(self):
+        old_email=os.environ.get('CLUBE_ADMIN_EMAIL'); old_password=os.environ.get('CLUBE_ADMIN_PASSWORD'); old_name=os.environ.get('CLUBE_ADMIN_NAME')
+        try:
+            os.environ['CLUBE_ADMIN_EMAIL']='gerente@demo.local'
+            os.environ['CLUBE_ADMIN_PASSWORD']='NovaSenhaGerente123!'
+            os.environ['CLUBE_ADMIN_NAME']='Gerente Atualizado'
+            ensure_configured_staff(self.db)
+            with connect(self.db) as c:
+                u=c.execute("SELECT * FROM users WHERE email='gerente@demo.local'").fetchone()
+                self.assertEqual(u['role'],'manager')
+                self.assertTrue(verify_password('NovaSenhaGerente123!',u['password_hash']))
+                self.assertFalse(verify_password('Gerente123!',u['password_hash']))
+        finally:
+            for key,val in [('CLUBE_ADMIN_EMAIL',old_email),('CLUBE_ADMIN_PASSWORD',old_password),('CLUBE_ADMIN_NAME',old_name)]:
+                if val is None: os.environ.pop(key,None)
+                else: os.environ[key]=val
 
 if __name__=='__main__': unittest.main()

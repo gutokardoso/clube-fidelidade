@@ -1,7 +1,7 @@
 import os
 import sqlite3
 from contextlib import contextmanager
-from security import hash_password, random_token, now_ts
+from security import hash_password, verify_password, random_token, now_ts
 
 DEFAULT_DB = os.environ.get('CLUBE_DB_PATH', os.path.join(os.path.dirname(__file__), 'data.sqlite3'))
 DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
@@ -339,10 +339,10 @@ def ensure_configured_staff(db_path=None):
     """
     target = db_path or DATABASE_URL or DEFAULT_DB
     admin_email = os.environ.get('CLUBE_ADMIN_EMAIL', '').strip().lower()
-    admin_password = os.environ.get('CLUBE_ADMIN_PASSWORD', '')
+    admin_password = os.environ.get('CLUBE_ADMIN_PASSWORD', '').strip()
     admin_name = os.environ.get('CLUBE_ADMIN_NAME', 'Administrador').strip() or 'Administrador'
     attendant_email = os.environ.get('CLUBE_ATTENDANT_EMAIL', '').strip().lower()
-    attendant_password = os.environ.get('CLUBE_ATTENDANT_PASSWORD', '')
+    attendant_password = os.environ.get('CLUBE_ATTENDANT_PASSWORD', '').strip()
     attendant_name = os.environ.get('CLUBE_ATTENDANT_NAME', 'Atendente').strip() or 'Atendente'
 
     configured = []
@@ -367,9 +367,16 @@ def ensure_configured_staff(db_path=None):
             if existing:
                 conn.execute('UPDATE users SET name=?, password_hash=?, role=?, active=1 WHERE id=?',
                              (name, pwd_hash, role, existing['id']))
+                user_id = existing['id']
             else:
-                conn.execute('INSERT INTO users(company_id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)',
-                             (company['id'], name, email, pwd_hash, role, now_ts()))
+                user_id = insert_id(conn,
+                    'INSERT INTO users(company_id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)',
+                    (company['id'], name, email, pwd_hash, role, now_ts()))
+            check = conn.execute('SELECT password_hash,role,active FROM users WHERE id=?', (user_id,)).fetchone()
+            if not check or not verify_password(password, check['password_hash']) or check['role'] != role or int(check['active']) != 1:
+                raise RuntimeError(f'Falha ao sincronizar credenciais de {role}: {email}')
+            label = 'ADMIN' if role == 'manager' else 'ATTENDANT'
+            print(f'[AUTH] {label}_SYNC_OK email={email} password_length={len(password)}')
 
 
 def create_session(conn, user_id: int, ttl=8*60*60):

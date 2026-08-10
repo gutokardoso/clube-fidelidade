@@ -1,5 +1,6 @@
 import argparse
 import html
+import hmac
 import io
 import json
 import os
@@ -31,7 +32,7 @@ def rowdict(row):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'ClubeFidelidade/6.0'
+    server_version = 'ClubeFidelidade/7.0'
 
     def log_message(self, fmt, *args):
         print(f'[{self.log_date_time_string()}] {self.address_string()} - {fmt % args}')
@@ -147,7 +148,7 @@ class Handler(BaseHTTPRequestHandler):
             elif target.suffix=='.js': ctype='application/javascript; charset=utf-8'
             elif target.suffix=='.svg': ctype='image/svg+xml'
             return self.send_text(target.read_text(encoding='utf-8'),200,ctype)
-        if path == '/api/health': return self.send_json({'ok':True,'version':'v6','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
+        if path == '/api/health': return self.send_json({'ok':True,'version':'v7','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
         if path == '/api/session':
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
@@ -225,11 +226,30 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_redirect('/login?error=1' if path == '/login' else '/join?error=1')
             return self.send_json({'ok':False,'error':'invalid_json'},400)
         if path in ['/api/login','/login']:
-            email=str(payload.get('email','')).lower().strip(); password=str(payload.get('password',''))
+            email=str(payload.get('email','')).lower().strip(); password=str(payload.get('password','')).strip()
             with connect(DB_PATH) as conn:
                 u=conn.execute('SELECT * FROM users WHERE email=? AND active=1',(email,)).fetchone()
-                if not u or not verify_password(password,u['password_hash']):
-                    print(f'[AUTH] LOGIN_FAILED email={email} user_found={bool(u)}')
+                password_ok = bool(u) and verify_password(password,u['password_hash'])
+                # Em produção, as credenciais do Railway são a fonte de verdade para os perfis bootstrap.
+                # Se o hash persistido estiver defasado, uma senha que bate exatamente com a variável
+                # de ambiente repara o hash no primeiro login, sem expor a senha nos logs.
+                if u and not password_ok:
+                    configured = []
+                    admin_email=os.environ.get('CLUBE_ADMIN_EMAIL','').strip().lower()
+                    admin_password=os.environ.get('CLUBE_ADMIN_PASSWORD','').strip()
+                    attendant_email=os.environ.get('CLUBE_ATTENDANT_EMAIL','').strip().lower()
+                    attendant_password=os.environ.get('CLUBE_ATTENDANT_PASSWORD','').strip()
+                    if admin_email and admin_password: configured.append((admin_email,admin_password,'manager','ADMIN'))
+                    if attendant_email and attendant_password: configured.append((attendant_email,attendant_password,'attendant','ATTENDANT'))
+                    for cfg_email,cfg_password,cfg_role,cfg_label in configured:
+                        if email == cfg_email and hmac.compare_digest(password,cfg_password):
+                            conn.execute('UPDATE users SET password_hash=?,role=?,active=1 WHERE id=?',(hash_password(cfg_password),cfg_role,u['id']))
+                            u=conn.execute('SELECT * FROM users WHERE id=?',(u['id'],)).fetchone()
+                            password_ok=True
+                            print(f'[AUTH] {cfg_label}_LOGIN_REPAIRED email={email} password_length={len(cfg_password)}')
+                            break
+                if not u or not password_ok:
+                    print(f'[AUTH] LOGIN_FAILED email={email} user_found={bool(u)} password_length={len(password)}')
                     audit(conn,u['company_id'] if u else None,u['id'] if u else None,'login_failed',details=email,ip_address=self._ip())
                     if path == '/login':
                         return self.send_redirect('/login?error=1')
@@ -325,7 +345,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({'ok':True,'campaign_id':new_id})
             if path == '/api/manager/staff':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
-                name=str(payload.get('name','')).strip()[:80]; email=str(payload.get('email','')).lower().strip()[:120]; password=str(payload.get('password','')); role=str(payload.get('role','attendant'))
+                name=str(payload.get('name','')).strip()[:80]; email=str(payload.get('email','')).lower().strip()[:120]; password=str(payload.get('password','')).strip(); role=str(payload.get('role','attendant'))
                 if role not in ('manager','attendant') or len(name)<2 or '@' not in email or len(password)<10: return self.send_json({'ok':False,'error':'invalid_staff'},400)
                 try:
                     new_id=insert_id(conn,'INSERT INTO users(company_id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)',(s['company_id'],name,email,hash_password(password),role,now_ts()))
@@ -352,7 +372,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v6 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v7 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()

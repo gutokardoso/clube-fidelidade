@@ -3,3 +3,5 @@
 @media(max-width:800px){.grid.cols-4,.grid.cols-2,.split,.form-row{grid-template-columns:1fr}.topbar{align-items:flex-start;flex-direction:column}.content{padding:18px}.panel{border-radius:20px}.hero{padding:28px}.table{display:block;overflow:auto}.shell{padding:14px}}
 
 .build-marker{position:fixed;right:8px;bottom:6px;font:10px/1 monospace;opacity:.28;z-index:9999;pointer-events:none}
+
+.card-code{margin:18px 0;padding:12px 14px;border:1px solid rgba(255,255,255,.22);border-radius:14px;background:rgba(255,255,255,.08);text-align:center}.card-code span{display:block;font-size:12px;opacity:.72;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px}.card-code strong{display:block;font-size:15px;letter-spacing:.045em;word-break:break-all}
