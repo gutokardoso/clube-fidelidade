@@ -1,20 +1,14 @@
-CLUBE FIDELIDADE V4 — VALIDAÇÃO
-Data: 2026-08-10
+CLUBE FIDELIDADE V8 - VALIDAÇÃO
 
-Correção principal:
-- app.js agora roda dentro de uma IIFE, evitando que as constantes internas api, $, $$, fmtDate e outras vazem para o escopo global.
-- Isso elimina o SyntaxError causado pela redeclaração de `api` e `$` nos scripts das páginas login.html, join.html, card.html, manager.html e attendant.html.
-
-Validações executadas:
-1. Python: todos os módulos compilam sem erro.
-2. JavaScript: app.js passou em `node --check`.
-3. JavaScript inline: scripts de login, cadastro, cartão, gerente e atendente passaram em `node --check`.
-4. Testes unitários: 3/3 aprovados.
-5. API local:
-   - POST /api/login -> HTTP 200 com gerente demo.
-   - POST /api/join -> HTTP 200 e criação de membership.
-   - GET /api/card -> HTTP 200 para o novo cliente.
-6. A causa do frontend inativo foi reproduzida por inspeção do escopo JavaScript e corrigida no arquivo compartilhado por todas as telas.
-
-Observação sobre teste visual automatizado:
-- Foi tentada validação com Chromium/Playwright do ambiente, porém o Chromium gerenciado bloqueou acesso ao localhost por política administrativa (ERR_BLOCKED_BY_ADMINISTRATOR). A API e a sintaxe JS foram validadas pelos métodos acima.
+OK - 4/4 testes automatizados existentes.
+OK - health check retorna v8.
+OK - criação de campanha com logo PNG válida.
+OK - logo aparece na página /join da campanha.
+OK - logo obrigatória para novas campanhas.
+OK - limite/validação do formato da imagem no servidor.
+OK - criação e exclusão de usuário da equipe.
+OK - gerente não pode excluir o próprio usuário.
+OK - proteção do gerente principal configurado e do último gerente.
+OK - exclusão de campanha e dados vinculados.
+OK - JavaScript das telas principais passou em node --check.
+OK - migração automática do campo logo_image preparada para SQLite/PostgreSQL existentes.

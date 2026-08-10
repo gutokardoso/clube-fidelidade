@@ -1,4 +1,6 @@
 import argparse
+import base64
+import binascii
 import html
 import hmac
 import io
@@ -31,8 +33,32 @@ def rowdict(row):
     return dict(row) if row else None
 
 
+def validate_logo_data(value):
+    """Aceita apenas PNG/JPEG/WEBP em data URL, até 500 KB decodificados."""
+    value = str(value or '').strip()
+    if not value:
+        return None
+    m = re.fullmatch(r'data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/=\r\n]+)', value, re.I)
+    if not m:
+        raise ValueError('invalid_logo_format')
+    try:
+        raw = base64.b64decode(m.group(2), validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError('invalid_logo_format')
+    if len(raw) > 500_000:
+        raise ValueError('logo_too_large')
+    mime = m.group(1).lower()
+    # Assinaturas mínimas para impedir conteúdo arbitrário disfarçado de imagem.
+    valid = (mime == 'png' and raw.startswith(b'\x89PNG\r\n\x1a\n')) or \
+            (mime == 'jpeg' and raw.startswith(b'\xff\xd8\xff')) or \
+            (mime == 'webp' and raw.startswith(b'RIFF') and raw[8:12] == b'WEBP')
+    if not valid:
+        raise ValueError('invalid_logo_format')
+    return f'data:image/{mime};base64,' + base64.b64encode(raw).decode('ascii')
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'ClubeFidelidade/7.0'
+    server_version = 'ClubeFidelidade/8.0'
 
     def log_message(self, fmt, *args):
         print(f'[{self.log_date_time_string()}] {self.address_string()} - {fmt % args}')
@@ -51,14 +77,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body_json(self):
         n = int(self.headers.get('Content-Length', '0') or 0)
-        if n > 1_000_000:
+        if n > 1_500_000:
             raise ValueError('body_too_large')
         raw = self.rfile.read(n) if n else b'{}'
         return json.loads(raw.decode('utf-8') or '{}')
 
     def _body_payload(self):
         n = int(self.headers.get('Content-Length', '0') or 0)
-        if n > 1_000_000:
+        if n > 1_500_000:
             raise ValueError('body_too_large')
         raw = self.rfile.read(n) if n else b''
         ctype = (self.headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
@@ -123,16 +149,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/join':
             code=(qs.get('campaign') or ['CAFE5'])[0].upper().strip()
             with connect(DB_PATH) as conn:
-                c=conn.execute('''SELECT c.name,c.reward_name,c.goal,co.primary_color,co.logo_text FROM campaigns c JOIN companies co ON co.id=c.company_id WHERE c.code=? AND c.active=1''',(code,)).fetchone()
+                c=conn.execute('''SELECT c.name,c.reward_name,c.goal,c.logo_image,co.primary_color,co.logo_text FROM campaigns c JOIN companies co ON co.id=c.company_id WHERE c.code=? AND c.active=1''',(code,)).fetchone()
             template=(STATIC/'join.html').read_text(encoding='utf-8')
             if c:
-                template=template.replace('{{LOGO_TEXT}}',html.escape(str(c['logo_text']))).replace('{{CAMPAIGN_NAME}}',html.escape(str(c['name']))).replace('{{CAMPAIGN_DESC}}',html.escape(f"Complete {c['goal']} selos e ganhe {c['reward_name']}."))
+                if c['logo_image']:
+                    logo_block = '<img class="campaign-logo" src="' + html.escape(str(c['logo_image']), quote=True) + '" alt="Logo da campanha">'
+                else:
+                    logo_block = '<div class="brand campaign-logo-fallback">' + html.escape(str(c['logo_text'])) + '</div>'
+                template=template.replace('{{LOGO_BLOCK}}',logo_block).replace('{{CAMPAIGN_NAME}}',html.escape(str(c['name']))).replace('{{CAMPAIGN_DESC}}',html.escape(f"Complete {c['goal']} selos e ganhe {c['reward_name']}."))
                 template=template.replace('name="campaign_code" value="CAFE5"',f'name="campaign_code" value="{html.escape(code)}"')
                 template=template.replace('</head>',f"<style>:root{{--accent:{html.escape(str(c['primary_color']))}}}</style></head>")
                 if (qs.get('error') or [''])[0]:
                     template=template.replace('<div id="msg"></div>','<div id="msg"><div class="notice error">Não foi possível criar o cartão. Confira os dados e tente novamente.</div></div>')
             else:
-                template=template.replace('{{LOGO_TEXT}}','CLUBE').replace('{{CAMPAIGN_NAME}}','Campanha não encontrada').replace('{{CAMPAIGN_DESC}}','Confira o QR Code ou fale com o estabelecimento.').replace('<form id="f" class="form">','<form id="f" class="form hidden">')
+                template=template.replace('{{LOGO_BLOCK}}','<div class="brand campaign-logo-fallback">CLUBE</div>').replace('{{CAMPAIGN_NAME}}','Campanha não encontrada').replace('{{CAMPAIGN_DESC}}','Confira o QR Code ou fale com o estabelecimento.').replace('<form id="f" class="form">','<form id="f" class="form hidden">')
             return self.send_text(template)
         if path in ['/login','/manager','/attendant','/card']:
             name = path.strip('/') + '.html'
@@ -148,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
             elif target.suffix=='.js': ctype='application/javascript; charset=utf-8'
             elif target.suffix=='.svg': ctype='image/svg+xml'
             return self.send_text(target.read_text(encoding='utf-8'),200,ctype)
-        if path == '/api/health': return self.send_json({'ok':True,'version':'v7','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
+        if path == '/api/health': return self.send_json({'ok':True,'version':'v8','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
         if path == '/api/session':
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
@@ -338,8 +368,14 @@ class Handler(BaseHTTPRequestHandler):
                 icon=str(payload.get('icon','☕'))[:8]; goal=int(payload.get('goal',5))
                 if not name or not reward or not code or goal<1 or goal>50: return self.send_json({'ok':False,'error':'invalid_campaign'},400)
                 try:
-                    new_id=insert_id(conn,'''INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,min_stamp_interval_sec,max_stamps_per_hour,max_stamps_per_attendant_day,created_at)
-                     VALUES(?,?,?,?,?,?,?,?,?,?)''',(s['company_id'],code,name,reward,goal,icon,int(payload.get('min_interval',60)),int(payload.get('max_hour',6)),int(payload.get('max_day',500)),now_ts()))
+                    logo_image=validate_logo_data(payload.get('logo_image'))
+                    if not logo_image:
+                        return self.send_json({'ok':False,'error':'logo_required'},400)
+                except ValueError as exc:
+                    return self.send_json({'ok':False,'error':str(exc)},400)
+                try:
+                    new_id=insert_id(conn,'''INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,logo_image,min_stamp_interval_sec,max_stamps_per_hour,max_stamps_per_attendant_day,created_at)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?)''',(s['company_id'],code,name,reward,goal,icon,logo_image,int(payload.get('min_interval',60)),int(payload.get('max_hour',6)),int(payload.get('max_day',500)),now_ts()))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'campaign_create','campaign',new_id,details=code,ip_address=self._ip())
                 return self.send_json({'ok':True,'campaign_id':new_id})
@@ -352,6 +388,34 @@ class Handler(BaseHTTPRequestHandler):
                 except integrity_errors(): return self.send_json({'ok':False,'error':'email_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'staff_create','user',new_id,details=f'{email}:{role}',ip_address=self._ip())
                 return self.send_json({'ok':True,'user_id':new_id})
+            if path == '/api/manager/campaign/delete':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                try: campaign_id=int(payload.get('campaign_id',0))
+                except (TypeError,ValueError): campaign_id=0
+                c=conn.execute('SELECT id,name,code FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id'])).fetchone()
+                if not c: return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                members=conn.execute('SELECT COUNT(*) n FROM memberships WHERE campaign_id=?',(campaign_id,)).fetchone()['n']
+                audit(conn,s['company_id'],s['user_id'],'campaign_delete','campaign',campaign_id,details=f"{c['code']};members={members}",ip_address=self._ip())
+                conn.execute('DELETE FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id']))
+                # Remove clientes que ficaram sem nenhum cartão após a exclusão da campanha.
+                conn.execute('DELETE FROM customers WHERE id NOT IN (SELECT DISTINCT customer_id FROM memberships)')
+                return self.send_json({'ok':True,'deleted_campaign_id':campaign_id,'deleted_memberships':members})
+            if path == '/api/manager/staff/delete':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                try: user_id=int(payload.get('user_id',0))
+                except (TypeError,ValueError): user_id=0
+                if user_id == s['user_id']: return self.send_json({'ok':False,'error':'cannot_delete_self'},409)
+                u=conn.execute('SELECT id,name,email,role FROM users WHERE id=? AND company_id=?',(user_id,s['company_id'])).fetchone()
+                if not u: return self.send_json({'ok':False,'error':'user_not_found'},404)
+                configured_admin=os.environ.get('CLUBE_ADMIN_EMAIL','').strip().lower()
+                if configured_admin and u['email'].lower()==configured_admin:
+                    return self.send_json({'ok':False,'error':'configured_admin_protected'},409)
+                if u['role']=='manager':
+                    managers=conn.execute("SELECT COUNT(*) n FROM users WHERE company_id=? AND role='manager' AND active=1",(s['company_id'],)).fetchone()['n']
+                    if managers <= 1: return self.send_json({'ok':False,'error':'last_manager_protected'},409)
+                audit(conn,s['company_id'],s['user_id'],'staff_delete','user',user_id,details=f"{u['email']}:{u['role']}",ip_address=self._ip())
+                conn.execute('DELETE FROM users WHERE id=? AND company_id=?',(user_id,s['company_id']))
+                return self.send_json({'ok':True,'deleted_user_id':user_id})
             if path == '/api/manager/block':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 token=str(payload.get('token','')).strip(); token=token[6:] if token.startswith('CLUBE:') else token; status='blocked' if payload.get('blocked',True) else 'active'
@@ -372,7 +436,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v7 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v8 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()

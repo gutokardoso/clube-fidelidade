@@ -1,101 +1,18 @@
-# Clube Fidelidade v7
+# Clube Fidelidade v8
 
-Sistema white-label de fidelidade digital com perfis de gerente e atendente, campanhas, QR individual, selos, recompensas, histórico/auditoria e controles antifraude.
+Plataforma white-label de fidelidade digital com gerente, atendente, cartões por QR, antifraude, recompensas e auditoria.
 
-## O que mudou na v7
+## Novidades da v8
 
-- Senhas bootstrap de gerente/atendente são normalizadas (`strip`) e sincronizadas em todo start.
-- O start confirma o hash recém-gravado e registra `ADMIN_SYNC_OK` / `ATTENDANT_SYNC_OK` sem expor senha.
-- Login pode reparar um hash persistido defasado quando a senha coincide exatamente com a variável segura do Railway.
-- O cartão do cliente exibe o `public_id` em “Código do cartão”.
+- Cada nova campanha exige o envio de uma logo própria (PNG, JPG ou WEBP, até 500 KB).
+- A página pública de cadastro do cliente exibe a logo da campanha no lugar do texto fixo "CLUBE CAFÉ".
+- Gerente pode excluir campanhas pelo painel. A exclusão remove os cartões, selos e transações ligados à campanha; clientes sem nenhum outro cartão são limpos automaticamente.
+- Gerente pode excluir usuários da equipe criados no painel.
+- Proteções: não é possível excluir o próprio usuário logado, o gerente principal configurado no Railway nem o último gerente ativo.
+- Migração automática adiciona `logo_image` a bancos PostgreSQL/SQLite já existentes.
 
-- Suporte a PostgreSQL via `DATABASE_URL` para produção.
-- Fallback automático para SQLite durante desenvolvimento local.
-- Compatibilidade com a porta dinâmica da hospedagem (`PORT`) e bind em `0.0.0.0`.
-- `railway.json` e `Procfile` prontos para deploy.
-- Health check em `/api/health`.
-- Cookies `Secure` ativados automaticamente quando PostgreSQL/produção está configurado.
-- Credenciais demo não são mais criadas automaticamente em produção.
-- Bootstrap seguro do primeiro gerente por variáveis de ambiente.
-- Apple Wallet e Google Wallet continuam preparadas para receber credenciais oficiais.
+## Produção no Railway
 
-## Teste local
+Mantém as mesmas variáveis da v7, incluindo `DATABASE_URL`, `CLUBE_ADMIN_EMAIL`, `CLUBE_ADMIN_PASSWORD` e credenciais opcionais do atendente.
 
-Requer Python 3.10+.
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python3 server.py
-```
-
-Abra `http://localhost:8000`.
-
-No modo local, se `DATABASE_URL` não estiver definida, o projeto usa SQLite e cria a demonstração:
-
-- Gerente: `gerente@demo.local` / `Gerente123!`
-- Atendente: `atendente@demo.local` / `Atendente123!`
-
-Para desativar os usuários demo localmente, defina `CLUBE_SEED_DEMO=0` e informe as variáveis de bootstrap.
-
-## Deploy no Railway + PostgreSQL
-
-1. Suba o conteúdo desta pasta para um repositório GitHub.
-2. No Railway, crie um projeto e escolha **Deploy from GitHub Repo**.
-3. No mesmo projeto Railway, adicione um serviço PostgreSQL.
-4. Faça `DATABASE_URL` do serviço da aplicação apontar para a variável fornecida pelo PostgreSQL.
-5. No serviço da aplicação, adicione as variáveis:
-
-```text
-CLUBE_COMPANY_NAME=Nome da empresa
-CLUBE_COMPANY_SLUG=nome-da-empresa
-CLUBE_ADMIN_NAME=Seu nome
-CLUBE_ADMIN_EMAIL=seu-email@dominio.com
-CLUBE_ADMIN_PASSWORD=uma-senha-forte-com-12-ou-mais-caracteres
-CLUBE_SECURE_COOKIE=1
-CLUBE_SEED_DEMO=0
-```
-
-6. Faça o deploy. O processo inicializa as tabelas automaticamente.
-7. Abra `/api/health`. A resposta esperada em produção inclui `"version":"v7"` e `"database":"postgresql"`.
-8. Entre em `/login` com o e-mail e senha definidos em `CLUBE_ADMIN_EMAIL` e `CLUBE_ADMIN_PASSWORD`.
-9. Pelo painel do gerente, crie os atendentes reais. Não é necessário guardar senha de atendente no código.
-
-### Atenção ao primeiro deploy
-
-Se o PostgreSQL estiver vazio e `CLUBE_SEED_DEMO=0`, o servidor exige `CLUBE_ADMIN_EMAIL` válido e `CLUBE_ADMIN_PASSWORD` com no mínimo 12 caracteres. Isso evita publicar o sistema com credenciais demo conhecidas.
-
-## Variáveis de ambiente
-
-Consulte `.env.example`. Nunca faça commit do arquivo `.env` real, certificados, chaves privadas ou credenciais das Wallets.
-
-## Apple Wallet / Google Wallet
-
-Os pontos de integração estão em `wallet.py`. Os botões reais dependem das credenciais oficiais de emissor/certificados. Essas credenciais devem ser adicionadas à hospedagem como secrets/variáveis e nunca incluídas no ZIP ou GitHub.
-
-## Antifraude implementado
-
-- cartão individual por token aleatório;
-- somente usuário autenticado pode creditar/resgatar;
-- CSRF em operações autenticadas;
-- idempotência para evitar lançamentos duplicados;
-- intervalo mínimo entre selos do mesmo cartão;
-- limite por cartão/hora;
-- limite operacional por atendente/dia;
-- múltiplos selos exigem gerente;
-- cartões podem ser bloqueados pelo gerente;
-- transações e ações administrativas ficam auditadas;
-- senha armazenada por hash, nunca em texto puro no banco.
-
-## Testes
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-Os testes automáticos usam SQLite isolado e não precisam de PostgreSQL.
-
-
-## v7 — credenciais sincronizadas e código visível
-Login da equipe e adesão do cliente funcionam por POST HTML nativo no servidor, com redirecionamento HTTP 303. Assim, as duas operações essenciais não dependem de JavaScript para funcionar.
+O health check continua em `/api/health` e agora retorna `version: v8`.
