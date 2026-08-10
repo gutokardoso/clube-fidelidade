@@ -58,7 +58,7 @@ def validate_logo_data(value):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'ClubeFidelidade/11.0'
+    server_version = 'ClubeFidelidade/13.0'
 
     def log_message(self, fmt, *args):
         print(f'[{self.log_date_time_string()}] {self.address_string()} - {fmt % args}')
@@ -178,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
             elif target.suffix=='.js': ctype='application/javascript; charset=utf-8'
             elif target.suffix=='.svg': ctype='image/svg+xml'
             return self.send_text(target.read_text(encoding='utf-8'),200,ctype)
-        if path == '/api/health': return self.send_json({'ok':True,'version':'v12','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
+        if path == '/api/health': return self.send_json({'ok':True,'version':'v13','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
         if path == '/api/session':
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
@@ -196,7 +196,7 @@ class Handler(BaseHTTPRequestHandler):
             public_id=(qs.get('id') or [''])[0]
             with connect(DB_PATH) as conn:
                 m=conn.execute('''SELECT m.public_id,m.qr_token,m.progress,m.rewards_available,m.status,m.created_at,
-                                  c.name campaign_name,c.reward_name,c.goal,c.icon,c.code,
+                                  c.name campaign_name,c.reward_name,c.goal,c.icon,c.code,c.logo_image,
                                   cu.name customer_name,co.name company_name,co.primary_color,co.logo_text
                                   FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id JOIN companies co ON co.id=c.company_id
                                   WHERE m.public_id=?''',(public_id,)).fetchone()
@@ -222,7 +222,11 @@ class Handler(BaseHTTPRequestHandler):
                 metrics['customers']=conn.execute('''SELECT COUNT(DISTINCT m.customer_id) n FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=?''',(cid,)).fetchone()['n']
                 metrics['stamps']=conn.execute('''SELECT COALESCE(SUM(t.value),0) n FROM transactions t JOIN memberships m ON m.id=t.membership_id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? AND t.type='stamp' ''',(cid,)).fetchone()['n']
                 metrics['redeems']=conn.execute('''SELECT COUNT(*) n FROM transactions t JOIN memberships m ON m.id=t.membership_id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? AND t.type='redeem' ''',(cid,)).fetchone()['n']
-                campaigns=[rowdict(r) for r in conn.execute('SELECT * FROM campaigns WHERE company_id=? ORDER BY id DESC',(cid,)).fetchall()]
+                campaigns=[rowdict(r) for r in conn.execute("""SELECT c.*,
+                    (SELECT COUNT(*) FROM memberships m WHERE m.campaign_id=c.id) card_count,
+                    (SELECT COALESCE(SUM(CASE WHEN t.type='stamp' THEN t.value WHEN t.type='adjustment' THEN t.value ELSE 0 END),0)
+                       FROM transactions t JOIN memberships m2 ON m2.id=t.membership_id WHERE m2.campaign_id=c.id) stamp_count
+                    FROM campaigns c WHERE c.company_id=? ORDER BY c.id DESC""",(cid,)).fetchall()]
                 staff=[rowdict(r) for r in conn.execute('''SELECT u.id,u.name,u.email,u.role,u.active,u.created_at,u.campaign_id,c.name client_name FROM users u LEFT JOIN campaigns c ON c.id=u.campaign_id WHERE u.company_id=? ORDER BY u.role,u.name''',(cid,)).fetchall()]
                 return self.send_json({'ok':True,'metrics':metrics,'campaigns':campaigns,'staff':staff})
         if path == '/api/attendant/recent':
@@ -323,7 +327,7 @@ class Handler(BaseHTTPRequestHandler):
             s=self._require_auth(conn)
             if not s: return
             if not self._require_csrf(s,payload): return self.send_json({'ok':False,'error':'csrf_failed'},403)
-            if path in ('/api/attendant/stamp','/api/attendant/redeem'):
+            if path in ('/api/attendant/stamp','/api/attendant/stamp/remove','/api/attendant/redeem'):
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
             if path == '/api/attendant/stamp':
@@ -352,6 +356,30 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({'ok':False,'error':e.code,'message':e.message,'requires_manager':e.requires_manager},409)
                 except integrity_errors():
                     return self.send_json({'ok':False,'error':'duplicate_request'},409)
+            if path == '/api/attendant/stamp/remove':
+                token=str(payload.get('token','')).strip(); token=token[6:] if token.startswith('CLUBE:') else token
+                idem=str(payload.get('idempotency_key','')).strip()[:100] or random_token(12)
+                begin_write(conn)
+                dupe=conn.execute('SELECT id FROM transactions WHERE idempotency_key=?',(idem,)).fetchone()
+                if dupe: return self.send_json({'ok':True,'duplicate':True,'transaction_id':dupe['id']})
+                m=fetchone_for_update(conn,'''SELECT m.*,c.goal,c.company_id,cu.name customer_name
+                  FROM memberships m JOIN campaigns c ON c.id=m.campaign_id JOIN customers cu ON cu.id=m.customer_id
+                  WHERE (m.public_id=? OR m.qr_token=?) AND c.company_id=? AND c.id=?''',(token,token,s['company_id'],s['campaign_id']))
+                if not m: return self.send_json({'ok':False,'error':'membership_not_found'},404)
+                if m['status']!='active': return self.send_json({'ok':False,'error':'membership_blocked'},409)
+                prev=m['progress']; reward_delta=0
+                if prev>0:
+                    new=prev-1
+                elif m['rewards_available']>0:
+                    # Desfaz o selo que fechou o ciclo: restaura goal-1 e remove a recompensa gerada.
+                    new=max(0,m['goal']-1); reward_delta=-1
+                else:
+                    return self.send_json({'ok':False,'error':'no_stamp_to_remove','message':'Este cartão não possui selo para remover.'},409)
+                tx_id=insert_id(conn,'''INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,ip_address,note,created_at)
+                  VALUES(?,?,?,?,?,?,?,?,?,?,?)''',(m['id'],s['user_id'],'adjustment',-1,prev,new,reward_delta,idem,self._ip(),'remoção manual de selo',now_ts()))
+                conn.execute('UPDATE memberships SET progress=?, rewards_available=rewards_available+? WHERE id=?',(new,reward_delta,m['id']))
+                audit(conn,s['company_id'],s['user_id'],'stamp_remove','membership',m['public_id'],details=f'progress={prev}->{new};reward={reward_delta}',ip_address=self._ip())
+                return self.send_json({'ok':True,'transaction_id':tx_id,'customer_name':m['customer_name'],'previous_progress':prev,'progress':new,'reward_removed':1 if reward_delta<0 else 0})
             if path == '/api/attendant/redeem':
                 token=str(payload.get('token','')).strip(); token=token[6:] if token.startswith('CLUBE:') else token; idem=str(payload.get('idempotency_key','')).strip()[:100] or random_token(12)
                 begin_write(conn)
@@ -445,7 +473,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v12 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v13 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()

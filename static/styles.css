@@ -9,7 +9,7 @@
 
 .client-heading{display:flex;align-items:center;gap:14px;margin-top:6px}.client-heading h2{margin:0}.client-logo-wrap{width:54px;height:54px;flex:0 0 54px;border:1px solid var(--line);border-radius:12px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden}.client-logo{display:block;max-width:46px;max-height:46px;width:auto;height:auto;object-fit:contain}
 
-/* Cartão do cliente — v12 */
+/* Cartão do cliente — v13 */
 .wallet-card{text-align:center}
 .wallet-card .card-title{font-size:18px;line-height:1.2;margin-bottom:18px}
 .wallet-client-logo-wrap{display:flex;align-items:center;justify-content:center;min-height:88px;margin:0 auto 18px}
