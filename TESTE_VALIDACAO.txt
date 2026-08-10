@@ -1,25 +1,20 @@
-CLUBE FIDELIDADE V2 - TESTE E VALIDAÇÃO
+CLUBE FIDELIDADE V4 — VALIDAÇÃO
 Data: 2026-08-10
 
-VALIDAÇÕES EXECUTADAS
-- Compilação de todos os arquivos Python: OK
-- Testes unitários: 3/3 OK
-- Inicialização local em SQLite: OK
-- GET /api/health: OK (version=v3, database=sqlite)
-- Login de gerente: OK
-- Cadastro em campanha CAFE5: OK
-- Cartão individual/QR token: OK
-- Crédito de 5 selos por gerente: OK
-- Recompensa liberada após atingir meta: OK
-- Resgate de recompensa: OK
-- Recompensa removida após resgate: OK
-- Configuração de PORT/HOST para Railway: OK
-- Suporte PostgreSQL via DATABASE_URL: implementado
-- Lock FOR UPDATE no PostgreSQL para evitar crédito/resgate concorrente no mesmo cartão: implementado
-- Bootstrap de produção sem credenciais demo: implementado
+Correção principal:
+- app.js agora roda dentro de uma IIFE, evitando que as constantes internas api, $, $$, fmtDate e outras vazem para o escopo global.
+- Isso elimina o SyntaxError causado pela redeclaração de `api` e `$` nos scripts das páginas login.html, join.html, card.html, manager.html e attendant.html.
 
-OBSERVAÇÃO
-O teste automatizado executado neste ambiente utilizou SQLite, pois não há um servidor PostgreSQL provisionado localmente. O código PostgreSQL foi validado por compilação e pela camada de compatibilidade; a conexão real deve ser validada após o PostgreSQL ser criado no Railway.
+Validações executadas:
+1. Python: todos os módulos compilam sem erro.
+2. JavaScript: app.js passou em `node --check`.
+3. JavaScript inline: scripts de login, cadastro, cartão, gerente e atendente passaram em `node --check`.
+4. Testes unitários: 3/3 aprovados.
+5. API local:
+   - POST /api/login -> HTTP 200 com gerente demo.
+   - POST /api/join -> HTTP 200 e criação de membership.
+   - GET /api/card -> HTTP 200 para o novo cliente.
+6. A causa do frontend inativo foi reproduzida por inspeção do escopo JavaScript e corrigida no arquivo compartilhado por todas as telas.
 
-APPLE/GOOGLE WALLET
-Integrações permanecem em modo configuration_required até o fornecimento das credenciais oficiais.
+Observação sobre teste visual automatizado:
+- Foi tentada validação com Chromium/Playwright do ambiente, porém o Chromium gerenciado bloqueou acesso ao localhost por política administrativa (ERR_BLOCKED_BY_ADMINISTRATOR). A API e a sintaxe JS foram validadas pelos métodos acima.
