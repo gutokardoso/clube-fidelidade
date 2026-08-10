@@ -287,7 +287,7 @@ def init_db(db_path=None, seed=True):
     target = db_path or DATABASE_URL or DEFAULT_DB
     with connect(target) as conn:
         conn.executescript(POSTGRES_SCHEMA if _is_postgres(target) else SQLITE_SCHEMA)
-        # Migração v8: campanhas existentes ganham campo opcional de logo.
+        # Migração v9: campanhas existentes ganham campo opcional de logo.
         if _is_postgres(target):
             conn.execute('ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS logo_image TEXT')
         else:

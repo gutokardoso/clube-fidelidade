@@ -1,14 +1,10 @@
-CLUBE FIDELIDADE V8 - VALIDAÇÃO
+CLUBE FIDELIDADE V9 - VALIDAÇÃO
 
 OK - 4/4 testes automatizados existentes.
-OK - health check retorna v8.
-OK - criação de campanha com logo PNG válida.
-OK - logo aparece na página /join da campanha.
-OK - logo obrigatória para novas campanhas.
-OK - limite/validação do formato da imagem no servidor.
-OK - criação e exclusão de usuário da equipe.
-OK - gerente não pode excluir o próprio usuário.
-OK - proteção do gerente principal configurado e do último gerente.
-OK - exclusão de campanha e dados vinculados.
-OK - JavaScript das telas principais passou em node --check.
-OK - migração automática do campo logo_image preparada para SQLite/PostgreSQL existentes.
+OK - health check retorna v9.
+OK - textos de antifraude atualizados no cadastro de nova campanha.
+OK - cartão criado com código público visível no formato CLUBE:<public_id>.
+OK - QR Code usa exatamente o mesmo valor exibido como Código do cartão.
+OK - busca manual da atendente com o código visível encontra o mesmo cartão.
+OK - crédito de selo usando o código visível do cartão funcionou.
+OK - compatibilidade com qr_token interno anterior foi preservada.

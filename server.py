@@ -58,7 +58,7 @@ def validate_logo_data(value):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'ClubeFidelidade/8.0'
+    server_version = 'ClubeFidelidade/9.0'
 
     def log_message(self, fmt, *args):
         print(f'[{self.log_date_time_string()}] {self.address_string()} - {fmt % args}')
@@ -178,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
             elif target.suffix=='.js': ctype='application/javascript; charset=utf-8'
             elif target.suffix=='.svg': ctype='image/svg+xml'
             return self.send_text(target.read_text(encoding='utf-8'),200,ctype)
-        if path == '/api/health': return self.send_json({'ok':True,'version':'v8','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
+        if path == '/api/health': return self.send_json({'ok':True,'version':'v9','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
         if path == '/api/session':
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
@@ -202,7 +202,8 @@ class Handler(BaseHTTPRequestHandler):
                                   WHERE m.public_id=?''',(public_id,)).fetchone()
                 if not m: return self.send_json({'ok':False,'error':'card_not_found'},404)
                 data=rowdict(m)
-                data['qr_value']=f'CLUBE:{m["qr_token"]}'
+                data['card_code']=f'CLUBE:{m["public_id"]}'
+                data['qr_value']=data['card_code']
                 data['apple_link']=apple_pass_link(public_id)
                 data['google_link']=google_wallet_link(public_id)
                 return self.send_json({'ok':True,'card':data,'wallet':wallet_status()})
@@ -242,7 +243,7 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn)
                 if not s: return
                 m=conn.execute('''SELECT m.*,cu.name customer_name,c.name campaign_name,c.reward_name,c.goal,c.icon,c.company_id
-                  FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.qr_token=? AND c.company_id=?''',(token,s['company_id'])).fetchone()
+                  FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE (m.public_id=? OR m.qr_token=?) AND c.company_id=?''',(token,token,s['company_id'])).fetchone()
                 if not m: return self.send_json({'ok':False,'error':'membership_not_found'},404)
                 return self.send_json({'ok':True,'membership':rowdict(m)})
         return self.send_text('Not found',404,'text/plain')
@@ -331,7 +332,7 @@ class Handler(BaseHTTPRequestHandler):
                     dupe=conn.execute('SELECT id FROM transactions WHERE idempotency_key=?',(idem,)).fetchone()
                     if dupe: return self.send_json({'ok':True,'duplicate':True,'transaction_id':dupe['id']})
                     m=fetchone_for_update(conn,'''SELECT m.*,c.goal,c.min_stamp_interval_sec,c.max_stamps_per_hour,c.max_stamps_per_attendant_day,c.company_id,c.name campaign_name,cu.name customer_name
-                      FROM memberships m JOIN campaigns c ON c.id=m.campaign_id JOIN customers cu ON cu.id=m.customer_id WHERE m.qr_token=? AND c.company_id=?''',(token,s['company_id']))
+                      FROM memberships m JOIN campaigns c ON c.id=m.campaign_id JOIN customers cu ON cu.id=m.customer_id WHERE (m.public_id=? OR m.qr_token=?) AND c.company_id=?''',(token,token,s['company_id']))
                     if not m: return self.send_json({'ok':False,'error':'membership_not_found'},404)
                     validate_stamp(conn,m,m,s,qty)
                     prev=m['progress']; rewards=0; new=prev
@@ -353,7 +354,7 @@ class Handler(BaseHTTPRequestHandler):
                 token=str(payload.get('token','')).strip(); token=token[6:] if token.startswith('CLUBE:') else token; idem=str(payload.get('idempotency_key','')).strip()[:100] or random_token(12)
                 begin_write(conn)
                 if conn.execute('SELECT id FROM transactions WHERE idempotency_key=?',(idem,)).fetchone(): return self.send_json({'ok':True,'duplicate':True})
-                m=fetchone_for_update(conn,'''SELECT m.*,c.company_id,cu.name customer_name FROM memberships m JOIN campaigns c ON c.id=m.campaign_id JOIN customers cu ON cu.id=m.customer_id WHERE m.qr_token=? AND c.company_id=?''',(token,s['company_id']))
+                m=fetchone_for_update(conn,'''SELECT m.*,c.company_id,cu.name customer_name FROM memberships m JOIN campaigns c ON c.id=m.campaign_id JOIN customers cu ON cu.id=m.customer_id WHERE (m.public_id=? OR m.qr_token=?) AND c.company_id=?''',(token,token,s['company_id']))
                 if not m: return self.send_json({'ok':False,'error':'membership_not_found'},404)
                 if m['status']!='active': return self.send_json({'ok':False,'error':'membership_blocked'},409)
                 if m['rewards_available']<1: return self.send_json({'ok':False,'error':'no_reward_available'},409)
@@ -419,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/manager/block':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 token=str(payload.get('token','')).strip(); token=token[6:] if token.startswith('CLUBE:') else token; status='blocked' if payload.get('blocked',True) else 'active'
-                m=conn.execute('''SELECT m.* FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.qr_token=? AND c.company_id=?''',(token,s['company_id'])).fetchone()
+                m=conn.execute('''SELECT m.* FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE (m.public_id=? OR m.qr_token=?) AND c.company_id=?''',(token,token,s['company_id'])).fetchone()
                 if not m: return self.send_json({'ok':False,'error':'membership_not_found'},404)
                 conn.execute('UPDATE memberships SET status=? WHERE id=?',(status,m['id']))
                 ttype='block' if status=='blocked' else 'unblock'
@@ -436,7 +437,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v8 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v9 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()
