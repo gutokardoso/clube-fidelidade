@@ -10,4 +10,4 @@ OK - cliente com atendentes vinculados não pode ser excluído antes dos atenden
 OK - código manual e QR continuam usando o mesmo código público do cartão.
 OK - 6/6 testes automatizados aprovados.
 OK - validação HTTP ponta a ponta aprovada.
-OK - health check retorna v11.
+OK - health check retorna v12.

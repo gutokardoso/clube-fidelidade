@@ -22,4 +22,4 @@ $('#staffForm').onsubmit=async e=>{e.preventDefault();try{await managerPost('/ap
 async function deleteClient(id,name){if(!confirm(`Excluir o cliente “${name}”? Os cartões, selos e histórico vinculados serão removidos.`))return;try{const j=await managerPost('/api/manager/campaign/delete',{campaign_id:id});alert(`Cliente excluído. ${j.deleted_memberships||0} cartão(ões) removido(s).`);load()}catch(err){if(err.data?.error==='client_has_attendants'){alert(`Este cliente possui ${err.data.linked_attendants} atendente(s) vinculado(s). Exclua esses atendentes primeiro.`);return}alert('Não foi possível excluir: '+(err.data?.error||err.message))}}
 async function deleteStaff(id,name){if(!confirm(`Excluir o atendente “${name}”?`))return;try{await managerPost('/api/manager/staff/delete',{user_id:id});load()}catch(err){alert('Não foi possível excluir: '+(err.data?.error||err.message))}}
 boot();
-</script><div class="build-marker">v11</div></body></html>
+</script><div class="build-marker">v12</div></body></html>

@@ -8,3 +8,17 @@
 .campaign-logo-wrap{display:flex;align-items:center;justify-content:center;min-height:90px;margin-bottom:14px}.campaign-logo{display:block;max-width:min(280px,80%);max-height:110px;width:auto;height:auto;object-fit:contain}.campaign-logo-fallback{text-align:center}.logo-preview{padding:12px;border:1px dashed var(--line);border-radius:14px;background:#faf8f6}.logo-preview img{display:block;max-width:220px;max-height:90px;object-fit:contain}.table-logo{display:block;max-width:72px;max-height:42px;object-fit:contain}.btn-small{padding:8px 11px;border-radius:10px;font-size:12px;white-space:nowrap}
 
 .client-heading{display:flex;align-items:center;gap:14px;margin-top:6px}.client-heading h2{margin:0}.client-logo-wrap{width:54px;height:54px;flex:0 0 54px;border:1px solid var(--line);border-radius:12px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden}.client-logo{display:block;max-width:46px;max-height:46px;width:auto;height:auto;object-fit:contain}
+
+/* Cartão do cliente — v12 */
+.wallet-card{text-align:center}
+.wallet-card .card-title{font-size:18px;line-height:1.2;margin-bottom:18px}
+.wallet-client-logo-wrap{display:flex;align-items:center;justify-content:center;min-height:88px;margin:0 auto 18px}
+.wallet-client-logo{display:block;max-width:min(260px,82%);max-height:120px;width:auto;height:auto;object-fit:contain}
+.wallet-client-logo-fallback{font-size:30px;font-weight:900;line-height:1.1;text-align:center}
+.wallet-customer{margin:0 0 18px;font-size:18px}
+.wallet-stamps{display:grid;grid-template-columns:repeat(5,48px);justify-content:center;gap:12px;margin:18px auto}
+.wallet-card #count{margin:18px 0 8px}
+.wallet-card #reward{margin:0 0 18px;text-align:center}
+.wallet-card .qr{display:block;margin:18px auto 0}
+.wallet-instruction{text-align:center;margin:14px auto 0}
+@media(max-width:380px){.wallet-card{padding:22px 18px}.wallet-stamps{grid-template-columns:repeat(5,40px);gap:7px}.wallet-stamps .stamp{width:40px;height:40px;font-size:18px}.wallet-client-logo{max-width:88%;max-height:100px}}

@@ -1,8 +1,8 @@
-# Clube Fidelidade v11
+# Clube Fidelidade v12
 
 Plataforma de fidelidade multi-cliente para operação pela Taboo.
 
-## Alterações da v11
+## Alterações da v12
 
 - Contato do consumidor (e-mail ou celular) obrigatório no cadastro.
 - A interface administrativa passa a chamar cada campanha/área de **Cliente**.
