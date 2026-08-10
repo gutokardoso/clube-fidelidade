@@ -18,6 +18,17 @@ class CoreTests(unittest.TestCase):
     def test_campaign_goal(self):
         with connect(self.db) as c:
             camp=c.execute("SELECT * FROM campaigns WHERE code='CAFE5'").fetchone(); self.assertEqual(camp['goal'],5)
+    def test_attendant_is_bound_to_client(self):
+        with connect(self.db) as c:
+            u=c.execute("SELECT * FROM users WHERE role='attendant'").fetchone()
+            camp=c.execute("SELECT * FROM campaigns WHERE code='CAFE5'").fetchone()
+            self.assertEqual(u['campaign_id'], camp['id'])
+
+    def test_manager_has_global_scope(self):
+        with connect(self.db) as c:
+            u=c.execute("SELECT * FROM users WHERE role='manager'").fetchone()
+            self.assertIsNone(u['campaign_id'])
+
     def test_antifraud_blocks_fast_second_stamp(self):
         import time
         with connect(self.db) as c:

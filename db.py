@@ -294,6 +294,17 @@ def init_db(db_path=None, seed=True):
             cols = [r['name'] for r in conn.execute('PRAGMA table_info(campaigns)').fetchall()]
             if 'logo_image' not in cols:
                 conn.execute('ALTER TABLE campaigns ADD COLUMN logo_image TEXT')
+        # Migração v10: todo atendente pode ser vinculado a um cliente (campaign_id).
+        if _is_postgres(target):
+            conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS campaign_id BIGINT REFERENCES campaigns(id) ON DELETE SET NULL')
+        else:
+            user_cols = [r['name'] for r in conn.execute('PRAGMA table_info(users)').fetchall()]
+            if 'campaign_id' not in user_cols:
+                conn.execute('ALTER TABLE users ADD COLUMN campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL')
+        # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
+        first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
+        if first_client:
+            conn.execute("UPDATE users SET campaign_id=? WHERE role='attendant' AND campaign_id IS NULL", (first_client['id'],))
         if not seed:
             return
         count = conn.execute('SELECT COUNT(*) c FROM companies').fetchone()['c']
@@ -329,14 +340,14 @@ def init_db(db_path=None, seed=True):
         company_id = insert_id(conn,
             'INSERT INTO companies(name,slug,primary_color,logo_text,created_at) VALUES(?,?,?,?,?)',
             (company_name, company_slug, '#5A321F', 'CLUBE CAFÉ', ts))
-        conn.execute('INSERT INTO users(company_id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)',
-                     (company_id, manager_name, manager_email, hash_password(manager_password), 'manager', ts))
-        if attendant_email:
-            conn.execute('INSERT INTO users(company_id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)',
-                         (company_id, attendant_name, attendant_email, hash_password(attendant_password), 'attendant', ts))
-        conn.execute('''INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,min_stamp_interval_sec,max_stamps_per_hour,max_stamps_per_attendant_day,created_at)
+        conn.execute('INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,created_at) VALUES(?,?,?,?,?,?,?)',
+                     (company_id, manager_name, manager_email, hash_password(manager_password), 'manager', None, ts))
+        default_campaign_id = insert_id(conn, '''INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,min_stamp_interval_sec,max_stamps_per_hour,max_stamps_per_attendant_day,created_at)
                         VALUES(?,?,?,?,?,?,?,?,?,?)''',
                      (company_id,'CAFE5','Clube Café','1 café grátis',5,'☕',60,6,500,ts))
+        if attendant_email:
+            conn.execute('INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,created_at) VALUES(?,?,?,?,?,?,?)',
+                         (company_id, attendant_name, attendant_email, hash_password(attendant_password), 'attendant', default_campaign_id, ts))
 
 
 
@@ -371,16 +382,24 @@ def ensure_configured_staff(db_path=None):
         if not company:
             return
         for name, email, password, role in configured:
-            existing = conn.execute('SELECT id FROM users WHERE email=?', (email,)).fetchone()
+            existing = conn.execute('SELECT id,campaign_id FROM users WHERE email=?', (email,)).fetchone()
             pwd_hash = hash_password(password)
             if existing:
-                conn.execute('UPDATE users SET name=?, password_hash=?, role=?, active=1 WHERE id=?',
-                             (name, pwd_hash, role, existing['id']))
+                campaign_id = existing['campaign_id'] if role == 'attendant' else None
+                if role == 'attendant' and campaign_id is None:
+                    first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
+                    campaign_id = first_client['id'] if first_client else None
+                conn.execute('UPDATE users SET name=?, password_hash=?, role=?, campaign_id=?, active=1 WHERE id=?',
+                             (name, pwd_hash, role, campaign_id, existing['id']))
                 user_id = existing['id']
             else:
+                campaign_id = None
+                if role == 'attendant':
+                    first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
+                    campaign_id = first_client['id'] if first_client else None
                 user_id = insert_id(conn,
-                    'INSERT INTO users(company_id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)',
-                    (company['id'], name, email, pwd_hash, role, now_ts()))
+                    'INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,created_at) VALUES(?,?,?,?,?,?,?)',
+                    (company['id'], name, email, pwd_hash, role, campaign_id, now_ts()))
             check = conn.execute('SELECT password_hash,role,active FROM users WHERE id=?', (user_id,)).fetchone()
             if not check or not verify_password(password, check['password_hash']) or check['role'] != role or int(check['active']) != 1:
                 raise RuntimeError(f'Falha ao sincronizar credenciais de {role}: {email}')
@@ -400,8 +419,8 @@ def create_session(conn, user_id: int, ttl=8*60*60):
 def get_session(conn, token: str):
     if not token:
         return None
-    row = conn.execute('''SELECT s.token,s.csrf,s.expires_at,u.id user_id,u.company_id,u.name,u.email,u.role,u.active
-                          FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=?''',(token,)).fetchone()
+    row = conn.execute('''SELECT s.token,s.csrf,s.expires_at,u.id user_id,u.company_id,u.campaign_id,u.name,u.email,u.role,u.active,c.name client_name
+                          FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN campaigns c ON c.id=u.campaign_id WHERE s.token=?''',(token,)).fetchone()
     if not row or row['expires_at'] < now_ts() or not row['active']:
         return None
     return row

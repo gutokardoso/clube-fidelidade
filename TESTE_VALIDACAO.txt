@@ -1,10 +1,13 @@
-CLUBE FIDELIDADE V9 - VALIDAÇÃO
+CLUBE FIDELIDADE V10 - VALIDAÇÃO
 
-OK - 4/4 testes automatizados existentes.
-OK - health check retorna v9.
-OK - textos de antifraude atualizados no cadastro de nova campanha.
-OK - cartão criado com código público visível no formato CLUBE:<public_id>.
-OK - QR Code usa exatamente o mesmo valor exibido como Código do cartão.
-OK - busca manual da atendente com o código visível encontra o mesmo cartão.
-OK - crédito de selo usando o código visível do cartão funcionou.
-OK - compatibilidade com qr_token interno anterior foi preservada.
+OK - contato do consumidor obrigatório no HTML e no servidor.
+OK - painel geral usa nomenclatura Cliente em vez de Campanha.
+OK - criação de atendente exige vínculo com um Cliente.
+OK - atendente fica restrito ao Cliente vinculado.
+OK - cartão de outro Cliente não pode ser localizado, pontuado ou resgatado pelo atendente.
+OK - Auditoria de operações aparece na área de cada Cliente e inclui operadores daquela área.
+OK - cliente com atendentes vinculados não pode ser excluído antes dos atendentes.
+OK - código manual e QR continuam usando o mesmo código público do cartão.
+OK - 6/6 testes automatizados aprovados.
+OK - validação HTTP ponta a ponta aprovada.
+OK - health check retorna v10.

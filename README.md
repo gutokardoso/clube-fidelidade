@@ -1,20 +1,19 @@
-# Clube Fidelidade v9
+# Clube Fidelidade v10
 
-Plataforma white-label de fidelidade digital com gerente, atendente, cartões por QR, antifraude, recompensas e auditoria.
+Plataforma de fidelidade multi-cliente para operação pela Taboo.
 
-## Novidades da v9
+## Alterações da v10
 
-- Texto `Intervalo mínimo (s)` alterado para `Intervalo mínimo (em segundos)`.
-- Texto `Máx. selos/hora/cartão` alterado para `Máx. selos/hora/cartão (em 1 hora)`.
-- O código visível no cartão do cliente agora é exatamente o mesmo conteúdo gravado no QR Code: `CLUBE:<public_id>`.
-- A atendente pode escanear o QR Code ou digitar manualmente esse mesmo código para localizar o cartão.
-- Crédito de selos, resgate e bloqueio de cartão aceitam o código público do cartão.
-- Compatibilidade mantida com o token interno antigo para cartões já existentes.
+- Contato do consumidor (e-mail ou celular) obrigatório no cadastro.
+- A interface administrativa passa a chamar cada campanha/área de **Cliente**.
+- O gerente é o acesso geral exclusivo da Taboo.
+- Novos usuários criados pelo painel são atendentes e precisam ser vinculados obrigatoriamente a um Cliente.
+- Atendentes só podem consultar, pontuar e resgatar cartões do Cliente ao qual estão vinculados.
+- A área do atendente mostra o nome do Cliente e inclui **Auditoria de operações** de toda aquela área.
+- A auditoria geral foi removida do painel Taboo e passou a existir dentro da área de cada Cliente.
+- Clientes com atendentes vinculados não podem ser excluídos até que esses atendentes sejam removidos.
+- Mantidos QR/código manual, antifraude, logos por Cliente, exclusão de Clientes/atendentes e PostgreSQL/Railway.
 
-Mantém também os recursos da v8: logo por campanha, upload de imagem, exclusão de campanhas e usuários, perfis de gerente/atendente e regras antifraude.
+## Railway
 
-## Produção no Railway
-
-Mantém as mesmas variáveis das versões anteriores, incluindo `DATABASE_URL`, `CLUBE_ADMIN_EMAIL`, `CLUBE_ADMIN_PASSWORD` e credenciais opcionais do atendente.
-
-O health check continua em `/api/health` e retorna `version: v9`.
+O projeto continua usando `DATABASE_URL` para PostgreSQL e as variáveis `CLUBE_ADMIN_*` para o gerente Taboo.
