@@ -365,15 +365,25 @@ def ensure_configured_staff(db_path=None):
     attendant_password = os.environ.get('CLUBE_ATTENDANT_PASSWORD', '').strip()
     attendant_name = os.environ.get('CLUBE_ATTENDANT_NAME', 'Atendente').strip() or 'Atendente'
 
+    # O e-mail administrativo é reservado ao Painel Taboo e nunca pode ser
+    # rebaixado para atendente, mesmo que as variáveis bootstrap sejam
+    # configuradas por engano com o mesmo endereço.
+    if admin_email and attendant_email and admin_email == attendant_email:
+        print(f'[AUTH] ATTENDANT_BOOTSTRAP_SKIPPED admin_email_collision={admin_email}')
+        attendant_email = ''
+        attendant_password = ''
+
     configured = []
-    if admin_email or admin_password:
-        if '@' not in admin_email or len(admin_password) < 12:
-            raise RuntimeError('CLUBE_ADMIN_EMAIL inválido ou CLUBE_ADMIN_PASSWORD com menos de 12 caracteres.')
-        configured.append((admin_name, admin_email, admin_password, 'manager'))
+    # Sincroniza primeiro o bootstrap de atendente e por último o administrador.
+    # Assim, mesmo diante de dados legados inconsistentes, o perfil Taboo sempre prevalece.
     if attendant_email or attendant_password:
         if '@' not in attendant_email or len(attendant_password) < 10:
             raise RuntimeError('CLUBE_ATTENDANT_EMAIL inválido ou CLUBE_ATTENDANT_PASSWORD com menos de 10 caracteres.')
         configured.append((attendant_name, attendant_email, attendant_password, 'attendant'))
+    if admin_email or admin_password:
+        if '@' not in admin_email or len(admin_password) < 12:
+            raise RuntimeError('CLUBE_ADMIN_EMAIL inválido ou CLUBE_ADMIN_PASSWORD com menos de 12 caracteres.')
+        configured.append((admin_name, admin_email, admin_password, 'manager'))
     if not configured:
         return
 

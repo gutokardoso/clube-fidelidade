@@ -58,4 +58,31 @@ class CoreTests(unittest.TestCase):
                 if val is None: os.environ.pop(key,None)
                 else: os.environ[key]=val
 
+    def test_admin_role_cannot_be_demoted_by_bootstrap_collision(self):
+        keys=['CLUBE_ADMIN_EMAIL','CLUBE_ADMIN_PASSWORD','CLUBE_ADMIN_NAME','CLUBE_ATTENDANT_EMAIL','CLUBE_ATTENDANT_PASSWORD','CLUBE_ATTENDANT_NAME']
+        old={k:os.environ.get(k) for k in keys}
+        try:
+            # Simula banco legado em que o gerente foi indevidamente salvo como atendente.
+            with connect(self.db) as c:
+                camp=c.execute("SELECT id FROM campaigns WHERE code='CAFE5'").fetchone()
+                c.execute("UPDATE users SET role='attendant',campaign_id=? WHERE email='gerente@demo.local'",(camp['id'],))
+            os.environ['CLUBE_ADMIN_EMAIL']='gerente@demo.local'
+            os.environ['CLUBE_ADMIN_PASSWORD']='SenhaGerenteCorreta123!'
+            os.environ['CLUBE_ADMIN_NAME']='Administrador Taboo'
+            # Mesmo se o bootstrap de atendente tiver sido configurado por engano com o mesmo e-mail,
+            # o perfil administrativo deve prevalecer.
+            os.environ['CLUBE_ATTENDANT_EMAIL']='gerente@demo.local'
+            os.environ['CLUBE_ATTENDANT_PASSWORD']='SenhaAtendente123!'
+            os.environ['CLUBE_ATTENDANT_NAME']='Atendente Incorreto'
+            ensure_configured_staff(self.db)
+            with connect(self.db) as c:
+                u=c.execute("SELECT * FROM users WHERE email='gerente@demo.local'").fetchone()
+                self.assertEqual(u['role'],'manager')
+                self.assertIsNone(u['campaign_id'])
+                self.assertTrue(verify_password('SenhaGerenteCorreta123!',u['password_hash']))
+        finally:
+            for k,v in old.items():
+                if v is None: os.environ.pop(k,None)
+                else: os.environ[k]=v
+
 if __name__=='__main__': unittest.main()

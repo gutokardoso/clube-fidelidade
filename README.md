@@ -1,8 +1,8 @@
-# Clube Fidelidade v14
+# Clube Fidelidade v15
 
 Plataforma de fidelidade multi-cliente para operação pela Taboo.
 
-## Alterações da v14
+## Alterações da v15
 
 - Contato do consumidor (e-mail ou celular) obrigatório no cadastro.
 - A interface administrativa passa a chamar cada campanha/área de **Cliente**.
@@ -18,7 +18,7 @@ Plataforma de fidelidade multi-cliente para operação pela Taboo.
 
 O projeto continua usando `DATABASE_URL` para PostgreSQL e as variáveis `CLUBE_ADMIN_*` para o gerente Taboo.
 
-## Alterações v14
+## Alterações v15
 - Corrigido o cartão para receber e exibir a `logo_image` cadastrada do cliente no lugar do nome do estabelecimento.
 - Adicionado botão **Remover selo** na área do cliente, com auditoria e reversão de recompensa quando a remoção desfaz o selo que completou a meta.
 - Painel Taboo agora exibe, por cliente, a quantidade de **Cartões** gerados e o total líquido de **Selos**.

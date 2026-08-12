@@ -178,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
             elif target.suffix=='.js': ctype='application/javascript; charset=utf-8'
             elif target.suffix=='.svg': ctype='image/svg+xml'
             return self.send_text(target.read_text(encoding='utf-8'),200,ctype)
-        if path == '/api/health': return self.send_json({'ok':True,'version':'v14','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
+        if path == '/api/health': return self.send_json({'ok':True,'version':'v15','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
         if path == '/api/session':
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
@@ -264,21 +264,19 @@ class Handler(BaseHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 u=conn.execute('SELECT * FROM users WHERE email=? AND active=1',(email,)).fetchone()
                 password_ok = bool(u) and verify_password(password,u['password_hash'])
-                # Em produção, as credenciais do Railway são a fonte de verdade para os perfis bootstrap.
-                # Se o hash persistido estiver defasado, uma senha que bate exatamente com a variável
-                # de ambiente repara o hash no primeiro login, sem expor a senha nos logs.
-                if u and not password_ok:
-                    configured = []
-                    admin_email=os.environ.get('CLUBE_ADMIN_EMAIL','').strip().lower()
-                    admin_password=os.environ.get('CLUBE_ADMIN_PASSWORD','').strip()
-                    if admin_email and admin_password: configured.append((admin_email,admin_password,'manager','ADMIN'))
-                    for cfg_email,cfg_password,cfg_role,cfg_label in configured:
-                        if email == cfg_email and hmac.compare_digest(password,cfg_password):
-                            conn.execute('UPDATE users SET password_hash=?,role=?,active=1 WHERE id=?',(hash_password(cfg_password),cfg_role,u['id']))
-                            u=conn.execute('SELECT * FROM users WHERE id=?',(u['id'],)).fetchone()
-                            password_ok=True
-                            print(f'[AUTH] {cfg_label}_LOGIN_REPAIRED email={email} password_length={len(cfg_password)}')
-                            break
+                # O administrador configurado no Railway é a identidade reservada do Painel Taboo.
+                # Se a senha digitada coincidir com CLUBE_ADMIN_PASSWORD, o perfil é restaurado para
+                # manager mesmo que o banco tenha ficado legado/inconsistente como attendant.
+                admin_email=os.environ.get('CLUBE_ADMIN_EMAIL','').strip().lower()
+                admin_password=os.environ.get('CLUBE_ADMIN_PASSWORD','').strip()
+                admin_login = bool(u and admin_email and admin_password and email == admin_email and hmac.compare_digest(password,admin_password))
+                if admin_login:
+                    needs_repair = (u['role'] != 'manager') or (not password_ok) or (u['campaign_id'] is not None)
+                    if needs_repair:
+                        conn.execute("UPDATE users SET password_hash=?,role='manager',campaign_id=NULL,active=1 WHERE id=?",(hash_password(admin_password),u['id']))
+                        u=conn.execute('SELECT * FROM users WHERE id=?',(u['id'],)).fetchone()
+                        print(f'[AUTH] ADMIN_LOGIN_REPAIRED email={email} previous_role_repaired=True')
+                    password_ok=True
                 if not u or not password_ok:
                     print(f'[AUTH] LOGIN_FAILED email={email} user_found={bool(u)} password_length={len(password)}')
                     audit(conn,u['company_id'] if u else None,u['id'] if u else None,'login_failed',details=email,ip_address=self._ip())
@@ -422,6 +420,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/manager/staff':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 name=str(payload.get('name','')).strip()[:80]; email=str(payload.get('email','')).lower().strip()[:120]; password=str(payload.get('password','')).strip()
+                configured_admin=os.environ.get('CLUBE_ADMIN_EMAIL','').strip().lower()
+                if configured_admin and email == configured_admin:
+                    return self.send_json({'ok':False,'error':'admin_email_reserved'},409)
                 try: campaign_id=int(payload.get('campaign_id',0))
                 except (TypeError,ValueError): campaign_id=0
                 if len(name)<2 or '@' not in email or len(password)<10 or campaign_id<1: return self.send_json({'ok':False,'error':'invalid_staff'},400)
@@ -482,7 +483,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v14 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v15 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()
