@@ -8,6 +8,10 @@ import json
 import os
 import re
 import urllib.parse
+import urllib.request
+import urllib.error
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from http import cookies
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -31,6 +35,90 @@ def jdump(obj):
 
 def rowdict(row):
     return dict(row) if row else None
+
+
+
+EMAIL_RE = re.compile(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+
+
+def normalize_email(value):
+    value = str(value or '').strip().lower()
+    return value if len(value) <= 160 and EMAIL_RE.fullmatch(value) else None
+
+
+def normalize_phone(value):
+    digits = re.sub(r'\D', '', str(value or ''))
+    if digits.startswith('55') and len(digits) == 13:
+        local = digits[2:]
+    elif len(digits) == 11:
+        local = digits
+    else:
+        return None
+    if len(local) != 11 or local[0] == '0' or local[2] != '9':
+        return None
+    return '55' + local
+
+
+def normalize_cpf(value):
+    digits = re.sub(r'\D', '', str(value or ''))
+    if len(digits) != 11 or digits == digits[0] * 11:
+        return None
+    nums = [int(x) for x in digits]
+    d1 = (sum(nums[i] * (10 - i) for i in range(9)) * 10) % 11
+    d1 = 0 if d1 == 10 else d1
+    d2 = (sum(nums[i] * (11 - i) for i in range(10)) * 10) % 11
+    d2 = 0 if d2 == 10 else d2
+    return digits if nums[9] == d1 and nums[10] == d2 else None
+
+
+def normalize_birth_date(value):
+    value = str(value or '').strip()
+    try:
+        born = date.fromisoformat(value)
+    except ValueError:
+        return None
+    today = datetime.now(ZoneInfo('America/Sao_Paulo')).date()
+    if born > today or born.year < 1900:
+        return None
+    return born.isoformat()
+
+
+def whatsapp_link(phone, message):
+    return 'https://wa.me/' + str(phone) + '?text=' + urllib.parse.quote(str(message), safe='')
+
+
+def whatsapp_cloud_configured():
+    return all(os.environ.get(k, '').strip() for k in ('WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_API_VERSION'))
+
+
+def send_whatsapp_cloud(phone, message):
+    version = os.environ.get('WHATSAPP_API_VERSION', '').strip()
+    phone_number_id = os.environ.get('WHATSAPP_PHONE_NUMBER_ID', '').strip()
+    token = os.environ.get('WHATSAPP_ACCESS_TOKEN', '').strip()
+    if not (version and phone_number_id and token):
+        raise RuntimeError('whatsapp_not_configured')
+    url = f'https://graph.facebook.com/{urllib.parse.quote(version)}/{urllib.parse.quote(phone_number_id)}/messages'
+    body = json.dumps({
+        'messaging_product': 'whatsapp',
+        'recipient_type': 'individual',
+        'to': str(phone),
+        'type': 'text',
+        'text': {'preview_url': False, 'body': str(message)},
+    }).encode('utf-8')
+    req = urllib.request.Request(url, data=body, method='POST', headers={
+        'Authorization': 'Bearer ' + token,
+        'Content-Type': 'application/json',
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode('utf-8') or '{}')
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode('utf-8', errors='replace')
+        try:
+            detail = json.loads(raw)
+        except Exception:
+            detail = {'error': raw[:500]}
+        raise RuntimeError(json.dumps(detail, ensure_ascii=False)) from exc
 
 
 def validate_logo_data(value):
@@ -58,7 +146,7 @@ def validate_logo_data(value):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'ClubeFidelidade/16.0'
+    server_version = 'ClubeFidelidade/18.0'
 
     def log_message(self, fmt, *args):
         print(f'[{self.log_date_time_string()}] {self.address_string()} - {fmt % args}')
@@ -156,13 +244,16 @@ class Handler(BaseHTTPRequestHandler):
                     logo_block = '<img class="campaign-logo" src="' + html.escape(str(c['logo_image']), quote=True) + '" alt="Logo do cliente">'
                 else:
                     logo_block = '<div class="brand campaign-logo-fallback">' + html.escape(str(c['logo_text'])) + '</div>'
-                template=template.replace('{{LOGO_BLOCK}}',logo_block).replace('{{CAMPAIGN_NAME}}',html.escape(str(c['name']))).replace('{{CAMPAIGN_DESC}}',html.escape(f"Complete {c['goal']} selos e ganhe {c['reward_name']}."))
+                template=template.replace('{{LOGO_BLOCK}}',logo_block).replace('{{CAMPAIGN_NAME}}',html.escape(str(c['name'])))
                 template=template.replace('name="campaign_code" value="CAFE5"',f'name="campaign_code" value="{html.escape(code)}"')
                 template=template.replace('</head>',f"<style>:root{{--accent:{html.escape(str(c['primary_color']))}}}</style></head>")
-                if (qs.get('error') or [''])[0]:
-                    template=template.replace('<div id="msg"></div>','<div id="msg"><div class="notice error">Não foi possível criar o cartão. Confira os dados e tente novamente.</div></div>')
+                error_code=(qs.get('error') or [''])[0]
+                if error_code:
+                    messages={'invalid_name':'Preencha seu nome corretamente.','invalid_email':'Digite um e-mail válido.','invalid_phone':'Digite um celular válido com DDD.','invalid_birth_date':'Digite uma data de nascimento válida.','invalid_cpf':'Digite um CPF válido.','campaign_not_found':'Cliente não encontrado.'}
+                    message=messages.get(error_code,'Não foi possível criar o cartão. Confira os dados e tente novamente.')
+                    template=template.replace('<div id="msg"></div>','<div id="msg"><div class="notice error">'+html.escape(message)+'</div></div>')
             else:
-                template=template.replace('{{LOGO_BLOCK}}','<div class="brand campaign-logo-fallback">CLUBE</div>').replace('{{CAMPAIGN_NAME}}','Cliente não encontrado').replace('{{CAMPAIGN_DESC}}','Confira o QR Code ou fale com o estabelecimento.').replace('<form id="f" class="form">','<form id="f" class="form hidden">')
+                template=template.replace('{{LOGO_BLOCK}}','<div class="brand campaign-logo-fallback">CLUBE</div>').replace('{{CAMPAIGN_NAME}}','Cliente não encontrado').replace('<form id="f" class="form" method="post" action="/join">','<form id="f" class="form hidden" method="post" action="/join">')
             return self.send_text(template)
         if path in ['/login','/manager','/attendant','/card']:
             name = path.strip('/') + '.html'
@@ -178,7 +269,7 @@ class Handler(BaseHTTPRequestHandler):
             elif target.suffix=='.js': ctype='application/javascript; charset=utf-8'
             elif target.suffix=='.svg': ctype='image/svg+xml'
             return self.send_text(target.read_text(encoding='utf-8'),200,ctype)
-        if path == '/api/health': return self.send_json({'ok':True,'version':'v17','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
+        if path == '/api/health': return self.send_json({'ok':True,'version':'v18','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
         if path == '/api/session':
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
@@ -238,6 +329,18 @@ class Handler(BaseHTTPRequestHandler):
                    FROM transactions t JOIN memberships m ON m.id=t.membership_id JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id LEFT JOIN users u ON u.id=t.user_id
                    WHERE c.id=? AND c.company_id=? ORDER BY t.id DESC LIMIT 50''',(s['campaign_id'],s['company_id'])).fetchall()]
                 return self.send_json({'ok':True,'transactions':tx,'client':{'id':s['campaign_id'],'name':s['client_name']}})
+        if path == '/api/attendant/customers':
+            with connect(DB_PATH) as conn:
+                s=self._require_auth(conn,'attendant')
+                if not s: return
+                if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
+                customers=[rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,m.public_id
+                    FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                    WHERE m.campaign_id=? ORDER BY cu.name''',(s['campaign_id'],)).fetchall()]
+                month=datetime.now(ZoneInfo('America/Sao_Paulo')).month
+                birthdays=[c for c in customers if c.get('birth_date') and len(c['birth_date'])>=10 and int(c['birth_date'][5:7])==month]
+                birthdays.sort(key=lambda c: (int(c['birth_date'][8:10]), c['name'].lower()))
+                return self.send_json({'ok':True,'customers':customers,'birthdays':birthdays,'month':month,'whatsapp_cloud':whatsapp_cloud_configured()})
         if path == '/api/attendant/lookup':
             token=(qs.get('token') or [''])[0].strip()
             if token.startswith('CLUBE:'): token=token[6:]
@@ -297,19 +400,33 @@ class Handler(BaseHTTPRequestHandler):
                 if s: audit(conn,s['company_id'],s['user_id'],'logout',ip_address=self._ip())
             return self.send_json({'ok':True},200,{'Set-Cookie':f'{SESSION_COOKIE}=deleted; Path=/; Max-Age=0; HttpOnly; SameSite=Strict'})
         if path in ['/api/join','/join']:
-            code=str(payload.get('campaign_code','')).upper().strip(); name=str(payload.get('name','')).strip()[:80]; contact=str(payload.get('contact','')).strip()[:120]
-            if len(name)<2 or not contact:
-                return self.send_redirect('/join?campaign='+urllib.parse.quote(code or 'CAFE5')+'&error=1') if path=='/join' else self.send_json({'ok':False,'error':'invalid_customer_data'},400)
+            code=str(payload.get('campaign_code','')).upper().strip()
+            name=str(payload.get('name','')).strip()[:80]
+            email=normalize_email(payload.get('email'))
+            phone=normalize_phone(payload.get('phone'))
+            birth_date=normalize_birth_date(payload.get('birth_date'))
+            cpf=normalize_cpf(payload.get('cpf'))
+            if len(name)<2 or not email or not phone or not birth_date or not cpf:
+                error='invalid_customer_data'
+                if len(name)<2: error='invalid_name'
+                elif not email: error='invalid_email'
+                elif not phone: error='invalid_phone'
+                elif not birth_date: error='invalid_birth_date'
+                elif not cpf: error='invalid_cpf'
+                return self.send_redirect('/join?campaign='+urllib.parse.quote(code or 'CAFE5')+'&error='+urllib.parse.quote(error)) if path=='/join' else self.send_json({'ok':False,'error':error},400)
             with connect(DB_PATH) as conn:
                 c=conn.execute('SELECT * FROM campaigns WHERE code=? AND active=1',(code,)).fetchone()
                 if not c:
-                    return self.send_redirect('/join?campaign='+urllib.parse.quote(code or 'CAFE5')+'&error=1') if path=='/join' else self.send_json({'ok':False,'error':'campaign_not_found'},404)
-                customer_id=None
-                if contact:
-                    existing=conn.execute('''SELECT cu.id FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.contact=?''',(c['id'],contact)).fetchone()
-                    if existing: customer_id=existing['id']
+                    return self.send_redirect('/join?campaign='+urllib.parse.quote(code or 'CAFE5')+'&error=campaign_not_found') if path=='/join' else self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                existing_customer=conn.execute('''SELECT cu.id FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                    WHERE m.campaign_id=? AND cu.cpf=? LIMIT 1''',(c['id'],cpf)).fetchone()
+                customer_id=existing_customer['id'] if existing_customer else None
                 if customer_id is None:
-                    customer_id=insert_id(conn,'INSERT INTO customers(name,contact,created_at) VALUES(?,?,?)',(name,contact or None,now_ts()))
+                    customer_id=insert_id(conn,'INSERT INTO customers(name,contact,email,phone,birth_date,cpf,created_at) VALUES(?,?,?,?,?,?,?)',
+                        (name,email,email,phone,birth_date,cpf,now_ts()))
+                else:
+                    conn.execute('UPDATE customers SET name=?,contact=?,email=?,phone=?,birth_date=?,cpf=? WHERE id=?',
+                        (name,email,email,phone,birth_date,cpf,customer_id))
                 existing=conn.execute('SELECT public_id FROM memberships WHERE customer_id=? AND campaign_id=?',(customer_id,c['id'])).fetchone()
                 if existing:
                     return self.send_redirect('/card?id='+urllib.parse.quote(existing['public_id'])) if path=='/join' else self.send_json({'ok':True,'public_id':existing['public_id'],'existing':True})
@@ -334,6 +451,39 @@ class Handler(BaseHTTPRequestHandler):
                 audit(conn,s['company_id'],s['user_id'],'password_change','user',s['user_id'],ip_address=self._ip())
                 print(f'[AUTH] ATTENDANT_PASSWORD_CHANGED user_id={s["user_id"]}')
                 return self.send_json({'ok':True})
+            if path == '/api/attendant/whatsapp':
+                if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
+                recipient=str(payload.get('recipient','')).strip()
+                message=str(payload.get('message','')).strip()
+                if not message or len(message)>4096: return self.send_json({'ok':False,'error':'invalid_message'},400)
+                if recipient == 'all':
+                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.phone FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                        WHERE m.campaign_id=? AND cu.phone IS NOT NULL AND cu.phone<>? ORDER BY cu.name''',(s['campaign_id'],'')).fetchall()
+                else:
+                    try: customer_id=int(recipient)
+                    except (TypeError,ValueError): return self.send_json({'ok':False,'error':'invalid_recipient'},400)
+                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.phone FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                        WHERE m.campaign_id=? AND cu.id=? AND cu.phone IS NOT NULL AND cu.phone<>?''',(s['campaign_id'],customer_id,'')).fetchall()
+                if not rows: return self.send_json({'ok':False,'error':'no_recipients'},404)
+                cloud=whatsapp_cloud_configured()
+                results=[]
+                for r in rows:
+                    item={'customer_id':r['id'],'name':r['name'],'phone':r['phone'],'manual_url':whatsapp_link(r['phone'],message)}
+                    if cloud:
+                        try:
+                            response=send_whatsapp_cloud(r['phone'],message)
+                            item['sent']=True
+                            item['message_id']=((response.get('messages') or [{}])[0]).get('id')
+                            audit(conn,s['company_id'],s['user_id'],'whatsapp_send','customer',r['id'],details='cloud_api',ip_address=self._ip())
+                        except Exception as exc:
+                            item['sent']=False
+                            item['error']=str(exc)[:800]
+                    else:
+                        item['sent']=False
+                        item['manual']=True
+                    results.append(item)
+                return self.send_json({'ok':True,'cloud_api':cloud,'results':results,'sent_count':sum(1 for x in results if x.get('sent'))})
             if path in ('/api/attendant/stamp','/api/attendant/stamp/remove','/api/attendant/redeem'):
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
@@ -504,7 +654,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v17 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v18 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()

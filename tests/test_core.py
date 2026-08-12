@@ -3,6 +3,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from db import init_db, connect, ensure_configured_staff
 from security import verify_password
 from antifraud import validate_stamp, FraudError
+from server import normalize_email, normalize_phone, normalize_cpf, normalize_birth_date
 
 class CoreTests(unittest.TestCase):
     def setUp(self):
@@ -84,5 +85,21 @@ class CoreTests(unittest.TestCase):
             for k,v in old.items():
                 if v is None: os.environ.pop(k,None)
                 else: os.environ[k]=v
+
+    def test_customer_registration_validators(self):
+        self.assertEqual(normalize_email(' Pessoa@Exemplo.COM '), 'pessoa@exemplo.com')
+        self.assertIsNone(normalize_email('email-invalido'))
+        self.assertEqual(normalize_phone('(11) 99999-9999'), '5511999999999')
+        self.assertIsNone(normalize_phone('(11) 3333-4444'))
+        self.assertEqual(normalize_cpf('529.982.247-25'), '52998224725')
+        self.assertIsNone(normalize_cpf('111.111.111-11'))
+        self.assertEqual(normalize_birth_date('1990-08-12'), '1990-08-12')
+        self.assertIsNone(normalize_birth_date('2999-01-01'))
+
+    def test_customer_schema_v18_fields(self):
+        with connect(self.db) as c:
+            cols={r['name'] for r in c.execute('PRAGMA table_info(customers)').fetchall()}
+            for name in ('email','phone','birth_date','cpf'):
+                self.assertIn(name, cols)
 
 if __name__=='__main__': unittest.main()

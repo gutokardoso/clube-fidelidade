@@ -1,4 +1,14 @@
-# Clube Fidelidade v17
+# Clube Fidelidade v18
+
+## Alterações da v18
+
+- Cadastro do cliente final com 5 campos obrigatórios: nome, e-mail, celular, data de nascimento e CPF.
+- Validação de formato de e-mail, celular brasileiro com DDD e CPF com dígitos verificadores.
+- Removido o texto de regra/recompensa da página de cadastro.
+- Área do atendente com seleção de um cliente ou todos, campo de mensagem e botão verde **ENVIAR** para WhatsApp.
+- Quando a WhatsApp Cloud API está configurada, o sistema tenta enviar diretamente; sem credenciais, prepara links `wa.me` individuais para envio manual.
+- Área de aniversariantes do mês baseada na data de nascimento cadastrada.
+- Atendente continua restrito aos consumidores do cliente/área ao qual está vinculado.
 
 ## Alterações da v17
 

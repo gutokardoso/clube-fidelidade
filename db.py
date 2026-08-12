@@ -45,6 +45,10 @@ CREATE TABLE IF NOT EXISTS customers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   contact TEXT,
+  email TEXT,
+  phone TEXT,
+  birth_date TEXT,
+  cpf TEXT,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS memberships (
@@ -135,6 +139,10 @@ CREATE TABLE IF NOT EXISTS customers (
   id BIGSERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   contact TEXT,
+  email TEXT,
+  phone TEXT,
+  birth_date TEXT,
+  cpf TEXT,
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS memberships (
@@ -294,6 +302,18 @@ def init_db(db_path=None, seed=True):
             cols = [r['name'] for r in conn.execute('PRAGMA table_info(campaigns)').fetchall()]
             if 'logo_image' not in cols:
                 conn.execute('ALTER TABLE campaigns ADD COLUMN logo_image TEXT')
+        # Migração v18: cadastro completo do cliente final.
+        if _is_postgres(target):
+            conn.execute('ALTER TABLE customers ADD COLUMN IF NOT EXISTS email TEXT')
+            conn.execute('ALTER TABLE customers ADD COLUMN IF NOT EXISTS phone TEXT')
+            conn.execute('ALTER TABLE customers ADD COLUMN IF NOT EXISTS birth_date TEXT')
+            conn.execute('ALTER TABLE customers ADD COLUMN IF NOT EXISTS cpf TEXT')
+        else:
+            customer_cols = [r['name'] for r in conn.execute('PRAGMA table_info(customers)').fetchall()]
+            for col in ('email','phone','birth_date','cpf'):
+                if col not in customer_cols:
+                    conn.execute(f'ALTER TABLE customers ADD COLUMN {col} TEXT')
+
         # Migração v10: todo atendente pode ser vinculado a um cliente (campaign_id).
         if _is_postgres(target):
             conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS campaign_id BIGINT REFERENCES campaigns(id) ON DELETE SET NULL')
