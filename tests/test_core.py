@@ -3,7 +3,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from db import init_db, connect, ensure_configured_staff
 from security import verify_password
 from antifraud import validate_stamp, FraudError
-from server import normalize_email, normalize_phone, normalize_cpf, normalize_birth_date
+from server import normalize_email, normalize_phone, normalize_cpf, normalize_birth_date, send_attendant_welcome_email
 
 class CoreTests(unittest.TestCase):
     def setUp(self):
@@ -96,10 +96,51 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(normalize_birth_date('1990-08-12'), '1990-08-12')
         self.assertIsNone(normalize_birth_date('2999-01-01'))
 
-    def test_customer_schema_v18_fields(self):
+    def test_customer_schema_v19_fields(self):
         with connect(self.db) as c:
             cols={r['name'] for r in c.execute('PRAGMA table_info(customers)').fetchall()}
             for name in ('email','phone','birth_date','cpf'):
                 self.assertIn(name, cols)
+
+
+    def test_attendant_welcome_email_content(self):
+        from unittest.mock import patch
+        old={k:os.environ.get(k) for k in ('CLUBE_SMTP_HOST','CLUBE_SMTP_PORT','CLUBE_SMTP_FROM','CLUBE_SMTP_SECURITY','CLUBE_LOGIN_URL')}
+        sent=[]
+        class FakeSMTP:
+            def __init__(self,*a,**k): pass
+            def __enter__(self): return self
+            def __exit__(self,*a): return False
+            def ehlo(self): pass
+            def starttls(self,context=None): pass
+            def login(self,*a): pass
+            def send_message(self,msg): sent.append(msg)
+        try:
+            os.environ['CLUBE_SMTP_HOST']='smtp.test.local'
+            os.environ['CLUBE_SMTP_PORT']='587'
+            os.environ['CLUBE_SMTP_FROM']='taboo@example.com'
+            os.environ['CLUBE_SMTP_SECURITY']='starttls'
+            os.environ['CLUBE_LOGIN_URL']='https://clube-fidelidade-production.up.railway.app/login'
+            with patch('server.smtplib.SMTP',FakeSMTP):
+                result=send_attendant_welcome_email('Atendente','atendente@example.com','SenhaInicial123!','Cliente Teste')
+            self.assertTrue(result['sent']); self.assertEqual(len(sent),1)
+            body=sent[0].get_content()
+            self.assertIn('Cadastro realizado com sucesso!',body)
+            self.assertIn('https://clube-fidelidade-production.up.railway.app/login',body)
+            self.assertIn('E-mail: atendente@example.com',body)
+            self.assertIn('Senha: SenhaInicial123!',body)
+        finally:
+            for k,v in old.items():
+                if v is None: os.environ.pop(k,None)
+                else: os.environ[k]=v
+
+    def test_attendant_welcome_email_without_smtp(self):
+        old_host=os.environ.pop('CLUBE_SMTP_HOST',None); old_from=os.environ.pop('CLUBE_SMTP_FROM',None)
+        try:
+            result=send_attendant_welcome_email('A','a@example.com','Senha123456!','Cliente')
+            self.assertFalse(result['sent']); self.assertEqual(result['reason'],'smtp_not_configured')
+        finally:
+            if old_host is not None: os.environ['CLUBE_SMTP_HOST']=old_host
+            if old_from is not None: os.environ['CLUBE_SMTP_FROM']=old_from
 
 if __name__=='__main__': unittest.main()

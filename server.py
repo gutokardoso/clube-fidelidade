@@ -7,6 +7,8 @@ import io
 import json
 import os
 import re
+import smtplib
+import ssl
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -15,6 +17,7 @@ from zoneinfo import ZoneInfo
 from http import cookies
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
+from email.message import EmailMessage
 
 import qrcode
 
@@ -81,6 +84,56 @@ def normalize_birth_date(value):
     if born > today or born.year < 1900:
         return None
     return born.isoformat()
+
+
+
+
+def smtp_configured():
+    return bool(os.environ.get('CLUBE_SMTP_HOST','').strip() and os.environ.get('CLUBE_SMTP_FROM','').strip())
+
+
+def send_attendant_welcome_email(name, email, password, client_name):
+    host=os.environ.get('CLUBE_SMTP_HOST','').strip()
+    from_addr=os.environ.get('CLUBE_SMTP_FROM','').strip()
+    if not host or not from_addr:
+        return {'sent':False,'reason':'smtp_not_configured'}
+    try:
+        port=int(os.environ.get('CLUBE_SMTP_PORT','587'))
+    except ValueError:
+        port=587
+    user=os.environ.get('CLUBE_SMTP_USER','').strip()
+    smtp_password=os.environ.get('CLUBE_SMTP_PASSWORD','')
+    security=os.environ.get('CLUBE_SMTP_SECURITY','starttls').strip().lower()
+    login_url=os.environ.get('CLUBE_LOGIN_URL','https://clube-fidelidade-production.up.railway.app/login').strip()
+    msg=EmailMessage()
+    msg['Subject']='Acesso ao Clube Fidelidade'
+    msg['From']=from_addr
+    msg['To']=email
+    msg.set_content(
+        'Cadastro realizado com sucesso! Agora é só acessar o link abaixo, inserir seu e-mail e senha para ter acesso ao painel do seu Clube Fidelidade.\n\n'
+        f'{login_url}\n\n'
+        f'E-mail: {email}\n'
+        f'Senha: {password}\n'
+        f'Cliente: {client_name}\n'
+    )
+    context=ssl.create_default_context()
+    try:
+        if security=='ssl':
+            with smtplib.SMTP_SSL(host,port,timeout=15,context=context) as smtp:
+                if user: smtp.login(user,smtp_password)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(host,port,timeout=15) as smtp:
+                smtp.ehlo()
+                if security!='none':
+                    smtp.starttls(context=context)
+                    smtp.ehlo()
+                if user: smtp.login(user,smtp_password)
+                smtp.send_message(msg)
+        return {'sent':True}
+    except Exception as exc:
+        print(f'[EMAIL] ATTENDANT_WELCOME_FAILED email={email} error={type(exc).__name__}')
+        return {'sent':False,'reason':'smtp_send_failed'}
 
 
 def whatsapp_link(phone, message):
@@ -269,7 +322,7 @@ class Handler(BaseHTTPRequestHandler):
             elif target.suffix=='.js': ctype='application/javascript; charset=utf-8'
             elif target.suffix=='.svg': ctype='image/svg+xml'
             return self.send_text(target.read_text(encoding='utf-8'),200,ctype)
-        if path == '/api/health': return self.send_json({'ok':True,'version':'v18','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
+        if path == '/api/health': return self.send_json({'ok':True,'version':'v19','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
         if path == '/api/session':
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
@@ -334,7 +387,7 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant')
                 if not s: return
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                customers=[rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,m.public_id
+                customers=[rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,cu.created_at,m.public_id
                     FROM customers cu JOIN memberships m ON m.customer_id=cu.id
                     WHERE m.campaign_id=? ORDER BY cu.name''',(s['campaign_id'],)).fetchall()]
                 month=datetime.now(ZoneInfo('America/Sao_Paulo')).month
@@ -451,6 +504,41 @@ class Handler(BaseHTTPRequestHandler):
                 audit(conn,s['company_id'],s['user_id'],'password_change','user',s['user_id'],ip_address=self._ip())
                 print(f'[AUTH] ATTENDANT_PASSWORD_CHANGED user_id={s["user_id"]}')
                 return self.send_json({'ok':True})
+            if path == '/api/attendant/customer/update':
+                if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
+                try: customer_id=int(payload.get('customer_id',0))
+                except (TypeError,ValueError): customer_id=0
+                name=str(payload.get('name','')).strip()[:80]
+                email=normalize_email(payload.get('email'))
+                phone=normalize_phone(payload.get('phone'))
+                birth_date=normalize_birth_date(payload.get('birth_date'))
+                cpf=normalize_cpf(payload.get('cpf'))
+                if customer_id<1 or len(name)<2 or not email or not phone or not birth_date or not cpf:
+                    return self.send_json({'ok':False,'error':'invalid_customer_data'},400)
+                member=conn.execute("""SELECT m.id,m.public_id FROM memberships m JOIN campaigns c ON c.id=m.campaign_id
+                    WHERE m.customer_id=? AND m.campaign_id=? AND c.company_id=?""",(customer_id,s['campaign_id'],s['company_id'])).fetchone()
+                if not member: return self.send_json({'ok':False,'error':'customer_not_found'},404)
+                duplicate=conn.execute("""SELECT cu.id FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                    WHERE m.campaign_id=? AND cu.cpf=? AND cu.id<>? LIMIT 1""",(s['campaign_id'],cpf,customer_id)).fetchone()
+                if duplicate: return self.send_json({'ok':False,'error':'cpf_exists'},409)
+                conn.execute('UPDATE customers SET name=?,contact=?,email=?,phone=?,birth_date=?,cpf=? WHERE id=?',
+                    (name,email,email,phone,birth_date,cpf,customer_id))
+                audit(conn,s['company_id'],s['user_id'],'customer_update','customer',customer_id,details=member['public_id'],ip_address=self._ip())
+                return self.send_json({'ok':True,'customer_id':customer_id})
+            if path == '/api/attendant/customer/delete':
+                if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
+                try: customer_id=int(payload.get('customer_id',0))
+                except (TypeError,ValueError): customer_id=0
+                member=conn.execute("""SELECT m.id,m.public_id FROM memberships m JOIN campaigns c ON c.id=m.campaign_id
+                    WHERE m.customer_id=? AND m.campaign_id=? AND c.company_id=?""",(customer_id,s['campaign_id'],s['company_id'])).fetchone()
+                if not member: return self.send_json({'ok':False,'error':'customer_not_found'},404)
+                audit(conn,s['company_id'],s['user_id'],'customer_delete','membership',member['public_id'],details=f'customer_id={customer_id}',ip_address=self._ip())
+                conn.execute('DELETE FROM memberships WHERE id=?',(member['id'],))
+                remaining=conn.execute('SELECT COUNT(*) n FROM memberships WHERE customer_id=?',(customer_id,)).fetchone()['n']
+                if remaining==0: conn.execute('DELETE FROM customers WHERE id=?',(customer_id,))
+                return self.send_json({'ok':True,'deleted_customer_id':customer_id,'deleted_membership':member['public_id']})
             if path == '/api/attendant/whatsapp':
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
@@ -603,7 +691,9 @@ class Handler(BaseHTTPRequestHandler):
                     new_id=insert_id(conn,'INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,created_at) VALUES(?,?,?,?,?,?,?)',(s['company_id'],name,email,hash_password(password),'attendant',campaign_id,now_ts()))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'email_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'staff_create','user',new_id,details=f'{email}:attendant:client={campaign_id}',ip_address=self._ip())
-                return self.send_json({'ok':True,'user_id':new_id,'client_name':client['name']})
+                email_result=send_attendant_welcome_email(name,email,password,client['name'])
+                audit(conn,s['company_id'],s['user_id'],'staff_welcome_email','user',new_id,details='sent' if email_result.get('sent') else email_result.get('reason','failed'),ip_address=self._ip())
+                return self.send_json({'ok':True,'user_id':new_id,'client_name':client['name'],'welcome_email':email_result})
             if path == '/api/manager/campaign/delete':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 try: campaign_id=int(payload.get('campaign_id',0))
@@ -654,7 +744,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v18 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v19 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()
