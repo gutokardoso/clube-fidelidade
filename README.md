@@ -1,4 +1,11 @@
-# Clube Fidelidade v15
+# Clube Fidelidade v16
+
+## Alterações da v16
+- Removidas as quatro caixas de métricas do topo do Painel Taboo.
+- Adicionado botão verde **Editar** antes de **Excluir** em cada cliente.
+- A edição permite alterar nome, código, meta, recompensa, ícone/modo logo, logo e regras antifraude.
+- Se nenhuma nova logo for selecionada, a logo atual é preservada.
+
 
 Plataforma de fidelidade multi-cliente para operação pela Taboo.
 

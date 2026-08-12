@@ -24,3 +24,5 @@
 @media(max-width:380px){.wallet-card{padding:22px 18px}.wallet-stamps{grid-template-columns:repeat(5,40px);gap:7px}.wallet-stamps .stamp{width:40px;height:40px;font-size:18px}.wallet-client-logo{max-width:88%;max-height:100px}}
 
 .stamp-logo{display:block;max-width:34px;max-height:34px;width:auto;height:auto;object-fit:contain;border-radius:6px}.wallet-stamps .stamp-logo{max-width:32px;max-height:32px}
+
+.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.row-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}

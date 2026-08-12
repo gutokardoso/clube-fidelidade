@@ -58,7 +58,7 @@ def validate_logo_data(value):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'ClubeFidelidade/13.0'
+    server_version = 'ClubeFidelidade/16.0'
 
     def log_message(self, fmt, *args):
         print(f'[{self.log_date_time_string()}] {self.address_string()} - {fmt % args}')
@@ -178,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
             elif target.suffix=='.js': ctype='application/javascript; charset=utf-8'
             elif target.suffix=='.svg': ctype='image/svg+xml'
             return self.send_text(target.read_text(encoding='utf-8'),200,ctype)
-        if path == '/api/health': return self.send_json({'ok':True,'version':'v15','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
+        if path == '/api/health': return self.send_json({'ok':True,'version':'v16','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
         if path == '/api/session':
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
@@ -417,6 +417,27 @@ class Handler(BaseHTTPRequestHandler):
                 except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'campaign_create','campaign',new_id,details=code,ip_address=self._ip())
                 return self.send_json({'ok':True,'campaign_id':new_id})
+            if path == '/api/manager/campaign/update':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                try: campaign_id=int(payload.get('campaign_id',0))
+                except (TypeError,ValueError): campaign_id=0
+                name=str(payload.get('name','')).strip()[:80]; reward=str(payload.get('reward_name','')).strip()[:100]; code=re.sub(r'[^A-Z0-9_-]','',str(payload.get('code','')).upper())[:24]
+                icon=str(payload.get('icon','☕'))[:8]
+                try: goal=int(payload.get('goal',5)); min_interval=int(payload.get('min_interval',60)); max_hour=int(payload.get('max_hour',6)); max_day=int(payload.get('max_day',500))
+                except (TypeError,ValueError): return self.send_json({'ok':False,'error':'invalid_campaign'},400)
+                if campaign_id<1 or not name or not reward or not code or goal<1 or goal>50 or min_interval<0 or max_hour<1 or max_day<1:
+                    return self.send_json({'ok':False,'error':'invalid_campaign'},400)
+                c=conn.execute('SELECT * FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id'])).fetchone()
+                if not c: return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                logo_image=c['logo_image']
+                if payload.get('logo_image'):
+                    try: logo_image=validate_logo_data(payload.get('logo_image'))
+                    except ValueError as exc: return self.send_json({'ok':False,'error':str(exc)},400)
+                try:
+                    conn.execute('''UPDATE campaigns SET code=?,name=?,reward_name=?,goal=?,icon=?,logo_image=?,min_stamp_interval_sec=?,max_stamps_per_hour=?,max_stamps_per_attendant_day=? WHERE id=? AND company_id=?''',(code,name,reward,goal,icon,logo_image,min_interval,max_hour,max_day,campaign_id,s['company_id']))
+                except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
+                audit(conn,s['company_id'],s['user_id'],'campaign_update','campaign',campaign_id,details=code,ip_address=self._ip())
+                return self.send_json({'ok':True,'campaign_id':campaign_id})
             if path == '/api/manager/staff':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 name=str(payload.get('name','')).strip()[:80]; email=str(payload.get('email','')).lower().strip()[:120]; password=str(payload.get('password','')).strip()
@@ -483,7 +504,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v15 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v16 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()
