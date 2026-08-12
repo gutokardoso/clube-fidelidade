@@ -3,7 +3,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from db import init_db, connect, ensure_configured_staff
 from security import verify_password
 from antifraud import validate_stamp, FraudError
-from server import normalize_email, normalize_phone, normalize_cpf, normalize_birth_date, send_attendant_welcome_email
+from server import normalize_email, normalize_phone, normalize_cpf, normalize_birth_date, send_attendant_welcome_email, send_campaign_email, send_password_recovery_email
 
 class CoreTests(unittest.TestCase):
     def setUp(self):
@@ -142,5 +142,49 @@ class CoreTests(unittest.TestCase):
         finally:
             if old_host is not None: os.environ['CLUBE_SMTP_HOST']=old_host
             if old_from is not None: os.environ['CLUBE_SMTP_FROM']=old_from
+
+    def test_campaign_email_with_image(self):
+        from unittest.mock import patch
+        import base64
+        old={k:os.environ.get(k) for k in ('CLUBE_SMTP_HOST','CLUBE_SMTP_PORT','CLUBE_SMTP_FROM','CLUBE_SMTP_SECURITY')}
+        sent=[]
+        class FakeSMTP:
+            def __init__(self,*a,**k): pass
+            def __enter__(self): return self
+            def __exit__(self,*a): return False
+            def ehlo(self): pass
+            def starttls(self,context=None): pass
+            def login(self,*a): pass
+            def send_message(self,msg): sent.append(msg)
+        try:
+            os.environ['CLUBE_SMTP_HOST']='smtp.test.local'; os.environ['CLUBE_SMTP_PORT']='587'; os.environ['CLUBE_SMTP_FROM']='taboo@example.com'; os.environ['CLUBE_SMTP_SECURITY']='starttls'
+            tiny='data:image/png;base64,'+base64.b64encode(b'fakepng').decode()
+            with patch('server.smtplib.SMTP',FakeSMTP): result=send_campaign_email('cliente@example.com','Cliente','Promoção teste',tiny)
+            self.assertTrue(result['sent']); self.assertEqual(len(sent),1); self.assertTrue(sent[0].is_multipart())
+        finally:
+            for k,v in old.items():
+                if v is None: os.environ.pop(k,None)
+                else: os.environ[k]=v
+
+    def test_password_recovery_email_content(self):
+        from unittest.mock import patch
+        old={k:os.environ.get(k) for k in ('CLUBE_SMTP_HOST','CLUBE_SMTP_PORT','CLUBE_SMTP_FROM','CLUBE_SMTP_SECURITY')}
+        sent=[]
+        class FakeSMTP:
+            def __init__(self,*a,**k): pass
+            def __enter__(self): return self
+            def __exit__(self,*a): return False
+            def ehlo(self): pass
+            def starttls(self,context=None): pass
+            def login(self,*a): pass
+            def send_message(self,msg): sent.append(msg)
+        try:
+            os.environ['CLUBE_SMTP_HOST']='smtp.test.local'; os.environ['CLUBE_SMTP_PORT']='587'; os.environ['CLUBE_SMTP_FROM']='taboo@example.com'; os.environ['CLUBE_SMTP_SECURITY']='starttls'
+            with patch('server.smtplib.SMTP',FakeSMTP): result=send_password_recovery_email('atendente@example.com','Clube-Temp123')
+            self.assertTrue(result['sent']); self.assertIn('Clube-Temp123',sent[0].get_content())
+        finally:
+            for k,v in old.items():
+                if v is None: os.environ.pop(k,None)
+                else: os.environ[k]=v
 
 if __name__=='__main__': unittest.main()

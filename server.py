@@ -92,7 +92,7 @@ def smtp_configured():
     return bool(os.environ.get('CLUBE_SMTP_HOST','').strip() and os.environ.get('CLUBE_SMTP_FROM','').strip())
 
 
-def send_attendant_welcome_email(name, email, password, client_name):
+def send_email_message(msg):
     host=os.environ.get('CLUBE_SMTP_HOST','').strip()
     from_addr=os.environ.get('CLUBE_SMTP_FROM','').strip()
     if not host or not from_addr:
@@ -104,18 +104,7 @@ def send_attendant_welcome_email(name, email, password, client_name):
     user=os.environ.get('CLUBE_SMTP_USER','').strip()
     smtp_password=os.environ.get('CLUBE_SMTP_PASSWORD','')
     security=os.environ.get('CLUBE_SMTP_SECURITY','starttls').strip().lower()
-    login_url=os.environ.get('CLUBE_LOGIN_URL','https://clube-fidelidade-production.up.railway.app/login').strip()
-    msg=EmailMessage()
-    msg['Subject']='Acesso ao Clube Fidelidade'
     msg['From']=from_addr
-    msg['To']=email
-    msg.set_content(
-        'Cadastro realizado com sucesso! Agora é só acessar o link abaixo, inserir seu e-mail e senha para ter acesso ao painel do seu Clube Fidelidade.\n\n'
-        f'{login_url}\n\n'
-        f'E-mail: {email}\n'
-        f'Senha: {password}\n'
-        f'Cliente: {client_name}\n'
-    )
     context=ssl.create_default_context()
     try:
         if security=='ssl':
@@ -132,8 +121,75 @@ def send_attendant_welcome_email(name, email, password, client_name):
                 smtp.send_message(msg)
         return {'sent':True}
     except Exception as exc:
-        print(f'[EMAIL] ATTENDANT_WELCOME_FAILED email={email} error={type(exc).__name__}')
+        print(f'[EMAIL] SEND_FAILED to={msg.get("To","")} error={type(exc).__name__}')
         return {'sent':False,'reason':'smtp_send_failed'}
+
+
+def decode_image_data(value, max_bytes=700_000):
+    if not value:
+        return None
+    text=str(value)
+    match=re.fullmatch(r'data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\s]+)',text)
+    if not match:
+        raise ValueError('invalid_image_format')
+    try:
+        raw=base64.b64decode(match.group(2),validate=True)
+    except (binascii.Error,ValueError):
+        raise ValueError('invalid_image_format')
+    if not raw or len(raw)>max_bytes:
+        raise ValueError('image_too_large')
+    subtype={'image/png':'png','image/jpeg':'jpeg','image/webp':'webp'}[match.group(1)]
+    return raw, subtype
+
+
+def send_campaign_email(to_email, to_name, message, image_data=None, subject='Mensagem do Clube Fidelidade'):
+    if not smtp_configured():
+        return {'sent':False,'reason':'smtp_not_configured'}
+    msg=EmailMessage()
+    msg['Subject']=subject
+    msg['To']=to_email
+    text=(str(message or '').strip() or 'Você recebeu uma nova mensagem do seu Clube Fidelidade.')
+    msg.set_content(text)
+    if image_data:
+        raw,subtype=decode_image_data(image_data)
+        msg.add_attachment(raw,maintype='image',subtype=subtype,filename='clube-fidelidade.'+('jpg' if subtype=='jpeg' else subtype))
+    return send_email_message(msg)
+
+
+def send_password_recovery_email(email, temporary_password):
+    if not smtp_configured():
+        return {'sent':False,'reason':'smtp_not_configured'}
+    login_url=os.environ.get('CLUBE_LOGIN_URL','https://clube-fidelidade-production.up.railway.app/login').strip()
+    msg=EmailMessage()
+    msg['Subject']='Recuperação de senha • Clube Fidelidade'
+    msg['To']=email
+    msg.set_content(
+        'Recebemos uma solicitação de recuperação de senha para o seu acesso ao Clube Fidelidade.\n\n'
+        f'Nova senha temporária: {temporary_password}\n\n'
+        f'Acesse: {login_url}\n\n'
+        'Depois de entrar, altere a senha no painel.'
+    )
+    return send_email_message(msg)
+
+
+def send_attendant_welcome_email(name, email, password, client_name):
+    if not smtp_configured():
+        return {'sent':False,'reason':'smtp_not_configured'}
+    login_url=os.environ.get('CLUBE_LOGIN_URL','https://clube-fidelidade-production.up.railway.app/login').strip()
+    msg=EmailMessage()
+    msg['Subject']='Acesso ao Clube Fidelidade'
+    msg['To']=email
+    msg.set_content(
+        'Cadastro realizado com sucesso! Agora é só acessar o link abaixo, inserir seu e-mail e senha para ter acesso ao painel do seu Clube Fidelidade.\n\n'
+        f'{login_url}\n\n'
+        f'E-mail: {email}\n'
+        f'Senha: {password}\n'
+        f'Cliente: {client_name}\n'
+    )
+    result=send_email_message(msg)
+    if not result.get('sent'):
+        print(f'[EMAIL] ATTENDANT_WELCOME_FAILED email={email} reason={result.get("reason")}')
+    return result
 
 
 def whatsapp_link(phone, message):
@@ -387,7 +443,7 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant')
                 if not s: return
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                customers=[rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,cu.created_at,m.public_id
+                customers=[rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,cu.created_at,m.public_id,m.progress,m.rewards_available
                     FROM customers cu JOIN memberships m ON m.customer_id=cu.id
                     WHERE m.campaign_id=? ORDER BY cu.name''',(s['campaign_id'],)).fetchall()]
                 month=datetime.now(ZoneInfo('America/Sao_Paulo')).month
@@ -488,6 +544,24 @@ class Handler(BaseHTTPRequestHandler):
                 print(f'[JOIN] CREATED public_id={public_id} campaign={code} name={name!r}')
                 audit(conn,c['company_id'],None,'customer_join','membership',public_id,details=name,ip_address=self._ip())
                 return self.send_redirect('/card?id='+urllib.parse.quote(public_id)) if path=='/join' else self.send_json({'ok':True,'public_id':public_id,'existing':False})
+        if path == '/api/forgot-password':
+            email=normalize_email(payload.get('email'))
+            if not email:
+                return self.send_json({'ok':False,'error':'invalid_email'},400)
+            with connect(DB_PATH) as conn:
+                u=conn.execute("SELECT id,company_id,email,role,active FROM users WHERE email=? AND active=1",(email,)).fetchone()
+                # Não revelamos se o endereço existe. Para atendentes cadastrados, geramos uma senha temporária
+                # e só substituímos o hash depois que o e-mail foi aceito pelo SMTP.
+                if u and u['role']=='attendant':
+                    temporary='Clube-'+random_token(9)[:12]
+                    result=send_password_recovery_email(email,temporary)
+                    if not result.get('sent'):
+                        return self.send_json({'ok':False,'error':result.get('reason','email_send_failed')},503)
+                    conn.execute('UPDATE users SET password_hash=? WHERE id=?',(hash_password(temporary),u['id']))
+                    conn.execute('DELETE FROM sessions WHERE user_id=?',(u['id'],))
+                    audit(conn,u['company_id'],u['id'],'password_recovery','user',u['id'],details='temporary_password_emailed',ip_address=self._ip())
+                return self.send_json({'ok':True,'message':'Enviamos sua senha para o e-mail cadastrado'})
+
         with connect(DB_PATH) as conn:
             s=self._require_auth(conn)
             if not s: return
@@ -572,6 +646,34 @@ class Handler(BaseHTTPRequestHandler):
                         item['manual']=True
                     results.append(item)
                 return self.send_json({'ok':True,'cloud_api':cloud,'results':results,'sent_count':sum(1 for x in results if x.get('sent'))})
+            if path == '/api/attendant/email':
+                if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
+                if not smtp_configured(): return self.send_json({'ok':False,'error':'smtp_not_configured'},503)
+                recipient=str(payload.get('recipient','')).strip()
+                message=str(payload.get('message','')).strip()
+                image_data=payload.get('image_data')
+                if not message and not image_data: return self.send_json({'ok':False,'error':'message_or_image_required'},400)
+                if len(message)>10000: return self.send_json({'ok':False,'error':'invalid_message'},400)
+                try:
+                    if image_data: decode_image_data(image_data)
+                except ValueError as exc:
+                    return self.send_json({'ok':False,'error':str(exc)},400)
+                if recipient == 'all':
+                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                        WHERE m.campaign_id=? AND cu.email IS NOT NULL AND cu.email<>? ORDER BY cu.name''',(s['campaign_id'],'')).fetchall()
+                else:
+                    try: customer_id=int(recipient)
+                    except (TypeError,ValueError): return self.send_json({'ok':False,'error':'invalid_recipient'},400)
+                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                        WHERE m.campaign_id=? AND cu.id=? AND cu.email IS NOT NULL AND cu.email<>?''',(s['campaign_id'],customer_id,'')).fetchall()
+                if not rows: return self.send_json({'ok':False,'error':'no_recipients'},404)
+                results=[]
+                for r in rows:
+                    result=send_campaign_email(r['email'],r['name'],message,image_data,subject=f'Clube Fidelidade • {s["client_name"] or "Mensagem"}')
+                    results.append({'customer_id':r['id'],'name':r['name'],'email':r['email'],'sent':bool(result.get('sent')),'error':result.get('reason')})
+                    audit(conn,s['company_id'],s['user_id'],'email_send','customer',r['id'],details='sent' if result.get('sent') else result.get('reason','failed'),ip_address=self._ip())
+                return self.send_json({'ok':True,'results':results,'sent_count':sum(1 for x in results if x.get('sent'))})
             if path in ('/api/attendant/stamp','/api/attendant/stamp/remove','/api/attendant/redeem'):
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
@@ -744,7 +846,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v19 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v20 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()
