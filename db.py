@@ -389,8 +389,14 @@ def ensure_configured_staff(db_path=None):
                 if role == 'attendant' and campaign_id is None:
                     first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
                     campaign_id = first_client['id'] if first_client else None
-                conn.execute('UPDATE users SET name=?, password_hash=?, role=?, campaign_id=?, active=1 WHERE id=?',
-                             (name, pwd_hash, role, campaign_id, existing['id']))
+                if role == 'attendant':
+                    # A senha do atendente pode ser alterada por ele próprio e não deve
+                    # ser redefinida pelo Railway em deploys futuros.
+                    conn.execute('UPDATE users SET name=?, role=?, campaign_id=?, active=1 WHERE id=?',
+                                 (name, role, campaign_id, existing['id']))
+                else:
+                    conn.execute('UPDATE users SET name=?, password_hash=?, role=?, campaign_id=?, active=1 WHERE id=?',
+                                 (name, pwd_hash, role, campaign_id, existing['id']))
                 user_id = existing['id']
             else:
                 campaign_id = None
@@ -401,10 +407,11 @@ def ensure_configured_staff(db_path=None):
                     'INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,created_at) VALUES(?,?,?,?,?,?,?)',
                     (company['id'], name, email, pwd_hash, role, campaign_id, now_ts()))
             check = conn.execute('SELECT password_hash,role,active FROM users WHERE id=?', (user_id,)).fetchone()
-            if not check or not verify_password(password, check['password_hash']) or check['role'] != role or int(check['active']) != 1:
+            password_synced = verify_password(password, check['password_hash']) if check and (role == 'manager' or not existing) else True
+            if not check or not password_synced or check['role'] != role or int(check['active']) != 1:
                 raise RuntimeError(f'Falha ao sincronizar credenciais de {role}: {email}')
             label = 'ADMIN' if role == 'manager' else 'ATTENDANT'
-            print(f'[AUTH] {label}_SYNC_OK email={email} password_length={len(password)}')
+            print(f'[AUTH] {label}_SYNC_OK email={email} password_length={len(password)} preserved={bool(role == "attendant" and existing)}')
 
 
 def create_session(conn, user_id: int, ttl=8*60*60):

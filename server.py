@@ -178,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
             elif target.suffix=='.js': ctype='application/javascript; charset=utf-8'
             elif target.suffix=='.svg': ctype='image/svg+xml'
             return self.send_text(target.read_text(encoding='utf-8'),200,ctype)
-        if path == '/api/health': return self.send_json({'ok':True,'version':'v13','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
+        if path == '/api/health': return self.send_json({'ok':True,'version':'v14','database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
         if path == '/api/session':
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
@@ -245,7 +245,7 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant')
                 if not s: return
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                m=conn.execute('''SELECT m.*,cu.name customer_name,c.name campaign_name,c.reward_name,c.goal,c.icon,c.company_id
+                m=conn.execute('''SELECT m.*,cu.name customer_name,c.name campaign_name,c.reward_name,c.goal,c.icon,c.logo_image,c.company_id
                   FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE (m.public_id=? OR m.qr_token=?) AND c.company_id=? AND c.id=?''',(token,token,s['company_id'],s['campaign_id'])).fetchone()
                 if not m: return self.send_json({'ok':False,'error':'membership_not_found'},404)
                 return self.send_json({'ok':True,'membership':rowdict(m)})
@@ -271,10 +271,7 @@ class Handler(BaseHTTPRequestHandler):
                     configured = []
                     admin_email=os.environ.get('CLUBE_ADMIN_EMAIL','').strip().lower()
                     admin_password=os.environ.get('CLUBE_ADMIN_PASSWORD','').strip()
-                    attendant_email=os.environ.get('CLUBE_ATTENDANT_EMAIL','').strip().lower()
-                    attendant_password=os.environ.get('CLUBE_ATTENDANT_PASSWORD','').strip()
                     if admin_email and admin_password: configured.append((admin_email,admin_password,'manager','ADMIN'))
-                    if attendant_email and attendant_password: configured.append((attendant_email,attendant_password,'attendant','ATTENDANT'))
                     for cfg_email,cfg_password,cfg_role,cfg_label in configured:
                         if email == cfg_email and hmac.compare_digest(password,cfg_password):
                             conn.execute('UPDATE users SET password_hash=?,role=?,active=1 WHERE id=?',(hash_password(cfg_password),cfg_role,u['id']))
@@ -327,6 +324,18 @@ class Handler(BaseHTTPRequestHandler):
             s=self._require_auth(conn)
             if not s: return
             if not self._require_csrf(s,payload): return self.send_json({'ok':False,'error':'csrf_failed'},403)
+            if path == '/api/attendant/password':
+                if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
+                current_password=str(payload.get('current_password',''))
+                new_password=str(payload.get('new_password','')).strip()
+                if len(new_password)<10: return self.send_json({'ok':False,'error':'invalid_new_password'},400)
+                u=conn.execute('SELECT id,password_hash FROM users WHERE id=? AND role=\'attendant\' AND active=1',(s['user_id'],)).fetchone()
+                if not u or not verify_password(current_password,u['password_hash']): return self.send_json({'ok':False,'error':'invalid_current_password'},401)
+                if verify_password(new_password,u['password_hash']): return self.send_json({'ok':False,'error':'same_password'},409)
+                conn.execute('UPDATE users SET password_hash=? WHERE id=?',(hash_password(new_password),s['user_id']))
+                audit(conn,s['company_id'],s['user_id'],'password_change','user',s['user_id'],ip_address=self._ip())
+                print(f'[AUTH] ATTENDANT_PASSWORD_CHANGED user_id={s["user_id"]}')
+                return self.send_json({'ok':True})
             if path in ('/api/attendant/stamp','/api/attendant/stamp/remove','/api/attendant/redeem'):
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
@@ -473,7 +482,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v13 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v14 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()
