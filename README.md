@@ -1,4 +1,12 @@
-# Clube Fidelidade v16
+# Clube Fidelidade v17
+
+## Alterações da v17
+
+- Removidas da tela inicial as caixas Cliente demo, Perfis, Antifraude e Wallet.
+- CTA principal alterado para “Seja um cliente fidelidade”.
+- Título “Fidelidade digital, sem aplicativo.” quebrado em duas linhas.
+- Texto de apresentação atualizado com destaque para selos e WhatsApp.
+
 
 ## Alterações da v16
 - Removidas as quatro caixas de métricas do topo do Painel Taboo.
