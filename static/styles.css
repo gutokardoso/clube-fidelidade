@@ -40,3 +40,14 @@ textarea{width:100%;padding:13px 14px;border:1px solid #d9ccc4;border-radius:12p
 /* v30: selos pendentes em P&B/50%; conquistados coloridos/100%. */
 .wallet-stamps .stamp:not(.on), #member .progress .stamp:not(.on){filter:grayscale(1);opacity:.5}
 .wallet-stamps .stamp.on, #member .progress .stamp.on{filter:none;opacity:1}
+
+.theme-picker{display:flex;gap:12px;align-items:center;padding:8px 0 2px}
+.theme-dot-wrap{display:inline-flex;cursor:pointer}
+.theme-dot-wrap input{position:absolute;opacity:0;pointer-events:none;width:1px;height:1px}
+.theme-dot{width:34px;height:34px;border-radius:50%;display:block;border:3px solid transparent;box-shadow:0 0 0 1px rgba(0,0,0,.14);transition:.15s ease}
+.theme-dot-wrap input:checked + .theme-dot{border-color:#fff;box-shadow:0 0 0 3px var(--accent)}
+.theme-green{background:linear-gradient(145deg,#174f3f,#082b25)}
+.theme-orange{background:linear-gradient(145deg,#d18a1f,#8a4907)}
+.theme-blue{background:linear-gradient(145deg,#183f6d,#091f3b)}
+.theme-red{background:linear-gradient(145deg,#7c2028,#3b0b11)}
+.theme-black{background:linear-gradient(145deg,#292929,#070707)}

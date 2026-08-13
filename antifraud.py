@@ -19,7 +19,7 @@ def validate_stamp(conn, membership, campaign, user, quantity=1):
     now = now_ts()
     last = conn.execute("SELECT created_at FROM transactions WHERE membership_id=? AND type='stamp' ORDER BY created_at DESC LIMIT 1",
                         (membership['id'],)).fetchone()
-    if last and user['role'] != 'manager':
+    if last and user['role'] != 'manager' and int(campaign['min_stamp_interval_sec'] or 0) > 0:
         delta = now - last['created_at']
         if delta < campaign['min_stamp_interval_sec']:
             wait = campaign['min_stamp_interval_sec'] - delta
@@ -27,7 +27,7 @@ def validate_stamp(conn, membership, campaign, user, quantity=1):
 
     hour_count = conn.execute("SELECT COALESCE(SUM(value),0) n FROM transactions WHERE membership_id=? AND type='stamp' AND created_at>=?",
                               (membership['id'], now-3600)).fetchone()['n']
-    if hour_count + quantity > campaign['max_stamps_per_hour'] and user['role'] != 'manager':
+    if int(campaign['max_stamps_per_hour'] or 0) > 0 and hour_count + quantity > campaign['max_stamps_per_hour'] and user['role'] != 'manager':
         raise FraudError('hourly_limit', 'Limite de selos por hora atingido. Gerente necessário.', True)
 
     day_start = now - 86400

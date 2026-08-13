@@ -352,6 +352,18 @@ def send_password_recovery_email(email, temporary_password, smtp_config=None):
     return send_email_message(msg, smtp_config)
 
 
+CARD_THEMES={
+    'green':('#174f3f','#082b25'),
+    'orange':('#d18a1f','#8a4907'),
+    'blue':('#183f6d','#091f3b'),
+    'red':('#7c2028','#3b0b11'),
+    'black':('#292929','#070707'),
+}
+
+def card_theme_colors(theme):
+    return CARD_THEMES.get(str(theme or 'green').strip().lower(), CARD_THEMES['green'])
+
+
 def send_customer_welcome_email(name, email, client_name, public_id, campaign, email_config=None):
     """Envia o cartão recém-criado usando exclusivamente a integração do cliente."""
     if not email_configured(email_config):
@@ -368,6 +380,8 @@ def send_customer_welcome_email(name, email, client_name, public_id, campaign, e
     icon=(campaign.get('icon') if hasattr(campaign,'get') else campaign['icon']) or '●'
     stamp='●' if icon=='__LOGO__' else html.escape(str(icon))
     cols=3 if goal==3 else (4 if goal==8 else 5)
+    theme=(campaign.get('card_theme') if hasattr(campaign,'get') else campaign['card_theme']) or 'green'
+    theme_start,theme_end=card_theme_colors(theme)
     cells=[f'<td style="padding:5px"><div style="width:42px;height:42px;border:2px solid #d7c6bb;border-radius:50%;display:flex;align-items:center;justify-content:center;filter:grayscale(1);opacity:.5;font-size:20px">{stamp}</div></td>' for _ in range(goal)]
     rows=['<tr>'+''.join(cells[i:i+cols])+'</tr>' for i in range(0,len(cells),cols)]
     wallet_buttons=[]
@@ -385,7 +399,7 @@ def send_customer_welcome_email(name, email, client_name, public_id, campaign, e
         '<div style="max-width:620px;margin:0 auto;padding:28px 18px">'
         f'<h2 style="margin:0 0 12px">Agora você faz parte do Clube de Fidelidade {client}.</h2>'
         '<p style="line-height:1.55;margin:0 0 24px">Para ter acesso às nossas vantagens, apresente o seu cartão com o QR code aos nossos atendentes toda vez que vier efetuar uma compra.</p>'
-        '<div style="background:linear-gradient(145deg,#57301d,#2e1b12);color:#fff;border-radius:26px;padding:26px;text-align:center">'
+        f'<div style="background:linear-gradient(145deg,{theme_start},{theme_end});color:#fff;border-radius:26px;padding:26px;text-align:center">'
         '<div style="font-weight:900;letter-spacing:.08em;font-size:14px">CLUBE DE FIDELIDADE</div>'
         f'<h2 style="margin:18px 0 6px">{client}</h2><p style="margin:0 0 12px">{customer}</p>'
         f'<table role="presentation" align="center" cellspacing="0" cellpadding="0" style="margin:10px auto 16px">{"".join(rows)}</table>'
@@ -618,7 +632,7 @@ class Handler(BaseHTTPRequestHandler):
             public_id=(qs.get('id') or [''])[0]
             with connect(DB_PATH) as conn:
                 m=conn.execute('''SELECT m.public_id,m.qr_token,m.progress,m.rewards_available,m.status,m.created_at,
-                                  c.name campaign_name,c.reward_name,c.goal,c.icon,c.code,c.logo_image,
+                                  c.name campaign_name,c.reward_name,c.goal,c.icon,c.code,c.logo_image,c.card_theme,
                                   cu.name customer_name,co.name company_name,co.primary_color,co.logo_text
                                   FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id JOIN companies co ON co.id=c.company_id
                                   WHERE m.public_id=?''',(public_id,)).fetchone()
@@ -985,6 +999,8 @@ class Handler(BaseHTTPRequestHandler):
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 name=str(payload.get('name','')).strip()[:80]; reward=str(payload.get('reward_name','')).strip()[:100]; code=re.sub(r'[^A-Z0-9_-]','',str(payload.get('code','')).upper())[:24]
                 icon=str(payload.get('icon','☕'))[:8]; goal=int(payload.get('goal',5))
+                card_theme=str(payload.get('card_theme','green')).strip().lower()
+                if card_theme not in CARD_THEMES: card_theme='green'
                 if not name or not reward or not code or goal not in (3,5,8,10,15): return self.send_json({'ok':False,'error':'invalid_campaign'},400)
                 try:
                     logo_image=validate_logo_data(payload.get('logo_image'))
@@ -1018,11 +1034,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({'ok':False,'error':str(exc)},503)
                 wa_status='connected' if (wa_phone_id and wa_token_enc) else ('awaiting_connection' if wa_mode=='embedded' else 'not_connected')
                 try:
-                    new_id=insert_id(conn,'''INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,logo_image,min_stamp_interval_sec,max_stamps_per_hour,max_stamps_per_attendant_day,
+                    new_id=insert_id(conn,'''INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,logo_image,card_theme,min_stamp_interval_sec,max_stamps_per_hour,max_stamps_per_attendant_day,
                         smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,email_provider,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,
                         whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_access_token_enc,whatsapp_api_version,whatsapp_integration_mode,whatsapp_signup_status,created_at)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
-                        s['company_id'],code,name,reward,goal,icon,logo_image,int(payload.get('min_interval',60)),int(payload.get('max_hour',6)),int(payload.get('max_day',500)),
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
+                        s['company_id'],code,name,reward,goal,icon,logo_image,card_theme,int(payload.get('min_interval',0)),int(payload.get('max_hour',0)),int(payload.get('max_day',500)),
                         smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,email_provider,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,
                         wa_phone_id,wa_waba_id,wa_token_enc,wa_version,wa_mode,wa_status,now_ts()))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
@@ -1034,11 +1050,13 @@ class Handler(BaseHTTPRequestHandler):
                 except (TypeError,ValueError): campaign_id=0
                 name=str(payload.get('name','')).strip()[:80]; reward=str(payload.get('reward_name','')).strip()[:100]; code=re.sub(r'[^A-Z0-9_-]','',str(payload.get('code','')).upper())[:24]
                 icon=str(payload.get('icon','☕'))[:8]
-                try: goal=int(payload.get('goal',5)); min_interval=int(payload.get('min_interval',60)); max_hour=int(payload.get('max_hour',6)); max_day=int(payload.get('max_day',500))
+                try: goal=int(payload.get('goal',5)); min_interval=int(payload.get('min_interval',0)); max_hour=int(payload.get('max_hour',0)); max_day=int(payload.get('max_day',500))
                 except (TypeError,ValueError): return self.send_json({'ok':False,'error':'invalid_campaign'},400)
-                if campaign_id<1 or not name or not reward or not code or goal not in (3,5,8,10,15) or min_interval<0 or max_hour<1 or max_day<1:
+                if campaign_id<1 or not name or not reward or not code or goal not in (3,5,8,10,15) or min_interval<0 or max_hour<0 or max_day<1:
                     return self.send_json({'ok':False,'error':'invalid_campaign'},400)
                 c=conn.execute('SELECT * FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id'])).fetchone()
+                card_theme=str(payload.get('card_theme',c.get('card_theme') or 'green')).strip().lower()
+                if card_theme not in CARD_THEMES: card_theme='green'
                 if not c: return self.send_json({'ok':False,'error':'campaign_not_found'},404)
                 logo_image=c['logo_image']
                 if payload.get('logo_image'):
@@ -1071,10 +1089,10 @@ class Handler(BaseHTTPRequestHandler):
                 except RuntimeError as exc:
                     return self.send_json({'ok':False,'error':str(exc)},503)
                 try:
-                    conn.execute('''UPDATE campaigns SET code=?,name=?,reward_name=?,goal=?,icon=?,logo_image=?,min_stamp_interval_sec=?,max_stamps_per_hour=?,max_stamps_per_attendant_day=?,
+                    conn.execute('''UPDATE campaigns SET code=?,name=?,reward_name=?,goal=?,icon=?,logo_image=?,card_theme=?,min_stamp_interval_sec=?,max_stamps_per_hour=?,max_stamps_per_attendant_day=?,
                         smtp_host=?,smtp_port=?,smtp_user=?,smtp_password_enc=?,smtp_from=?,smtp_from_name=?,smtp_security=?,email_provider=?,brevo_api_key_enc=?,brevo_sender_email=?,brevo_sender_name=?,brevo_reply_to=?,
                         whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_integration_mode=?,whatsapp_signup_status=?
-                        WHERE id=? AND company_id=?''',(code,name,reward,goal,icon,logo_image,min_interval,max_hour,max_day,
+                        WHERE id=? AND company_id=?''',(code,name,reward,goal,icon,logo_image,card_theme,min_interval,max_hour,max_day,
                         smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,email_provider,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,
                         wa_phone_id,wa_waba_id,wa_token_enc,wa_version,wa_mode,'connected' if (wa_phone_id and wa_token_enc) else ('awaiting_connection' if wa_mode=='embedded' else 'not_connected'),campaign_id,s['company_id']))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
@@ -1185,7 +1203,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v30 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v31 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()

@@ -35,9 +35,10 @@ CREATE TABLE IF NOT EXISTS campaigns (
   goal INTEGER NOT NULL CHECK(goal BETWEEN 1 AND 50),
   icon TEXT NOT NULL DEFAULT '☕',
   logo_image TEXT,
+  card_theme TEXT NOT NULL DEFAULT 'green',
   active INTEGER NOT NULL DEFAULT 1,
-  min_stamp_interval_sec INTEGER NOT NULL DEFAULT 60,
-  max_stamps_per_hour INTEGER NOT NULL DEFAULT 6,
+  min_stamp_interval_sec INTEGER NOT NULL DEFAULT 0,
+  max_stamps_per_hour INTEGER NOT NULL DEFAULT 0,
   max_stamps_per_attendant_day INTEGER NOT NULL DEFAULT 500,
   created_at INTEGER NOT NULL
 );
@@ -129,9 +130,10 @@ CREATE TABLE IF NOT EXISTS campaigns (
   goal INTEGER NOT NULL CHECK(goal BETWEEN 1 AND 50),
   icon TEXT NOT NULL DEFAULT '☕',
   logo_image TEXT,
+  card_theme TEXT NOT NULL DEFAULT 'green',
   active INTEGER NOT NULL DEFAULT 1,
-  min_stamp_interval_sec INTEGER NOT NULL DEFAULT 60,
-  max_stamps_per_hour INTEGER NOT NULL DEFAULT 6,
+  min_stamp_interval_sec INTEGER NOT NULL DEFAULT 0,
+  max_stamps_per_hour INTEGER NOT NULL DEFAULT 0,
   max_stamps_per_attendant_day INTEGER NOT NULL DEFAULT 500,
   created_at BIGINT NOT NULL
 );
@@ -313,6 +315,14 @@ def init_db(db_path=None, seed=True):
             for col in ('email','phone','birth_date','cpf'):
                 if col not in customer_cols:
                     conn.execute(f'ALTER TABLE customers ADD COLUMN {col} TEXT')
+
+        # Migração v31: tema de cor individual do cartão por cliente.
+        if conn.__class__.__module__.startswith('psycopg'):
+            conn.execute("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS card_theme TEXT NOT NULL DEFAULT 'green'")
+        else:
+            campaign_cols={r['name'] for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()}
+            if 'card_theme' not in campaign_cols:
+                conn.execute("ALTER TABLE campaigns ADD COLUMN card_theme TEXT NOT NULL DEFAULT 'green'")
 
         # Migração v22: onboarding WhatsApp via Meta Embedded Signup.
         wa_signup_cols=[('whatsapp_integration_mode','TEXT'),('whatsapp_signup_status','TEXT'),('whatsapp_business_id','TEXT'),('whatsapp_connected_at','TEXT')]
