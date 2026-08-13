@@ -352,6 +352,60 @@ def send_password_recovery_email(email, temporary_password, smtp_config=None):
     return send_email_message(msg, smtp_config)
 
 
+def send_customer_welcome_email(name, email, client_name, public_id, campaign, email_config=None):
+    """Envia o cartão recém-criado usando exclusivamente a integração do cliente."""
+    if not email_configured(email_config):
+        return {'sent':False,'reason':'email_provider_not_configured','skipped':True}
+    base_url=(os.environ.get('CLUBE_PUBLIC_URL') or 'https://clube-fidelidade-production.up.railway.app').strip().rstrip('/')
+    card_url=f'{base_url}/card?id={urllib.parse.quote(public_id)}'
+    card_code=f'CLUBE:{public_id}'
+    qr_url=f'{base_url}/api/qr?data={urllib.parse.quote(card_code, safe="")}'
+    client=html.escape(str(client_name or ''))
+    customer=html.escape(str(name or ''))
+    safe_card_url=html.escape(card_url, quote=True)
+    safe_code=html.escape(card_code)
+    goal=int(campaign.get('goal') or 5) if hasattr(campaign,'get') else int(campaign['goal'] or 5)
+    icon=(campaign.get('icon') if hasattr(campaign,'get') else campaign['icon']) or '●'
+    stamp='●' if icon=='__LOGO__' else html.escape(str(icon))
+    cols=3 if goal==3 else (4 if goal==8 else 5)
+    cells=[f'<td style="padding:5px"><div style="width:42px;height:42px;border:2px solid #d7c6bb;border-radius:50%;display:flex;align-items:center;justify-content:center;filter:grayscale(1);opacity:.5;font-size:20px">{stamp}</div></td>' for _ in range(goal)]
+    rows=['<tr>'+''.join(cells[i:i+cols])+'</tr>' for i in range(0,len(cells),cols)]
+    wallet_buttons=[]
+    apple=apple_pass_link(public_id)
+    google=google_wallet_link(public_id)
+    if apple: wallet_buttons.append(f'<a href="{html.escape(base_url+apple,quote=True)}" style="display:inline-block;padding:11px 16px;margin:4px;background:#231a16;color:#fff;text-decoration:none;border-radius:10px;font-weight:700">Apple Wallet</a>')
+    if google: wallet_buttons.append(f'<a href="{html.escape(base_url+google,quote=True)}" style="display:inline-block;padding:11px 16px;margin:4px;background:#231a16;color:#fff;text-decoration:none;border-radius:10px;font-weight:700">Google Wallet</a>')
+    if not wallet_buttons:
+        wallet_buttons.append(f'<a href="{safe_card_url}" style="display:inline-block;padding:11px 16px;margin:4px;background:#231a16;color:#fff;text-decoration:none;border-radius:10px;font-weight:700">Abrir cartão / Wallet</a>')
+    text=(f'Agora você faz parte do Clube de Fidelidade {client_name}.\n'
+          'Para ter acesso às nossas vantagens, apresente o seu cartão com o QR code aos nossos atendentes toda vez que vier efetuar uma compra.\n\n'
+          f'Link de acesso: {card_url}\nCódigo do cartão: {card_code}\n')
+    html_body=(
+        '<!doctype html><html><body style="margin:0;background:#f7f3ef;font-family:Arial,sans-serif;color:#231a16">'
+        '<div style="max-width:620px;margin:0 auto;padding:28px 18px">'
+        f'<h2 style="margin:0 0 12px">Agora você faz parte do Clube de Fidelidade {client}.</h2>'
+        '<p style="line-height:1.55;margin:0 0 24px">Para ter acesso às nossas vantagens, apresente o seu cartão com o QR code aos nossos atendentes toda vez que vier efetuar uma compra.</p>'
+        '<div style="background:linear-gradient(145deg,#57301d,#2e1b12);color:#fff;border-radius:26px;padding:26px;text-align:center">'
+        '<div style="font-weight:900;letter-spacing:.08em;font-size:14px">CLUBE DE FIDELIDADE</div>'
+        f'<h2 style="margin:18px 0 6px">{client}</h2><p style="margin:0 0 12px">{customer}</p>'
+        f'<table role="presentation" align="center" cellspacing="0" cellpadding="0" style="margin:10px auto 16px">{"".join(rows)}</table>'
+        f'<div style="margin:16px auto;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:12px"><div style="font-size:11px;opacity:.75;text-transform:uppercase">Código do cartão</div><strong>{safe_code}</strong></div>'
+        f'<img src="{html.escape(qr_url,quote=True)}" alt="QR code do cartão" width="170" height="170" style="display:block;background:#fff;border-radius:14px;padding:10px;margin:16px auto"></div>'
+        f'<div style="text-align:center;margin:18px 0">{"".join(wallet_buttons)}</div>'
+        f'<p style="line-height:1.55"><strong>Link de acesso:</strong><br><a href="{safe_card_url}">{html.escape(card_url)}</a></p>'
+        f'<p style="line-height:1.55"><strong>Código do cartão:</strong><br>{safe_code}</p></div></body></html>'
+    )
+    msg=EmailMessage()
+    msg['Subject']=f'Bem-vindo ao Clube de Fidelidade {client_name}'
+    msg['To']=email
+    msg.set_content(text)
+    msg.add_alternative(html_body, subtype='html')
+    result=send_email_message(msg,email_config)
+    if not result.get('sent'):
+        print(f'[EMAIL] CUSTOMER_WELCOME_FAILED email={email} campaign={client_name!r} reason={result.get("reason")}')
+    return result
+
+
 def send_attendant_welcome_email(name, email, password, client_name, smtp_config=None):
     if not email_configured(smtp_config):
         return {'sent':False,'reason':'smtp_not_configured'}
@@ -627,7 +681,7 @@ class Handler(BaseHTTPRequestHandler):
                 month=datetime.now(ZoneInfo('America/Sao_Paulo')).month
                 birthdays=[c for c in customers if c.get('birth_date') and len(c['birth_date'])>=10 and int(c['birth_date'][5:7])==month]
                 birthdays.sort(key=lambda c: (int(c['birth_date'][8:10]), c['name'].lower()))
-                return self.send_json({'ok':True,'customers':customers,'birthdays':birthdays,'month':month,'whatsapp_cloud':whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id']))})
+                return self.send_json({'ok':True,'customers':customers,'birthdays':birthdays,'month':month,'whatsapp_cloud':whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])),'whatsapp_configured':whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])),'email_configured':email_configured(email_config_for_client(conn,s['campaign_id']))})
         if path == '/api/attendant/lookup':
             token=(qs.get('token') or [''])[0].strip()
             if token.startswith('CLUBE:'): token=token[6:]
@@ -721,7 +775,13 @@ class Handler(BaseHTTPRequestHandler):
                 conn.execute('INSERT INTO memberships(customer_id,campaign_id,public_id,qr_token,created_at) VALUES(?,?,?,?,?)',(customer_id,c['id'],public_id,qr_token,now_ts()))
                 print(f'[JOIN] CREATED public_id={public_id} campaign={code} name={name!r}')
                 audit(conn,c['company_id'],None,'customer_join','membership',public_id,details=name,ip_address=self._ip())
-                return self.send_redirect('/card?id='+urllib.parse.quote(public_id)) if path=='/join' else self.send_json({'ok':True,'public_id':public_id,'existing':False})
+                welcome_cfg=email_config_for_client(conn,c['id'])
+                welcome_result=send_customer_welcome_email(name,email,c['name'],public_id,c,welcome_cfg)
+                if welcome_result.get('sent'):
+                    audit(conn,c['company_id'],None,'customer_welcome_email','membership',public_id,details=email,ip_address=self._ip())
+                elif not welcome_result.get('skipped'):
+                    print(f'[EMAIL] CUSTOMER_WELCOME_NOT_SENT public_id={public_id} reason={welcome_result.get("reason")}')
+                return self.send_redirect('/card?id='+urllib.parse.quote(public_id)) if path=='/join' else self.send_json({'ok':True,'public_id':public_id,'existing':False,'welcome_email':welcome_result})
         if path == '/api/forgot-password':
             email=normalize_email(payload.get('email'))
             if not email:
@@ -1125,7 +1185,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v29 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v30 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()

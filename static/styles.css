@@ -36,3 +36,7 @@ textarea{width:100%;padding:13px 14px;border:1px solid #d9ccc4;border-radius:12p
 .birthday-card{background:#fefac8}
 
 .create-integrations{margin-top:8px}.create-integrations .integration-box{min-width:0}@media(max-width:820px){.create-integrations .grid.cols-2{grid-template-columns:1fr}}
+
+/* v30: selos pendentes em P&B/50%; conquistados coloridos/100%. */
+.wallet-stamps .stamp:not(.on), #member .progress .stamp:not(.on){filter:grayscale(1);opacity:.5}
+.wallet-stamps .stamp.on, #member .progress .stamp.on{filter:none;opacity:1}

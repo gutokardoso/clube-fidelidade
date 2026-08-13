@@ -83,4 +83,4 @@ async function deleteClient(id){const c=clients.find(x=>+x.id===+id);const name=
 async function deleteStaff(id,name){if(!confirm(`Excluir o atendente “${name}”?`))return;try{await managerPost('/api/manager/staff/delete',{user_id:id});load()}catch(err){alert('Não foi possível excluir: '+(err.data?.error||err.message))}}
 updateCreateEmailMode();updateCreateWaMode();
 boot();
-</script><div class="build-marker">v29</div></body></html>
+</script><div class="build-marker">v30</div></body></html>
