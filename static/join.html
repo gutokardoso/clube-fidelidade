@@ -3,4 +3,4 @@ const phone=document.getElementById('phone'),cpf=document.getElementById('cpf'),
 birth.max=new Date().toISOString().slice(0,10);
 phone.addEventListener('input',()=>{let d=phone.value.replace(/\D/g,'').slice(0,11);if(d.length>6)phone.value=`(${d.slice(0,2)}) ${d.slice(2,d.length-4)}-${d.slice(-4)}`;else if(d.length>2)phone.value=`(${d.slice(0,2)}) ${d.slice(2)}`;else phone.value=d});
 cpf.addEventListener('input',()=>{let d=cpf.value.replace(/\D/g,'').slice(0,11);cpf.value=d.replace(/(\d{3})(\d)/,'$1.$2').replace(/(\d{3})(\d)/,'$1.$2').replace(/(\d{3})(\d{1,2})$/,'$1-$2')});
-</script><div class="build-marker">v27</div></body></html>
+</script><div class="build-marker">v28</div></body></html>

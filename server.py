@@ -114,12 +114,13 @@ def decrypt_secret(value):
     except (InvalidToken,ValueError): return ''
 
 def client_integrations(conn, campaign_id):
-    row=conn.execute("""SELECT id,smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,
+    row=conn.execute("""SELECT id,smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,email_provider,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,
         whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_access_token_enc,whatsapp_api_version
         FROM campaigns WHERE id=?""",(campaign_id,)).fetchone()
     if not row: return None
     x=rowdict(row)
     x['smtp_password']=decrypt_secret(x.pop('smtp_password_enc',None))
+    x['brevo_api_key']=decrypt_secret(x.pop('brevo_api_key_enc',None))
     x['whatsapp_access_token']=decrypt_secret(x.pop('whatsapp_access_token_enc',None))
     return x
 
@@ -144,6 +145,20 @@ def smtp_config_for_client(conn=None,campaign_id=None):
                     'security':x.get('smtp_security') or 'starttls','source':'client'}
     return global_smtp_config()
 
+def email_config_for_client(conn=None,campaign_id=None):
+    if conn is not None and campaign_id:
+        x=client_integrations(conn,campaign_id)
+        if x:
+            provider=(x.get('email_provider') or 'smtp').strip().lower()
+            if provider=='brevo':
+                return {'provider':'brevo','api_key':x.get('brevo_api_key') or '',
+                        'sender_email':x.get('brevo_sender_email') or '',
+                        'sender_name':x.get('brevo_sender_name') or '',
+                        'reply_to':x.get('brevo_reply_to') or '','source':'client'}
+            if x.get('smtp_host') and x.get('smtp_from'):
+                c=smtp_config_for_client(conn,campaign_id); c['provider']='smtp'; return c
+    c=global_smtp_config(); c['provider']='global'; return c
+
 def smtp_configured(config=None):
     c=config or global_smtp_config()
     return bool(c.get('host') and c.get('from_addr'))
@@ -162,11 +177,13 @@ def brevo_api_configured():
     return bool(c.get('api_key') and c.get('sender_email'))
 
 def email_configured(config=None):
-    # A API HTTPS da Brevo é o canal preferencial no Railway. SMTP fica como fallback.
-    return brevo_api_configured() or smtp_configured(config)
+    c=config or {}
+    if c.get('provider')=='brevo': return bool(c.get('api_key') and c.get('sender_email'))
+    if c.get('provider')=='smtp': return smtp_configured(c)
+    return brevo_api_configured() or smtp_configured(c or None)
 
-def _brevo_payload_from_message(msg):
-    cfg=brevo_api_config()
+def _brevo_payload_from_message(msg, cfg=None):
+    cfg=cfg or brevo_api_config()
     to=[]
     for addr in msg.get_all('To',[]):
         for item in str(addr).split(','):
@@ -204,12 +221,12 @@ def _brevo_payload_from_message(msg):
     if cfg.get('reply_to'): payload['replyTo']={'email':cfg['reply_to']}
     return payload
 
-def send_email_brevo_api(msg):
-    cfg=brevo_api_config()
+def send_email_brevo_api(msg, cfg=None):
+    cfg=cfg or brevo_api_config()
     if not (cfg.get('api_key') and cfg.get('sender_email')):
         return {'sent':False,'reason':'brevo_api_not_configured'}
     try:
-        payload=_brevo_payload_from_message(msg)
+        payload=_brevo_payload_from_message(msg,cfg)
         req=urllib.request.Request('https://api.brevo.com/v3/smtp/email',data=json.dumps(payload,ensure_ascii=False).encode('utf-8'),method='POST',headers={
             'api-key':cfg['api_key'],'Content-Type':'application/json','Accept':'application/json'
         })
@@ -232,9 +249,11 @@ def send_email_brevo_api(msg):
         return {'sent':False,'reason':'brevo_api_failed','source':'brevo_api'}
 
 def send_email_message(msg, config=None):
-    if brevo_api_configured():
-        return send_email_brevo_api(msg)
-    c=config or global_smtp_config()
+    c=config or {}
+    if c.get('provider')=='brevo': return send_email_brevo_api(msg,c)
+    if c.get('provider')=='smtp': pass
+    elif brevo_api_configured(): return send_email_brevo_api(msg)
+    c=c or global_smtp_config()
     host=c.get('host','').strip(); from_addr=c.get('from_addr','').strip()
     if not host or not from_addr: return {'sent':False,'reason':'smtp_not_configured'}
     try: port=int(c.get('port') or 587)
@@ -568,10 +587,13 @@ class Handler(BaseHTTPRequestHandler):
                     FROM campaigns c WHERE c.company_id=? ORDER BY c.id DESC""",(cid,)).fetchall()]
                 for c in campaigns:
                     c['smtp_configured']=bool(c.get('smtp_host') and c.get('smtp_from'))
+                    c['brevo_configured']=bool(c.get('brevo_api_key_enc') and c.get('brevo_sender_email'))
+                    c['email_provider']=c.get('email_provider') or 'smtp'
                     c['whatsapp_configured']=bool(c.get('whatsapp_phone_number_id') and c.get('whatsapp_access_token_enc') and c.get('whatsapp_api_version'))
                     c['whatsapp_signup_status']=c.get('whatsapp_signup_status') or ('connected' if c['whatsapp_configured'] else 'not_connected')
                     c['whatsapp_integration_mode']=c.get('whatsapp_integration_mode') or 'manual'
                     c['smtp_password_enc']=None
+                    c['brevo_api_key_enc']=None
                     c['whatsapp_access_token_enc']=None
                 staff=[rowdict(r) for r in conn.execute('''SELECT u.id,u.name,u.email,u.role,u.active,u.created_at,u.campaign_id,c.name client_name FROM users u LEFT JOIN campaigns c ON c.id=u.campaign_id WHERE u.company_id=? ORDER BY u.role,u.name''',(cid,)).fetchall()]
                 return self.send_json({'ok':True,'metrics':metrics,'campaigns':campaigns,'staff':staff})
@@ -700,7 +722,7 @@ class Handler(BaseHTTPRequestHandler):
                 # e só substituímos o hash depois que o e-mail foi aceito pelo provedor de e-mail.
                 if u and u['role']=='attendant':
                     temporary='Clube-'+random_token(9)[:12]
-                    smtp_cfg=smtp_config_for_client(conn,u['campaign_id']) if u['campaign_id'] else global_smtp_config()
+                    smtp_cfg=email_config_for_client(conn,u['campaign_id']) if u['campaign_id'] else global_smtp_config()
                     result=send_password_recovery_email(email,temporary,smtp_cfg)
                     if not result.get('sent'):
                         return self.send_json({'ok':False,'error':result.get('reason','email_send_failed')},503)
@@ -797,8 +819,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/attendant/email':
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                smtp_cfg=smtp_config_for_client(conn,s['campaign_id'])
-                if not smtp_configured(smtp_cfg): return self.send_json({'ok':False,'error':'smtp_not_configured'},503)
+                smtp_cfg=email_config_for_client(conn,s['campaign_id'])
+                if not email_configured(smtp_cfg): return self.send_json({'ok':False,'error':'email_provider_not_configured'},503)
                 recipient=str(payload.get('recipient','')).strip()
                 message=str(payload.get('message','')).strip()
                 image_data=payload.get('image_data')
@@ -929,24 +951,31 @@ class Handler(BaseHTTPRequestHandler):
                 smtp_from=str(payload.get('smtp_from','')).strip()[:200]
                 smtp_from_name=str(payload.get('smtp_from_name','')).strip()[:100]
                 smtp_security=str(payload.get('smtp_security','starttls')).strip().lower()
+                email_provider=str(payload.get('email_provider',c.get('email_provider') or 'smtp')).strip().lower()
+                if email_provider not in ('smtp','brevo'): email_provider='smtp'
+                brevo_sender_email=str(payload.get('brevo_sender_email','')).strip()[:200]
+                brevo_sender_name=str(payload.get('brevo_sender_name','')).strip()[:100]
+                brevo_reply_to=str(payload.get('brevo_reply_to','')).strip()[:200]
                 wa_phone_id=str(payload.get('whatsapp_phone_number_id','')).strip()[:100]
                 wa_waba_id=str(payload.get('whatsapp_waba_id','')).strip()[:100]
                 wa_version=str(payload.get('whatsapp_api_version','v24.0')).strip()[:20]
                 wa_mode=str(payload.get('whatsapp_integration_mode',c.get('whatsapp_integration_mode') or 'manual')).strip().lower()
                 if wa_mode not in ('embedded','manual','none'): wa_mode='manual'
                 smtp_password_enc=c['smtp_password_enc']
+                brevo_api_key_enc=c.get('brevo_api_key_enc')
                 wa_token_enc=c['whatsapp_access_token_enc']
                 try:
                     if payload.get('smtp_password'): smtp_password_enc=encrypt_secret(payload.get('smtp_password'))
+                    if payload.get('brevo_api_key'): brevo_api_key_enc=encrypt_secret(payload.get('brevo_api_key'))
                     if payload.get('whatsapp_access_token'): wa_token_enc=encrypt_secret(payload.get('whatsapp_access_token'))
                 except RuntimeError as exc:
                     return self.send_json({'ok':False,'error':str(exc)},503)
                 try:
                     conn.execute('''UPDATE campaigns SET code=?,name=?,reward_name=?,goal=?,icon=?,logo_image=?,min_stamp_interval_sec=?,max_stamps_per_hour=?,max_stamps_per_attendant_day=?,
-                        smtp_host=?,smtp_port=?,smtp_user=?,smtp_password_enc=?,smtp_from=?,smtp_from_name=?,smtp_security=?,
+                        smtp_host=?,smtp_port=?,smtp_user=?,smtp_password_enc=?,smtp_from=?,smtp_from_name=?,smtp_security=?,email_provider=?,brevo_api_key_enc=?,brevo_sender_email=?,brevo_sender_name=?,brevo_reply_to=?,
                         whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_integration_mode=?,whatsapp_signup_status=?
                         WHERE id=? AND company_id=?''',(code,name,reward,goal,icon,logo_image,min_interval,max_hour,max_day,
-                        smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,
+                        smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,email_provider,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,
                         wa_phone_id,wa_waba_id,wa_token_enc,wa_version,wa_mode,'connected' if (wa_phone_id and wa_token_enc) else ('awaiting_connection' if wa_mode=='embedded' else 'not_connected'),campaign_id,s['company_id']))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'campaign_update','campaign',campaign_id,details=code,ip_address=self._ip())
@@ -955,7 +984,7 @@ class Handler(BaseHTTPRequestHandler):
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 try: campaign_id=int(payload.get('campaign_id',0))
                 except (TypeError,ValueError): campaign_id=0
-                cfg=smtp_config_for_client(conn,campaign_id)
+                cfg=email_config_for_client(conn,campaign_id)
                 target=normalize_email(payload.get('email') or s['email'])
                 if not target or not email_configured(cfg): return self.send_json({'ok':False,'error':'email_provider_not_configured'},503)
                 msg=EmailMessage(); msg['Subject']='Teste de e-mail • Clube Fidelidade'; msg['To']=target; msg.set_content('Configuração SMTP testada com sucesso.')
@@ -1002,7 +1031,7 @@ class Handler(BaseHTTPRequestHandler):
                     new_id=insert_id(conn,'INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,created_at) VALUES(?,?,?,?,?,?,?)',(s['company_id'],name,email,hash_password(password),'attendant',campaign_id,now_ts()))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'email_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'staff_create','user',new_id,details=f'{email}:attendant:client={campaign_id}',ip_address=self._ip())
-                smtp_cfg=smtp_config_for_client(conn,campaign_id)
+                smtp_cfg=email_config_for_client(conn,campaign_id)
                 email_result=send_attendant_welcome_email(name,email,password,client['name'],smtp_cfg)
                 audit(conn,s['company_id'],s['user_id'],'staff_welcome_email','user',new_id,details='sent' if email_result.get('sent') else email_result.get('reason','failed'),ip_address=self._ip())
                 return self.send_json({'ok':True,'user_id':new_id,'client_name':client['name'],'welcome_email':email_result})

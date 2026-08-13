@@ -23,7 +23,7 @@
 .wallet-instruction{text-align:center;margin:14px auto 0}
 @media(max-width:380px){.wallet-card{padding:22px 18px}.wallet-stamps{grid-template-columns:repeat(var(--stamp-cols,5),40px);gap:7px}.wallet-stamps .stamp{width:40px;height:40px;font-size:18px}.wallet-client-logo{max-width:88%;max-height:100px}}
 
-.stamp-logo{display:block;max-width:34px;max-height:34px;width:auto;height:auto;object-fit:contain;border-radius:6px}.wallet-stamps .stamp-logo{max-width:32px;max-height:32px}
+.stamp-logo{display:block;width:36px;height:36px;max-width:36px;max-height:36px;object-fit:cover;border-radius:50%}.wallet-stamps .stamp-logo{width:36px;height:36px;max-width:36px;max-height:36px;border-radius:50%;object-fit:cover}
 
 .section-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.row-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 textarea{width:100%;padding:13px 14px;border:1px solid #d9ccc4;border-radius:12px;font:inherit;background:#fff;resize:vertical;min-height:120px}.wa-links{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}

@@ -327,6 +327,7 @@ def init_db(db_path=None, seed=True):
         integration_cols = [
             ('smtp_host','TEXT'),('smtp_port','TEXT'),('smtp_user','TEXT'),('smtp_password_enc','TEXT'),
             ('smtp_from','TEXT'),('smtp_from_name','TEXT'),('smtp_security','TEXT'),
+            ('email_provider','TEXT'),('brevo_api_key_enc','TEXT'),('brevo_sender_email','TEXT'),('brevo_sender_name','TEXT'),('brevo_reply_to','TEXT'),
             ('whatsapp_phone_number_id','TEXT'),('whatsapp_waba_id','TEXT'),('whatsapp_access_token_enc','TEXT'),
             ('whatsapp_api_version','TEXT')
         ]
