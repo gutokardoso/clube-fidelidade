@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL CHECK(role IN ('manager','attendant')),
   active INTEGER NOT NULL DEFAULT 1,
+  is_client_admin INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -50,6 +51,10 @@ CREATE TABLE IF NOT EXISTS customers (
   phone TEXT,
   birth_date TEXT,
   cpf TEXT,
+  privacy_accepted_at INTEGER,
+  marketing_email INTEGER NOT NULL DEFAULT 0,
+  marketing_whatsapp INTEGER NOT NULL DEFAULT 0,
+  marketing_accepted_at INTEGER,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS memberships (
@@ -97,6 +102,18 @@ CREATE TABLE IF NOT EXISTS audit_log (
   ip_address TEXT,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS message_queue (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE, kind TEXT NOT NULL, recipient TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, available_at INTEGER NOT NULL, created_at INTEGER NOT NULL, sent_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS automation_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, rule_type TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'email', enabled INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(campaign_id,rule_type)
+);
+CREATE TABLE IF NOT EXISTS automation_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, rule_id INTEGER NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE, membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, period_key TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(rule_id,membership_id,period_key)
+);
+CREATE TABLE IF NOT EXISTS wallet_registrations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, device_library_id TEXT NOT NULL, push_token TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(membership_id,device_library_id)
+);
 CREATE INDEX IF NOT EXISTS idx_tx_membership_time ON transactions(membership_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tx_user_time ON transactions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memberships_campaign ON memberships(campaign_id);
@@ -119,6 +136,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL CHECK(role IN ('manager','attendant')),
   active INTEGER NOT NULL DEFAULT 1,
+  is_client_admin INTEGER NOT NULL DEFAULT 0,
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -145,6 +163,10 @@ CREATE TABLE IF NOT EXISTS customers (
   phone TEXT,
   birth_date TEXT,
   cpf TEXT,
+  privacy_accepted_at BIGINT,
+  marketing_email INTEGER NOT NULL DEFAULT 0,
+  marketing_whatsapp INTEGER NOT NULL DEFAULT 0,
+  marketing_accepted_at BIGINT,
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS memberships (
@@ -191,6 +213,18 @@ CREATE TABLE IF NOT EXISTS audit_log (
   details TEXT,
   ip_address TEXT,
   created_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS message_queue (
+  id BIGSERIAL PRIMARY KEY, campaign_id BIGINT REFERENCES campaigns(id) ON DELETE CASCADE, kind TEXT NOT NULL, recipient TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, available_at BIGINT NOT NULL, created_at BIGINT NOT NULL, sent_at BIGINT
+);
+CREATE TABLE IF NOT EXISTS automation_rules (
+  id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, rule_type TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'email', enabled INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(campaign_id,rule_type)
+);
+CREATE TABLE IF NOT EXISTS automation_runs (
+  id BIGSERIAL PRIMARY KEY, rule_id BIGINT NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE, membership_id BIGINT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, period_key TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(rule_id,membership_id,period_key)
+);
+CREATE TABLE IF NOT EXISTS wallet_registrations (
+  id BIGSERIAL PRIMARY KEY, membership_id BIGINT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, device_library_id TEXT NOT NULL, push_token TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(membership_id,device_library_id)
 );
 CREATE INDEX IF NOT EXISTS idx_tx_membership_time ON transactions(membership_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tx_user_time ON transactions(user_id, created_at DESC);
@@ -316,8 +350,21 @@ def init_db(db_path=None, seed=True):
                 if col not in customer_cols:
                     conn.execute(f'ALTER TABLE customers ADD COLUMN {col} TEXT')
 
-        # Migração v31: tema de cor individual do cartão por cliente.
-        if conn.__class__.__module__.startswith('psycopg'):
+        # Migração v32: permissões por cliente, LGPD, fila, automações e Wallet.
+        if _is_postgres(target):
+            conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_client_admin INTEGER NOT NULL DEFAULT 0")
+            for col,typ,default in [('privacy_accepted_at','BIGINT','NULL'),('marketing_email','INTEGER','0'),('marketing_whatsapp','INTEGER','0'),('marketing_accepted_at','BIGINT','NULL')]:
+                conn.execute(f"ALTER TABLE customers ADD COLUMN IF NOT EXISTS {col} {typ} DEFAULT {default}")
+        else:
+            ucols={r['name'] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+            if 'is_client_admin' not in ucols: conn.execute("ALTER TABLE users ADD COLUMN is_client_admin INTEGER NOT NULL DEFAULT 0")
+            ccols={r['name'] for r in conn.execute("PRAGMA table_info(customers)").fetchall()}
+            for col,typ,default in [('privacy_accepted_at','INTEGER','NULL'),('marketing_email','INTEGER','0'),('marketing_whatsapp','INTEGER','0'),('marketing_accepted_at','INTEGER','NULL')]:
+                if col not in ccols: conn.execute(f"ALTER TABLE customers ADD COLUMN {col} {typ} DEFAULT {default}")
+        conn.executescript("CREATE TABLE IF NOT EXISTS message_queue (\n  id BIGSERIAL PRIMARY KEY, campaign_id BIGINT REFERENCES campaigns(id) ON DELETE CASCADE, kind TEXT NOT NULL, recipient TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, available_at BIGINT NOT NULL, created_at BIGINT NOT NULL, sent_at BIGINT\n);\nCREATE TABLE IF NOT EXISTS automation_rules (\n  id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, rule_type TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'email', enabled INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(campaign_id,rule_type)\n);\nCREATE TABLE IF NOT EXISTS automation_runs (\n  id BIGSERIAL PRIMARY KEY, rule_id BIGINT NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE, membership_id BIGINT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, period_key TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(rule_id,membership_id,period_key)\n);\nCREATE TABLE IF NOT EXISTS wallet_registrations (\n  id BIGSERIAL PRIMARY KEY, membership_id BIGINT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, device_library_id TEXT NOT NULL, push_token TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(membership_id,device_library_id)\n);\n" if _is_postgres(target) else "CREATE TABLE IF NOT EXISTS message_queue (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE, kind TEXT NOT NULL, recipient TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, available_at INTEGER NOT NULL, created_at INTEGER NOT NULL, sent_at INTEGER\n);\nCREATE TABLE IF NOT EXISTS automation_rules (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, rule_type TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'email', enabled INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(campaign_id,rule_type)\n);\nCREATE TABLE IF NOT EXISTS automation_runs (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, rule_id INTEGER NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE, membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, period_key TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(rule_id,membership_id,period_key)\n);\nCREATE TABLE IF NOT EXISTS wallet_registrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, device_library_id TEXT NOT NULL, push_token TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(membership_id,device_library_id)\n);\n")
+
+        # Migração v32: tema de cor individual do cartão por cliente.
+        if _is_postgres(target):
             conn.execute("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS card_theme TEXT NOT NULL DEFAULT 'green'")
         else:
             campaign_cols={r['name'] for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()}
@@ -491,7 +538,7 @@ def create_session(conn, user_id: int, ttl=8*60*60):
 def get_session(conn, token: str):
     if not token:
         return None
-    row = conn.execute('''SELECT s.token,s.csrf,s.expires_at,u.id user_id,u.company_id,u.campaign_id,u.name,u.email,u.role,u.active,c.name client_name,c.logo_image client_logo_image
+    row = conn.execute('''SELECT s.token,s.csrf,s.expires_at,u.id user_id,u.company_id,u.campaign_id,u.name,u.email,u.role,u.active,u.is_client_admin,c.name client_name,c.logo_image client_logo_image
                           FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN campaigns c ON c.id=u.campaign_id WHERE s.token=?''',(token,)).fetchone()
     if not row or row['expires_at'] < now_ts() or not row['active']:
         return None
