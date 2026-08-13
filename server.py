@@ -893,7 +893,7 @@ class Handler(BaseHTTPRequestHandler):
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 name=str(payload.get('name','')).strip()[:80]; reward=str(payload.get('reward_name','')).strip()[:100]; code=re.sub(r'[^A-Z0-9_-]','',str(payload.get('code','')).upper())[:24]
                 icon=str(payload.get('icon','☕'))[:8]; goal=int(payload.get('goal',5))
-                if not name or not reward or not code or goal<1 or goal>50: return self.send_json({'ok':False,'error':'invalid_campaign'},400)
+                if not name or not reward or not code or goal not in (3,5,8,10,15): return self.send_json({'ok':False,'error':'invalid_campaign'},400)
                 try:
                     logo_image=validate_logo_data(payload.get('logo_image'))
                     if not logo_image:
@@ -914,7 +914,7 @@ class Handler(BaseHTTPRequestHandler):
                 icon=str(payload.get('icon','☕'))[:8]
                 try: goal=int(payload.get('goal',5)); min_interval=int(payload.get('min_interval',60)); max_hour=int(payload.get('max_hour',6)); max_day=int(payload.get('max_day',500))
                 except (TypeError,ValueError): return self.send_json({'ok':False,'error':'invalid_campaign'},400)
-                if campaign_id<1 or not name or not reward or not code or goal<1 or goal>50 or min_interval<0 or max_hour<1 or max_day<1:
+                if campaign_id<1 or not name or not reward or not code or goal not in (3,5,8,10,15) or min_interval<0 or max_hour<1 or max_day<1:
                     return self.send_json({'ok':False,'error':'invalid_campaign'},400)
                 c=conn.execute('SELECT * FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id'])).fetchone()
                 if not c: return self.send_json({'ok':False,'error':'campaign_not_found'},404)
@@ -1056,7 +1056,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v26 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v27 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()

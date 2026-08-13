@@ -16,12 +16,12 @@
 .wallet-client-logo{display:block;max-width:min(260px,82%);max-height:120px;width:auto;height:auto;object-fit:contain}
 .wallet-client-logo-fallback{font-size:30px;font-weight:900;line-height:1.1;text-align:center}
 .wallet-customer{margin:0 0 18px;font-size:18px}
-.wallet-stamps{display:grid;grid-template-columns:repeat(5,48px);justify-content:center;gap:12px;margin:18px auto}
+.wallet-stamps{display:grid;grid-template-columns:repeat(var(--stamp-cols,5),48px);justify-content:center;gap:12px;margin:18px auto}
 .wallet-card #count{margin:18px 0 8px}
 .wallet-card #reward{margin:0 0 18px;text-align:center}
 .wallet-card .qr{display:block;margin:18px auto 0}
 .wallet-instruction{text-align:center;margin:14px auto 0}
-@media(max-width:380px){.wallet-card{padding:22px 18px}.wallet-stamps{grid-template-columns:repeat(5,40px);gap:7px}.wallet-stamps .stamp{width:40px;height:40px;font-size:18px}.wallet-client-logo{max-width:88%;max-height:100px}}
+@media(max-width:380px){.wallet-card{padding:22px 18px}.wallet-stamps{grid-template-columns:repeat(var(--stamp-cols,5),40px);gap:7px}.wallet-stamps .stamp{width:40px;height:40px;font-size:18px}.wallet-client-logo{max-width:88%;max-height:100px}}
 
 .stamp-logo{display:block;max-width:34px;max-height:34px;width:auto;height:auto;object-fit:contain;border-radius:6px}.wallet-stamps .stamp-logo{max-width:32px;max-height:32px}
 
@@ -32,3 +32,5 @@ textarea{width:100%;padding:13px 14px;border:1px solid #d9ccc4;border-radius:12p
 .integration-panel{margin:22px 0;padding-top:18px;border-top:1px solid var(--line)}.integration-box{border:1px solid var(--line);border-radius:16px;padding:16px;background:rgba(255,255,255,.025)}
 
 .btn.is-loading{cursor:wait;opacity:.86}.btn-spinner{display:inline-block;width:16px;height:16px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-3px;margin-right:8px;animation:clubespin .7s linear infinite}@keyframes clubespin{to{transform:rotate(360deg)}}
+
+.birthday-card{background:#fefac8}

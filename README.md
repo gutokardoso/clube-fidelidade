@@ -1,6 +1,6 @@
-# Clube Fidelidade v26
+# Clube Fidelidade v27
 
-## Alterações da v26
+## Alterações da v27
 
 - Cadastro do cliente final com 5 campos obrigatórios: nome, e-mail, celular, data de nascimento e CPF.
 - Validação de formato de e-mail, celular brasileiro com DDD e CPF com dígitos verificadores.
@@ -49,15 +49,15 @@ O projeto continua usando `DATABASE_URL` para PostgreSQL e as variáveis `CLUBE_
 - Painel Taboo agora exibe, por cliente, a quantidade de **Cartões** gerados e o total líquido de **Selos**.
 
 
-## Novidades v26
+## Novidades v27
 - Ao criar um atendente, o sistema tenta enviar automaticamente um e-mail de acesso via SMTP com link, e-mail e senha inicial. Configure `CLUBE_SMTP_HOST`, `CLUBE_SMTP_PORT`, `CLUBE_SMTP_USER`, `CLUBE_SMTP_PASSWORD`, `CLUBE_SMTP_FROM` e `CLUBE_SMTP_SECURITY` no Railway.
 - A área do atendente agora lista todos os clientes finais vinculados à sua área e permite editar os cinco dados cadastrais ou remover o cartão/cliente daquela área.
 - `CLUBE_LOGIN_URL` permite alterar o link enviado no e-mail; o padrão é `https://clube-fidelidade-production.up.railway.app/login`.
 
 
-## v26 — WhatsApp Embedded Signup
+## v27 — WhatsApp Embedded Signup
 Configure META_APP_ID, META_APP_SECRET e META_CONFIG_ID uma única vez no Railway. Depois use Editar cliente > WhatsApp > Conectar automaticamente pela Meta > CONECTAR WHATSAPP.
 
 
-## v26 — E-mail pela API HTTPS da Brevo
+## v27 — E-mail pela API HTTPS da Brevo
 O canal preferencial de e-mail agora é a API REST da Brevo, evitando bloqueios de SMTP do Railway. Configure BREVO_API_KEY, BREVO_SENDER_EMAIL e opcionalmente BREVO_SENDER_NAME/BREVO_REPLY_TO. SMTP continua disponível apenas como fallback.
