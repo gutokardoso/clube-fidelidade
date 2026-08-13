@@ -187,4 +187,32 @@ class CoreTests(unittest.TestCase):
                 if v is None: os.environ.pop(k,None)
                 else: os.environ[k]=v
 
+    def test_brevo_api_email_send(self):
+        from unittest.mock import patch
+        import io, json
+        old={k:os.environ.get(k) for k in ('BREVO_API_KEY','BREVO_SENDER_EMAIL','BREVO_SENDER_NAME','CLUBE_SMTP_HOST','CLUBE_SMTP_FROM')}
+        captured={}
+        class FakeResp:
+            def __enter__(self): return self
+            def __exit__(self,*a): return False
+            def read(self): return b'{"messageId":"msg-test-123"}'
+        def fake_urlopen(req,timeout=20):
+            captured['url']=req.full_url; captured['headers']=dict(req.header_items()); captured['body']=json.loads(req.data.decode('utf-8')); return FakeResp()
+        try:
+            os.environ['BREVO_API_KEY']='xkeysib-test'
+            os.environ['BREVO_SENDER_EMAIL']='clube@example.com'
+            os.environ['BREVO_SENDER_NAME']='Clube Fidelidade'
+            os.environ.pop('CLUBE_SMTP_HOST',None); os.environ.pop('CLUBE_SMTP_FROM',None)
+            with patch('server.urllib.request.urlopen',fake_urlopen):
+                result=send_attendant_welcome_email('Atendente','destino@example.com','SenhaInicial123!','Cliente Teste')
+            self.assertTrue(result['sent']); self.assertEqual(result['source'],'brevo_api')
+            self.assertEqual(captured['url'],'https://api.brevo.com/v3/smtp/email')
+            self.assertEqual(captured['body']['sender']['email'],'clube@example.com')
+            self.assertEqual(captured['body']['to'][0]['email'],'destino@example.com')
+            self.assertIn('Senha: SenhaInicial123!',captured['body']['textContent'])
+        finally:
+            for k,v in old.items():
+                if v is None: os.environ.pop(k,None)
+                else: os.environ[k]=v
+
 if __name__=='__main__': unittest.main()

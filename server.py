@@ -148,7 +148,92 @@ def smtp_configured(config=None):
     c=config or global_smtp_config()
     return bool(c.get('host') and c.get('from_addr'))
 
+
+def brevo_api_config():
+    return {
+        'api_key':os.environ.get('BREVO_API_KEY','').strip(),
+        'sender_email':os.environ.get('BREVO_SENDER_EMAIL','').strip(),
+        'sender_name':os.environ.get('BREVO_SENDER_NAME','Clube Fidelidade').strip(),
+        'reply_to':os.environ.get('BREVO_REPLY_TO','').strip(),
+    }
+
+def brevo_api_configured():
+    c=brevo_api_config()
+    return bool(c.get('api_key') and c.get('sender_email'))
+
+def email_configured(config=None):
+    # A API HTTPS da Brevo é o canal preferencial no Railway. SMTP fica como fallback.
+    return brevo_api_configured() or smtp_configured(config)
+
+def _brevo_payload_from_message(msg):
+    cfg=brevo_api_config()
+    to=[]
+    for addr in msg.get_all('To',[]):
+        for item in str(addr).split(','):
+            email=item.strip()
+            if email: to.append({'email':email})
+    if not to:
+        raise ValueError('email_recipient_missing')
+    text=''; html_content=''; attachments=[]
+    if msg.is_multipart():
+        for part in msg.walk():
+            ctype=part.get_content_type(); disp=part.get_content_disposition()
+            if disp=='attachment':
+                raw=part.get_payload(decode=True) or b''
+                attachments.append({'name':part.get_filename() or 'anexo','content':base64.b64encode(raw).decode('ascii')})
+            elif ctype=='text/plain' and not text:
+                try: text=part.get_content()
+                except Exception: pass
+            elif ctype=='text/html' and not html_content:
+                try: html_content=part.get_content()
+                except Exception: pass
+    else:
+        ctype=msg.get_content_type()
+        try: content=msg.get_content()
+        except Exception: content=str(msg.get_payload() or '')
+        if ctype=='text/html': html_content=content
+        else: text=content
+    payload={
+        'sender':{'name':cfg.get('sender_name') or 'Clube Fidelidade','email':cfg['sender_email']},
+        'to':to,
+        'subject':str(msg.get('Subject') or 'Clube Fidelidade'),
+    }
+    if html_content: payload['htmlContent']=html_content
+    else: payload['textContent']=text or 'Clube Fidelidade'
+    if attachments: payload['attachment']=attachments
+    if cfg.get('reply_to'): payload['replyTo']={'email':cfg['reply_to']}
+    return payload
+
+def send_email_brevo_api(msg):
+    cfg=brevo_api_config()
+    if not (cfg.get('api_key') and cfg.get('sender_email')):
+        return {'sent':False,'reason':'brevo_api_not_configured'}
+    try:
+        payload=_brevo_payload_from_message(msg)
+        req=urllib.request.Request('https://api.brevo.com/v3/smtp/email',data=json.dumps(payload,ensure_ascii=False).encode('utf-8'),method='POST',headers={
+            'api-key':cfg['api_key'],'Content-Type':'application/json','Accept':'application/json'
+        })
+        with urllib.request.urlopen(req,timeout=20) as resp:
+            data=json.loads(resp.read().decode('utf-8') or '{}')
+        return {'sent':True,'source':'brevo_api','message_id':data.get('messageId')}
+    except urllib.error.HTTPError as exc:
+        raw=exc.read().decode('utf-8',errors='replace')
+        print(f'[EMAIL] BREVO_HTTP_ERROR status={exc.code} body={raw[:500]}')
+        reason='brevo_auth_failed' if exc.code in (401,403) else ('brevo_sender_invalid' if exc.code==400 else 'brevo_api_failed')
+        return {'sent':False,'reason':reason,'status':exc.code,'source':'brevo_api'}
+    except (TimeoutError, socket.timeout):
+        print('[EMAIL] BREVO_TIMEOUT')
+        return {'sent':False,'reason':'brevo_api_timeout','source':'brevo_api'}
+    except urllib.error.URLError as exc:
+        print(f'[EMAIL] BREVO_CONNECTION_FAILED error={type(exc.reason).__name__ if getattr(exc,"reason",None) else type(exc).__name__}')
+        return {'sent':False,'reason':'brevo_api_connection_failed','source':'brevo_api'}
+    except Exception as exc:
+        print(f'[EMAIL] BREVO_SEND_FAILED error={type(exc).__name__}')
+        return {'sent':False,'reason':'brevo_api_failed','source':'brevo_api'}
+
 def send_email_message(msg, config=None):
+    if brevo_api_configured():
+        return send_email_brevo_api(msg)
     c=config or global_smtp_config()
     host=c.get('host','').strip(); from_addr=c.get('from_addr','').strip()
     if not host or not from_addr: return {'sent':False,'reason':'smtp_not_configured'}
@@ -209,7 +294,7 @@ def decode_image_data(value, max_bytes=700_000):
 
 
 def send_campaign_email(to_email, to_name, message, image_data=None, subject='Mensagem do Clube Fidelidade', smtp_config=None):
-    if not smtp_configured(smtp_config):
+    if not email_configured(smtp_config):
         return {'sent':False,'reason':'smtp_not_configured'}
     msg=EmailMessage()
     msg['Subject']=subject
@@ -223,7 +308,7 @@ def send_campaign_email(to_email, to_name, message, image_data=None, subject='Me
 
 
 def send_password_recovery_email(email, temporary_password, smtp_config=None):
-    if not smtp_configured(smtp_config):
+    if not email_configured(smtp_config):
         return {'sent':False,'reason':'smtp_not_configured'}
     login_url=os.environ.get('CLUBE_LOGIN_URL','https://clube-fidelidade-production.up.railway.app/login').strip()
     msg=EmailMessage()
@@ -239,7 +324,7 @@ def send_password_recovery_email(email, temporary_password, smtp_config=None):
 
 
 def send_attendant_welcome_email(name, email, password, client_name, smtp_config=None):
-    if not smtp_configured(smtp_config):
+    if not email_configured(smtp_config):
         return {'sent':False,'reason':'smtp_not_configured'}
     login_url=os.environ.get('CLUBE_LOGIN_URL','https://clube-fidelidade-production.up.railway.app/login').strip()
     msg=EmailMessage()
@@ -612,7 +697,7 @@ class Handler(BaseHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 u=conn.execute("SELECT id,company_id,email,role,active,campaign_id FROM users WHERE email=? AND active=1",(email,)).fetchone()
                 # Não revelamos se o endereço existe. Para atendentes cadastrados, geramos uma senha temporária
-                # e só substituímos o hash depois que o e-mail foi aceito pelo SMTP.
+                # e só substituímos o hash depois que o e-mail foi aceito pelo provedor de e-mail.
                 if u and u['role']=='attendant':
                     temporary='Clube-'+random_token(9)[:12]
                     smtp_cfg=smtp_config_for_client(conn,u['campaign_id']) if u['campaign_id'] else global_smtp_config()
@@ -872,8 +957,8 @@ class Handler(BaseHTTPRequestHandler):
                 except (TypeError,ValueError): campaign_id=0
                 cfg=smtp_config_for_client(conn,campaign_id)
                 target=normalize_email(payload.get('email') or s['email'])
-                if not target or not smtp_configured(cfg): return self.send_json({'ok':False,'error':'smtp_not_configured'},503)
-                msg=EmailMessage(); msg['Subject']='Teste SMTP • Clube Fidelidade'; msg['To']=target; msg.set_content('Configuração SMTP testada com sucesso.')
+                if not target or not email_configured(cfg): return self.send_json({'ok':False,'error':'email_provider_not_configured'},503)
+                msg=EmailMessage(); msg['Subject']='Teste de e-mail • Clube Fidelidade'; msg['To']=target; msg.set_content('Configuração SMTP testada com sucesso.')
                 result=send_email_message(msg,cfg)
                 return self.send_json({'ok':bool(result.get('sent')),'result':result},200 if result.get('sent') else 502)
             if path == '/api/manager/integration/whatsapp/embedded-complete':
@@ -971,7 +1056,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v25 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v26 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()
