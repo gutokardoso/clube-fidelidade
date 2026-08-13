@@ -284,11 +284,11 @@ def meta_exchange_code(code):
     app_id=os.environ.get('META_APP_ID','').strip(); secret=os.environ.get('META_APP_SECRET','').strip()
     if not (app_id and secret and code): raise RuntimeError('meta_embedded_signup_not_configured')
     qs=urllib.parse.urlencode({'client_id':app_id,'client_secret':secret,'code':code})
-    req=urllib.request.Request('https://graph.facebook.com/v23.0/oauth/access_token?'+qs,method='GET')
+    req=urllib.request.Request('https://graph.facebook.com/v24.0/oauth/access_token?'+qs,method='GET')
     with urllib.request.urlopen(req,timeout=20) as resp: return json.loads(resp.read().decode('utf-8') or '{}')
 
 def meta_phone_details(phone_id,token):
-    req=urllib.request.Request(f'https://graph.facebook.com/v23.0/{urllib.parse.quote(str(phone_id))}?fields=id,display_phone_number,verified_name',headers={'Authorization':'Bearer '+token})
+    req=urllib.request.Request(f'https://graph.facebook.com/v24.0/{urllib.parse.quote(str(phone_id))}?fields=id,display_phone_number,verified_name',headers={'Authorization':'Bearer '+token})
     with urllib.request.urlopen(req,timeout=20) as resp: return json.loads(resp.read().decode('utf-8') or '{}')
 
 
@@ -830,7 +830,7 @@ class Handler(BaseHTTPRequestHandler):
                 smtp_security=str(payload.get('smtp_security','starttls')).strip().lower()
                 wa_phone_id=str(payload.get('whatsapp_phone_number_id','')).strip()[:100]
                 wa_waba_id=str(payload.get('whatsapp_waba_id','')).strip()[:100]
-                wa_version=str(payload.get('whatsapp_api_version','v23.0')).strip()[:20]
+                wa_version=str(payload.get('whatsapp_api_version','v24.0')).strip()[:20]
                 wa_mode=str(payload.get('whatsapp_integration_mode',c.get('whatsapp_integration_mode') or 'manual')).strip().lower()
                 if wa_mode not in ('embedded','manual','none'): wa_mode='manual'
                 smtp_password_enc=c['smtp_password_enc']
@@ -872,7 +872,7 @@ class Handler(BaseHTTPRequestHandler):
                     exchanged=meta_exchange_code(code); token=str(exchanged.get('access_token','')).strip()
                     if not token: raise RuntimeError('meta_token_missing')
                     details=meta_phone_details(phone_id,token); token_enc=encrypt_secret(token)
-                    conn.execute("""UPDATE campaigns SET whatsapp_integration_mode='embedded',whatsapp_signup_status='connected',whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_connected_at=? WHERE id=? AND company_id=?""",(phone_id,waba_id,token_enc,os.environ.get('META_GRAPH_VERSION','v23.0'),now_iso(),campaign_id,s['company_id']))
+                    conn.execute("""UPDATE campaigns SET whatsapp_integration_mode='embedded',whatsapp_signup_status='connected',whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_connected_at=? WHERE id=? AND company_id=?""",(phone_id,waba_id,token_enc,os.environ.get('META_GRAPH_VERSION','v24.0'),now_iso(),campaign_id,s['company_id']))
                     conn.commit()
                     return self.send_json({'ok':True,'status':'connected','display_phone_number':details.get('display_phone_number'),'verified_name':details.get('verified_name')})
                 except Exception as exc: return self.send_json({'ok':False,'error':'embedded_signup_failed','detail':str(exc)[:700]},502)
@@ -955,7 +955,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v23 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v24 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()
