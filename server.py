@@ -8,6 +8,7 @@ import json
 import os
 import re
 import smtplib
+import socket
 import ssl
 import urllib.parse
 import urllib.request
@@ -171,6 +172,21 @@ def send_email_message(msg, config=None):
                 if user: smtp.login(user,smtp_password)
                 smtp.send_message(msg)
         return {'sent':True,'source':c.get('source','global')}
+    except smtplib.SMTPAuthenticationError as exc:
+        print(f'[EMAIL] AUTH_FAILED to={msg.get("To","")} code={getattr(exc,"smtp_code","")}')
+        return {'sent':False,'reason':'smtp_auth_failed','source':c.get('source','global')}
+    except smtplib.SMTPSenderRefused as exc:
+        print(f'[EMAIL] SENDER_REFUSED to={msg.get("To","")} code={getattr(exc,"smtp_code","")}')
+        return {'sent':False,'reason':'smtp_sender_refused','source':c.get('source','global')}
+    except smtplib.SMTPRecipientsRefused as exc:
+        print(f'[EMAIL] RECIPIENT_REFUSED to={msg.get("To","")}')
+        return {'sent':False,'reason':'smtp_recipient_refused','source':c.get('source','global')}
+    except (TimeoutError, socket.timeout) as exc:
+        print(f'[EMAIL] TIMEOUT to={msg.get("To","")}')
+        return {'sent':False,'reason':'smtp_timeout','source':c.get('source','global')}
+    except (ConnectionError, OSError, smtplib.SMTPConnectError) as exc:
+        print(f'[EMAIL] CONNECTION_FAILED to={msg.get("To","")} error={type(exc).__name__}')
+        return {'sent':False,'reason':'smtp_connection_failed','source':c.get('source','global')}
     except Exception as exc:
         print(f'[EMAIL] SEND_FAILED to={msg.get("To","")} error={type(exc).__name__}')
         return {'sent':False,'reason':'smtp_send_failed','source':c.get('source','global')}
@@ -955,7 +971,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v24 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v25 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()
