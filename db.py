@@ -314,6 +314,15 @@ def init_db(db_path=None, seed=True):
                 if col not in customer_cols:
                     conn.execute(f'ALTER TABLE customers ADD COLUMN {col} TEXT')
 
+        # Migração v22: onboarding WhatsApp via Meta Embedded Signup.
+        wa_signup_cols=[('whatsapp_integration_mode','TEXT'),('whatsapp_signup_status','TEXT'),('whatsapp_business_id','TEXT'),('whatsapp_connected_at','TEXT')]
+        if conn.__class__.__module__.startswith('psycopg'):
+            for col,typ in wa_signup_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS {col} {typ}')
+        else:
+            campaign_cols={r['name'] for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()}
+            for col,typ in wa_signup_cols:
+                if col not in campaign_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
+
         # Migração v21: integrações SMTP e WhatsApp isoladas por cliente.
         integration_cols = [
             ('smtp_host','TEXT'),('smtp_port','TEXT'),('smtp_user','TEXT'),('smtp_password_enc','TEXT'),

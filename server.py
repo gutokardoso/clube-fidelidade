@@ -277,6 +277,20 @@ def send_whatsapp_cloud(phone, message, config=None):
         except Exception: detail={'error':raw[:500]}
         raise RuntimeError(json.dumps(detail,ensure_ascii=False)) from exc
 
+def meta_embedded_signup_configured():
+    return bool(os.environ.get('META_APP_ID','').strip() and os.environ.get('META_APP_SECRET','').strip() and os.environ.get('META_CONFIG_ID','').strip())
+
+def meta_exchange_code(code):
+    app_id=os.environ.get('META_APP_ID','').strip(); secret=os.environ.get('META_APP_SECRET','').strip()
+    if not (app_id and secret and code): raise RuntimeError('meta_embedded_signup_not_configured')
+    qs=urllib.parse.urlencode({'client_id':app_id,'client_secret':secret,'code':code})
+    req=urllib.request.Request('https://graph.facebook.com/v23.0/oauth/access_token?'+qs,method='GET')
+    with urllib.request.urlopen(req,timeout=20) as resp: return json.loads(resp.read().decode('utf-8') or '{}')
+
+def meta_phone_details(phone_id,token):
+    req=urllib.request.Request(f'https://graph.facebook.com/v23.0/{urllib.parse.quote(str(phone_id))}?fields=id,display_phone_number,verified_name',headers={'Authorization':'Bearer '+token})
+    with urllib.request.urlopen(req,timeout=20) as resp: return json.loads(resp.read().decode('utf-8') or '{}')
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = 'ClubeFidelidade/18.0'
@@ -454,6 +468,8 @@ class Handler(BaseHTTPRequestHandler):
                 for c in campaigns:
                     c['smtp_configured']=bool(c.get('smtp_host') and c.get('smtp_from'))
                     c['whatsapp_configured']=bool(c.get('whatsapp_phone_number_id') and c.get('whatsapp_access_token_enc') and c.get('whatsapp_api_version'))
+                    c['whatsapp_signup_status']=c.get('whatsapp_signup_status') or ('connected' if c['whatsapp_configured'] else 'not_connected')
+                    c['whatsapp_integration_mode']=c.get('whatsapp_integration_mode') or 'manual'
                     c['smtp_password_enc']=None
                     c['whatsapp_access_token_enc']=None
                 staff=[rowdict(r) for r in conn.execute('''SELECT u.id,u.name,u.email,u.role,u.active,u.created_at,u.campaign_id,c.name client_name FROM users u LEFT JOIN campaigns c ON c.id=u.campaign_id WHERE u.company_id=? ORDER BY u.role,u.name''',(cid,)).fetchall()]
@@ -815,6 +831,8 @@ class Handler(BaseHTTPRequestHandler):
                 wa_phone_id=str(payload.get('whatsapp_phone_number_id','')).strip()[:100]
                 wa_waba_id=str(payload.get('whatsapp_waba_id','')).strip()[:100]
                 wa_version=str(payload.get('whatsapp_api_version','v23.0')).strip()[:20]
+                wa_mode=str(payload.get('whatsapp_integration_mode',c.get('whatsapp_integration_mode') or 'manual')).strip().lower()
+                if wa_mode not in ('embedded','manual','none'): wa_mode='manual'
                 smtp_password_enc=c['smtp_password_enc']
                 wa_token_enc=c['whatsapp_access_token_enc']
                 try:
@@ -825,10 +843,10 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     conn.execute('''UPDATE campaigns SET code=?,name=?,reward_name=?,goal=?,icon=?,logo_image=?,min_stamp_interval_sec=?,max_stamps_per_hour=?,max_stamps_per_attendant_day=?,
                         smtp_host=?,smtp_port=?,smtp_user=?,smtp_password_enc=?,smtp_from=?,smtp_from_name=?,smtp_security=?,
-                        whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?
+                        whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_integration_mode=?,whatsapp_signup_status=?
                         WHERE id=? AND company_id=?''',(code,name,reward,goal,icon,logo_image,min_interval,max_hour,max_day,
                         smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,
-                        wa_phone_id,wa_waba_id,wa_token_enc,wa_version,campaign_id,s['company_id']))
+                        wa_phone_id,wa_waba_id,wa_token_enc,wa_version,wa_mode,'connected' if (wa_phone_id and wa_token_enc) else ('awaiting_connection' if wa_mode=='embedded' else 'not_connected'),campaign_id,s['company_id']))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'campaign_update','campaign',campaign_id,details=code,ip_address=self._ip())
                 return self.send_json({'ok':True,'campaign_id':campaign_id})
@@ -842,6 +860,22 @@ class Handler(BaseHTTPRequestHandler):
                 msg=EmailMessage(); msg['Subject']='Teste SMTP • Clube Fidelidade'; msg['To']=target; msg.set_content('Configuração SMTP testada com sucesso.')
                 result=send_email_message(msg,cfg)
                 return self.send_json({'ok':bool(result.get('sent')),'result':result},200 if result.get('sent') else 502)
+            if path == '/api/manager/integration/whatsapp/embedded-complete':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                try: campaign_id=int(payload.get('campaign_id',0))
+                except (TypeError,ValueError): campaign_id=0
+                code=str(payload.get('code','')).strip(); phone_id=str(payload.get('phone_number_id','')).strip(); waba_id=str(payload.get('waba_id','')).strip()
+                if not (campaign_id and code and phone_id and waba_id): return self.send_json({'ok':False,'error':'embedded_signup_incomplete'},400)
+                c=conn.execute('SELECT id FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id'])).fetchone()
+                if not c: return self.send_json({'ok':False,'error':'client_not_found'},404)
+                try:
+                    exchanged=meta_exchange_code(code); token=str(exchanged.get('access_token','')).strip()
+                    if not token: raise RuntimeError('meta_token_missing')
+                    details=meta_phone_details(phone_id,token); token_enc=encrypt_secret(token)
+                    conn.execute("""UPDATE campaigns SET whatsapp_integration_mode='embedded',whatsapp_signup_status='connected',whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_connected_at=? WHERE id=? AND company_id=?""",(phone_id,waba_id,token_enc,os.environ.get('META_GRAPH_VERSION','v23.0'),now_iso(),campaign_id,s['company_id']))
+                    conn.commit()
+                    return self.send_json({'ok':True,'status':'connected','display_phone_number':details.get('display_phone_number'),'verified_name':details.get('verified_name')})
+                except Exception as exc: return self.send_json({'ok':False,'error':'embedded_signup_failed','detail':str(exc)[:700]},502)
             if path == '/api/manager/integration/test-whatsapp':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 try: campaign_id=int(payload.get('campaign_id',0))
@@ -921,7 +955,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v21 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v22 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()

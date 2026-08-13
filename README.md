@@ -1,6 +1,6 @@
-# Clube Fidelidade v21
+# Clube Fidelidade v22
 
-## Alterações da v21
+## Alterações da v22
 
 - Cadastro do cliente final com 5 campos obrigatórios: nome, e-mail, celular, data de nascimento e CPF.
 - Validação de formato de e-mail, celular brasileiro com DDD e CPF com dígitos verificadores.
@@ -49,7 +49,11 @@ O projeto continua usando `DATABASE_URL` para PostgreSQL e as variáveis `CLUBE_
 - Painel Taboo agora exibe, por cliente, a quantidade de **Cartões** gerados e o total líquido de **Selos**.
 
 
-## Novidades v21
+## Novidades v22
 - Ao criar um atendente, o sistema tenta enviar automaticamente um e-mail de acesso via SMTP com link, e-mail e senha inicial. Configure `CLUBE_SMTP_HOST`, `CLUBE_SMTP_PORT`, `CLUBE_SMTP_USER`, `CLUBE_SMTP_PASSWORD`, `CLUBE_SMTP_FROM` e `CLUBE_SMTP_SECURITY` no Railway.
 - A área do atendente agora lista todos os clientes finais vinculados à sua área e permite editar os cinco dados cadastrais ou remover o cartão/cliente daquela área.
 - `CLUBE_LOGIN_URL` permite alterar o link enviado no e-mail; o padrão é `https://clube-fidelidade-production.up.railway.app/login`.
+
+
+## v22 — WhatsApp Embedded Signup
+Configure META_APP_ID, META_APP_SECRET e META_CONFIG_ID uma única vez no Railway. Depois use Editar cliente > WhatsApp > Conectar automaticamente pela Meta > CONECTAR WHATSAPP.
