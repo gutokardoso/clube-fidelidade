@@ -314,6 +314,21 @@ def init_db(db_path=None, seed=True):
                 if col not in customer_cols:
                     conn.execute(f'ALTER TABLE customers ADD COLUMN {col} TEXT')
 
+        # Migração v21: integrações SMTP e WhatsApp isoladas por cliente.
+        integration_cols = [
+            ('smtp_host','TEXT'),('smtp_port','TEXT'),('smtp_user','TEXT'),('smtp_password_enc','TEXT'),
+            ('smtp_from','TEXT'),('smtp_from_name','TEXT'),('smtp_security','TEXT'),
+            ('whatsapp_phone_number_id','TEXT'),('whatsapp_waba_id','TEXT'),('whatsapp_access_token_enc','TEXT'),
+            ('whatsapp_api_version','TEXT')
+        ]
+        if _is_postgres(target):
+            for col,typ in integration_cols:
+                conn.execute(f'ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS {col} {typ}')
+        else:
+            campaign_cols={r['name'] for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()}
+            for col,typ in integration_cols:
+                if col not in campaign_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
+
         # Migração v10: todo atendente pode ser vinculado a um cliente (campaign_id).
         if _is_postgres(target):
             conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS campaign_id BIGINT REFERENCES campaigns(id) ON DELETE SET NULL')

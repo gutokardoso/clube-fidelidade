@@ -18,6 +18,8 @@ from http import cookies
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from email.message import EmailMessage
+from cryptography.fernet import Fernet, InvalidToken
+import hashlib
 
 import qrcode
 
@@ -88,23 +90,73 @@ def normalize_birth_date(value):
 
 
 
-def smtp_configured():
-    return bool(os.environ.get('CLUBE_SMTP_HOST','').strip() and os.environ.get('CLUBE_SMTP_FROM','').strip())
 
+def _secret_box():
+    master=os.environ.get('CLUBE_ENCRYPTION_KEY','').strip()
+    if not master:
+        return None
+    key=base64.urlsafe_b64encode(hashlib.sha256(master.encode('utf-8')).digest())
+    return Fernet(key)
 
-def send_email_message(msg):
-    host=os.environ.get('CLUBE_SMTP_HOST','').strip()
-    from_addr=os.environ.get('CLUBE_SMTP_FROM','').strip()
-    if not host or not from_addr:
-        return {'sent':False,'reason':'smtp_not_configured'}
-    try:
-        port=int(os.environ.get('CLUBE_SMTP_PORT','587'))
-    except ValueError:
-        port=587
-    user=os.environ.get('CLUBE_SMTP_USER','').strip()
-    smtp_password=os.environ.get('CLUBE_SMTP_PASSWORD','')
-    security=os.environ.get('CLUBE_SMTP_SECURITY','starttls').strip().lower()
-    msg['From']=from_addr
+def encrypt_secret(value):
+    value=str(value or '')
+    if not value: return None
+    box=_secret_box()
+    if not box: raise RuntimeError('encryption_key_not_configured')
+    return box.encrypt(value.encode('utf-8')).decode('ascii')
+
+def decrypt_secret(value):
+    if not value: return ''
+    box=_secret_box()
+    if not box: return ''
+    try: return box.decrypt(str(value).encode('ascii')).decode('utf-8')
+    except (InvalidToken,ValueError): return ''
+
+def client_integrations(conn, campaign_id):
+    row=conn.execute("""SELECT id,smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,
+        whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_access_token_enc,whatsapp_api_version
+        FROM campaigns WHERE id=?""",(campaign_id,)).fetchone()
+    if not row: return None
+    x=rowdict(row)
+    x['smtp_password']=decrypt_secret(x.pop('smtp_password_enc',None))
+    x['whatsapp_access_token']=decrypt_secret(x.pop('whatsapp_access_token_enc',None))
+    return x
+
+def global_smtp_config():
+    return {
+        'host':os.environ.get('CLUBE_SMTP_HOST','').strip(),
+        'port':os.environ.get('CLUBE_SMTP_PORT','587').strip(),
+        'user':os.environ.get('CLUBE_SMTP_USER','').strip(),
+        'password':os.environ.get('CLUBE_SMTP_PASSWORD',''),
+        'from_addr':os.environ.get('CLUBE_SMTP_FROM','').strip(),
+        'from_name':os.environ.get('CLUBE_SMTP_FROM_NAME','Clube Fidelidade').strip(),
+        'security':os.environ.get('CLUBE_SMTP_SECURITY','starttls').strip().lower(),
+        'source':'global'
+    }
+
+def smtp_config_for_client(conn=None,campaign_id=None):
+    if conn is not None and campaign_id:
+        x=client_integrations(conn,campaign_id)
+        if x and x.get('smtp_host') and x.get('smtp_from'):
+            return {'host':x['smtp_host'],'port':str(x.get('smtp_port') or 587),'user':x.get('smtp_user') or '',
+                    'password':x.get('smtp_password') or '','from_addr':x['smtp_from'],'from_name':x.get('smtp_from_name') or '',
+                    'security':x.get('smtp_security') or 'starttls','source':'client'}
+    return global_smtp_config()
+
+def smtp_configured(config=None):
+    c=config or global_smtp_config()
+    return bool(c.get('host') and c.get('from_addr'))
+
+def send_email_message(msg, config=None):
+    c=config or global_smtp_config()
+    host=c.get('host','').strip(); from_addr=c.get('from_addr','').strip()
+    if not host or not from_addr: return {'sent':False,'reason':'smtp_not_configured'}
+    try: port=int(c.get('port') or 587)
+    except (ValueError,TypeError): port=587
+    user=c.get('user','').strip(); smtp_password=c.get('password','')
+    security=(c.get('security') or 'starttls').strip().lower()
+    from_name=(c.get('from_name') or '').strip()
+    msg['From']=f'{from_name} <{from_addr}>' if from_name else from_addr
     context=ssl.create_default_context()
     try:
         if security=='ssl':
@@ -115,15 +167,13 @@ def send_email_message(msg):
             with smtplib.SMTP(host,port,timeout=15) as smtp:
                 smtp.ehlo()
                 if security!='none':
-                    smtp.starttls(context=context)
-                    smtp.ehlo()
+                    smtp.starttls(context=context); smtp.ehlo()
                 if user: smtp.login(user,smtp_password)
                 smtp.send_message(msg)
-        return {'sent':True}
+        return {'sent':True,'source':c.get('source','global')}
     except Exception as exc:
         print(f'[EMAIL] SEND_FAILED to={msg.get("To","")} error={type(exc).__name__}')
-        return {'sent':False,'reason':'smtp_send_failed'}
-
+        return {'sent':False,'reason':'smtp_send_failed','source':c.get('source','global')}
 
 def decode_image_data(value, max_bytes=700_000):
     if not value:
@@ -142,8 +192,8 @@ def decode_image_data(value, max_bytes=700_000):
     return raw, subtype
 
 
-def send_campaign_email(to_email, to_name, message, image_data=None, subject='Mensagem do Clube Fidelidade'):
-    if not smtp_configured():
+def send_campaign_email(to_email, to_name, message, image_data=None, subject='Mensagem do Clube Fidelidade', smtp_config=None):
+    if not smtp_configured(smtp_config):
         return {'sent':False,'reason':'smtp_not_configured'}
     msg=EmailMessage()
     msg['Subject']=subject
@@ -153,11 +203,11 @@ def send_campaign_email(to_email, to_name, message, image_data=None, subject='Me
     if image_data:
         raw,subtype=decode_image_data(image_data)
         msg.add_attachment(raw,maintype='image',subtype=subtype,filename='clube-fidelidade.'+('jpg' if subtype=='jpeg' else subtype))
-    return send_email_message(msg)
+    return send_email_message(msg, smtp_config)
 
 
-def send_password_recovery_email(email, temporary_password):
-    if not smtp_configured():
+def send_password_recovery_email(email, temporary_password, smtp_config=None):
+    if not smtp_configured(smtp_config):
         return {'sent':False,'reason':'smtp_not_configured'}
     login_url=os.environ.get('CLUBE_LOGIN_URL','https://clube-fidelidade-production.up.railway.app/login').strip()
     msg=EmailMessage()
@@ -169,11 +219,11 @@ def send_password_recovery_email(email, temporary_password):
         f'Acesse: {login_url}\n\n'
         'Depois de entrar, altere a senha no painel.'
     )
-    return send_email_message(msg)
+    return send_email_message(msg, smtp_config)
 
 
-def send_attendant_welcome_email(name, email, password, client_name):
-    if not smtp_configured():
+def send_attendant_welcome_email(name, email, password, client_name, smtp_config=None):
+    if not smtp_configured(smtp_config):
         return {'sent':False,'reason':'smtp_not_configured'}
     login_url=os.environ.get('CLUBE_LOGIN_URL','https://clube-fidelidade-production.up.railway.app/login').strip()
     msg=EmailMessage()
@@ -186,7 +236,7 @@ def send_attendant_welcome_email(name, email, password, client_name):
         f'Senha: {password}\n'
         f'Cliente: {client_name}\n'
     )
-    result=send_email_message(msg)
+    result=send_email_message(msg, smtp_config)
     if not result.get('sent'):
         print(f'[EMAIL] ATTENDANT_WELCOME_FAILED email={email} reason={result.get("reason")}')
     return result
@@ -196,62 +246,36 @@ def whatsapp_link(phone, message):
     return 'https://wa.me/' + str(phone) + '?text=' + urllib.parse.quote(str(message), safe='')
 
 
-def whatsapp_cloud_configured():
-    return all(os.environ.get(k, '').strip() for k in ('WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_API_VERSION'))
+def whatsapp_config_for_client(conn=None,campaign_id=None):
+    if conn is not None and campaign_id:
+        x=client_integrations(conn,campaign_id)
+        if x and x.get('whatsapp_phone_number_id') and x.get('whatsapp_access_token') and x.get('whatsapp_api_version'):
+            return {'phone_number_id':x['whatsapp_phone_number_id'],'waba_id':x.get('whatsapp_waba_id') or '',
+                    'token':x['whatsapp_access_token'],'version':x['whatsapp_api_version'],'source':'client'}
+    return {'phone_number_id':os.environ.get('WHATSAPP_PHONE_NUMBER_ID','').strip(),
+            'waba_id':os.environ.get('WHATSAPP_WABA_ID','').strip(),
+            'token':os.environ.get('WHATSAPP_ACCESS_TOKEN','').strip(),
+            'version':os.environ.get('WHATSAPP_API_VERSION','').strip(),'source':'global'}
 
+def whatsapp_cloud_configured(config=None):
+    c=config or whatsapp_config_for_client()
+    return all(c.get(k,'') for k in ('token','phone_number_id','version'))
 
-def send_whatsapp_cloud(phone, message):
-    version = os.environ.get('WHATSAPP_API_VERSION', '').strip()
-    phone_number_id = os.environ.get('WHATSAPP_PHONE_NUMBER_ID', '').strip()
-    token = os.environ.get('WHATSAPP_ACCESS_TOKEN', '').strip()
-    if not (version and phone_number_id and token):
-        raise RuntimeError('whatsapp_not_configured')
-    url = f'https://graph.facebook.com/{urllib.parse.quote(version)}/{urllib.parse.quote(phone_number_id)}/messages'
-    body = json.dumps({
-        'messaging_product': 'whatsapp',
-        'recipient_type': 'individual',
-        'to': str(phone),
-        'type': 'text',
-        'text': {'preview_url': False, 'body': str(message)},
-    }).encode('utf-8')
-    req = urllib.request.Request(url, data=body, method='POST', headers={
-        'Authorization': 'Bearer ' + token,
-        'Content-Type': 'application/json',
-    })
+def send_whatsapp_cloud(phone, message, config=None):
+    c=config or whatsapp_config_for_client()
+    version=c.get('version',''); phone_number_id=c.get('phone_number_id',''); token=c.get('token','')
+    if not (version and phone_number_id and token): raise RuntimeError('whatsapp_not_configured')
+    url=f'https://graph.facebook.com/{urllib.parse.quote(version)}/{urllib.parse.quote(phone_number_id)}/messages'
+    body=json.dumps({'messaging_product':'whatsapp','recipient_type':'individual','to':str(phone),'type':'text',
+        'text':{'preview_url':False,'body':str(message)}}).encode('utf-8')
+    req=urllib.request.Request(url,data=body,method='POST',headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode('utf-8') or '{}')
+        with urllib.request.urlopen(req,timeout=15) as resp: return json.loads(resp.read().decode('utf-8') or '{}')
     except urllib.error.HTTPError as exc:
-        raw = exc.read().decode('utf-8', errors='replace')
-        try:
-            detail = json.loads(raw)
-        except Exception:
-            detail = {'error': raw[:500]}
-        raise RuntimeError(json.dumps(detail, ensure_ascii=False)) from exc
-
-
-def validate_logo_data(value):
-    """Aceita apenas PNG/JPEG/WEBP em data URL, até 500 KB decodificados."""
-    value = str(value or '').strip()
-    if not value:
-        return None
-    m = re.fullmatch(r'data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/=\r\n]+)', value, re.I)
-    if not m:
-        raise ValueError('invalid_logo_format')
-    try:
-        raw = base64.b64decode(m.group(2), validate=True)
-    except (binascii.Error, ValueError):
-        raise ValueError('invalid_logo_format')
-    if len(raw) > 500_000:
-        raise ValueError('logo_too_large')
-    mime = m.group(1).lower()
-    # Assinaturas mínimas para impedir conteúdo arbitrário disfarçado de imagem.
-    valid = (mime == 'png' and raw.startswith(b'\x89PNG\r\n\x1a\n')) or \
-            (mime == 'jpeg' and raw.startswith(b'\xff\xd8\xff')) or \
-            (mime == 'webp' and raw.startswith(b'RIFF') and raw[8:12] == b'WEBP')
-    if not valid:
-        raise ValueError('invalid_logo_format')
-    return f'data:image/{mime};base64,' + base64.b64encode(raw).decode('ascii')
+        raw=exc.read().decode('utf-8',errors='replace')
+        try: detail=json.loads(raw)
+        except Exception: detail={'error':raw[:500]}
+        raise RuntimeError(json.dumps(detail,ensure_ascii=False)) from exc
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -427,6 +451,11 @@ class Handler(BaseHTTPRequestHandler):
                     (SELECT COALESCE(SUM(CASE WHEN t.type='stamp' THEN t.value WHEN t.type='adjustment' THEN t.value ELSE 0 END),0)
                        FROM transactions t JOIN memberships m2 ON m2.id=t.membership_id WHERE m2.campaign_id=c.id) stamp_count
                     FROM campaigns c WHERE c.company_id=? ORDER BY c.id DESC""",(cid,)).fetchall()]
+                for c in campaigns:
+                    c['smtp_configured']=bool(c.get('smtp_host') and c.get('smtp_from'))
+                    c['whatsapp_configured']=bool(c.get('whatsapp_phone_number_id') and c.get('whatsapp_access_token_enc') and c.get('whatsapp_api_version'))
+                    c['smtp_password_enc']=None
+                    c['whatsapp_access_token_enc']=None
                 staff=[rowdict(r) for r in conn.execute('''SELECT u.id,u.name,u.email,u.role,u.active,u.created_at,u.campaign_id,c.name client_name FROM users u LEFT JOIN campaigns c ON c.id=u.campaign_id WHERE u.company_id=? ORDER BY u.role,u.name''',(cid,)).fetchall()]
                 return self.send_json({'ok':True,'metrics':metrics,'campaigns':campaigns,'staff':staff})
         if path == '/api/attendant/recent':
@@ -449,7 +478,7 @@ class Handler(BaseHTTPRequestHandler):
                 month=datetime.now(ZoneInfo('America/Sao_Paulo')).month
                 birthdays=[c for c in customers if c.get('birth_date') and len(c['birth_date'])>=10 and int(c['birth_date'][5:7])==month]
                 birthdays.sort(key=lambda c: (int(c['birth_date'][8:10]), c['name'].lower()))
-                return self.send_json({'ok':True,'customers':customers,'birthdays':birthdays,'month':month,'whatsapp_cloud':whatsapp_cloud_configured()})
+                return self.send_json({'ok':True,'customers':customers,'birthdays':birthdays,'month':month,'whatsapp_cloud':whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id']))})
         if path == '/api/attendant/lookup':
             token=(qs.get('token') or [''])[0].strip()
             if token.startswith('CLUBE:'): token=token[6:]
@@ -549,12 +578,13 @@ class Handler(BaseHTTPRequestHandler):
             if not email:
                 return self.send_json({'ok':False,'error':'invalid_email'},400)
             with connect(DB_PATH) as conn:
-                u=conn.execute("SELECT id,company_id,email,role,active FROM users WHERE email=? AND active=1",(email,)).fetchone()
+                u=conn.execute("SELECT id,company_id,email,role,active,campaign_id FROM users WHERE email=? AND active=1",(email,)).fetchone()
                 # Não revelamos se o endereço existe. Para atendentes cadastrados, geramos uma senha temporária
                 # e só substituímos o hash depois que o e-mail foi aceito pelo SMTP.
                 if u and u['role']=='attendant':
                     temporary='Clube-'+random_token(9)[:12]
-                    result=send_password_recovery_email(email,temporary)
+                    smtp_cfg=smtp_config_for_client(conn,u['campaign_id']) if u['campaign_id'] else global_smtp_config()
+                    result=send_password_recovery_email(email,temporary,smtp_cfg)
                     if not result.get('sent'):
                         return self.send_json({'ok':False,'error':result.get('reason','email_send_failed')},503)
                     conn.execute('UPDATE users SET password_hash=? WHERE id=?',(hash_password(temporary),u['id']))
@@ -628,13 +658,14 @@ class Handler(BaseHTTPRequestHandler):
                     rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.phone FROM customers cu JOIN memberships m ON m.customer_id=cu.id
                         WHERE m.campaign_id=? AND cu.id=? AND cu.phone IS NOT NULL AND cu.phone<>?''',(s['campaign_id'],customer_id,'')).fetchall()
                 if not rows: return self.send_json({'ok':False,'error':'no_recipients'},404)
-                cloud=whatsapp_cloud_configured()
+                wa_cfg=whatsapp_config_for_client(conn,s['campaign_id'])
+                cloud=whatsapp_cloud_configured(wa_cfg)
                 results=[]
                 for r in rows:
                     item={'customer_id':r['id'],'name':r['name'],'phone':r['phone'],'manual_url':whatsapp_link(r['phone'],message)}
                     if cloud:
                         try:
-                            response=send_whatsapp_cloud(r['phone'],message)
+                            response=send_whatsapp_cloud(r['phone'],message,wa_cfg)
                             item['sent']=True
                             item['message_id']=((response.get('messages') or [{}])[0]).get('id')
                             audit(conn,s['company_id'],s['user_id'],'whatsapp_send','customer',r['id'],details='cloud_api',ip_address=self._ip())
@@ -645,11 +676,12 @@ class Handler(BaseHTTPRequestHandler):
                         item['sent']=False
                         item['manual']=True
                     results.append(item)
-                return self.send_json({'ok':True,'cloud_api':cloud,'results':results,'sent_count':sum(1 for x in results if x.get('sent'))})
+                return self.send_json({'ok':True,'cloud_api':cloud,'integration_source':wa_cfg.get('source'),'results':results,'sent_count':sum(1 for x in results if x.get('sent'))})
             if path == '/api/attendant/email':
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                if not smtp_configured(): return self.send_json({'ok':False,'error':'smtp_not_configured'},503)
+                smtp_cfg=smtp_config_for_client(conn,s['campaign_id'])
+                if not smtp_configured(smtp_cfg): return self.send_json({'ok':False,'error':'smtp_not_configured'},503)
                 recipient=str(payload.get('recipient','')).strip()
                 message=str(payload.get('message','')).strip()
                 image_data=payload.get('image_data')
@@ -670,7 +702,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not rows: return self.send_json({'ok':False,'error':'no_recipients'},404)
                 results=[]
                 for r in rows:
-                    result=send_campaign_email(r['email'],r['name'],message,image_data,subject=f'Clube Fidelidade • {s["client_name"] or "Mensagem"}')
+                    result=send_campaign_email(r['email'],r['name'],message,image_data,subject=f'Clube Fidelidade • {s["client_name"] or "Mensagem"}',smtp_config=smtp_cfg)
                     results.append({'customer_id':r['id'],'name':r['name'],'email':r['email'],'sent':bool(result.get('sent')),'error':result.get('reason')})
                     audit(conn,s['company_id'],s['user_id'],'email_send','customer',r['id'],details='sent' if result.get('sent') else result.get('reason','failed'),ip_address=self._ip())
                 return self.send_json({'ok':True,'results':results,'sent_count':sum(1 for x in results if x.get('sent'))})
@@ -773,11 +805,53 @@ class Handler(BaseHTTPRequestHandler):
                 if payload.get('logo_image'):
                     try: logo_image=validate_logo_data(payload.get('logo_image'))
                     except ValueError as exc: return self.send_json({'ok':False,'error':str(exc)},400)
+                # Integrações por cliente. Segredos vazios preservam os valores já salvos.
+                smtp_host=str(payload.get('smtp_host','')).strip()[:200]
+                smtp_port=str(payload.get('smtp_port','587')).strip()[:8] or '587'
+                smtp_user=str(payload.get('smtp_user','')).strip()[:200]
+                smtp_from=str(payload.get('smtp_from','')).strip()[:200]
+                smtp_from_name=str(payload.get('smtp_from_name','')).strip()[:100]
+                smtp_security=str(payload.get('smtp_security','starttls')).strip().lower()
+                wa_phone_id=str(payload.get('whatsapp_phone_number_id','')).strip()[:100]
+                wa_waba_id=str(payload.get('whatsapp_waba_id','')).strip()[:100]
+                wa_version=str(payload.get('whatsapp_api_version','v23.0')).strip()[:20]
+                smtp_password_enc=c['smtp_password_enc']
+                wa_token_enc=c['whatsapp_access_token_enc']
                 try:
-                    conn.execute('''UPDATE campaigns SET code=?,name=?,reward_name=?,goal=?,icon=?,logo_image=?,min_stamp_interval_sec=?,max_stamps_per_hour=?,max_stamps_per_attendant_day=? WHERE id=? AND company_id=?''',(code,name,reward,goal,icon,logo_image,min_interval,max_hour,max_day,campaign_id,s['company_id']))
+                    if payload.get('smtp_password'): smtp_password_enc=encrypt_secret(payload.get('smtp_password'))
+                    if payload.get('whatsapp_access_token'): wa_token_enc=encrypt_secret(payload.get('whatsapp_access_token'))
+                except RuntimeError as exc:
+                    return self.send_json({'ok':False,'error':str(exc)},503)
+                try:
+                    conn.execute('''UPDATE campaigns SET code=?,name=?,reward_name=?,goal=?,icon=?,logo_image=?,min_stamp_interval_sec=?,max_stamps_per_hour=?,max_stamps_per_attendant_day=?,
+                        smtp_host=?,smtp_port=?,smtp_user=?,smtp_password_enc=?,smtp_from=?,smtp_from_name=?,smtp_security=?,
+                        whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?
+                        WHERE id=? AND company_id=?''',(code,name,reward,goal,icon,logo_image,min_interval,max_hour,max_day,
+                        smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,
+                        wa_phone_id,wa_waba_id,wa_token_enc,wa_version,campaign_id,s['company_id']))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'campaign_update','campaign',campaign_id,details=code,ip_address=self._ip())
                 return self.send_json({'ok':True,'campaign_id':campaign_id})
+            if path == '/api/manager/integration/test-email':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                try: campaign_id=int(payload.get('campaign_id',0))
+                except (TypeError,ValueError): campaign_id=0
+                cfg=smtp_config_for_client(conn,campaign_id)
+                target=normalize_email(payload.get('email') or s['email'])
+                if not target or not smtp_configured(cfg): return self.send_json({'ok':False,'error':'smtp_not_configured'},503)
+                msg=EmailMessage(); msg['Subject']='Teste SMTP • Clube Fidelidade'; msg['To']=target; msg.set_content('Configuração SMTP testada com sucesso.')
+                result=send_email_message(msg,cfg)
+                return self.send_json({'ok':bool(result.get('sent')),'result':result},200 if result.get('sent') else 502)
+            if path == '/api/manager/integration/test-whatsapp':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                try: campaign_id=int(payload.get('campaign_id',0))
+                except (TypeError,ValueError): campaign_id=0
+                phone=normalize_phone(payload.get('phone'))
+                cfg=whatsapp_config_for_client(conn,campaign_id)
+                if not phone or not whatsapp_cloud_configured(cfg): return self.send_json({'ok':False,'error':'whatsapp_not_configured'},503)
+                try: response=send_whatsapp_cloud(phone,'Teste de integração • Clube Fidelidade',cfg)
+                except Exception as exc: return self.send_json({'ok':False,'error':'whatsapp_test_failed','detail':str(exc)[:500]},502)
+                return self.send_json({'ok':True,'message_id':((response.get('messages') or [{}])[0]).get('id')})
             if path == '/api/manager/staff':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 name=str(payload.get('name','')).strip()[:80]; email=str(payload.get('email','')).lower().strip()[:120]; password=str(payload.get('password','')).strip()
@@ -793,7 +867,8 @@ class Handler(BaseHTTPRequestHandler):
                     new_id=insert_id(conn,'INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,created_at) VALUES(?,?,?,?,?,?,?)',(s['company_id'],name,email,hash_password(password),'attendant',campaign_id,now_ts()))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'email_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'staff_create','user',new_id,details=f'{email}:attendant:client={campaign_id}',ip_address=self._ip())
-                email_result=send_attendant_welcome_email(name,email,password,client['name'])
+                smtp_cfg=smtp_config_for_client(conn,campaign_id)
+                email_result=send_attendant_welcome_email(name,email,password,client['name'],smtp_cfg)
                 audit(conn,s['company_id'],s['user_id'],'staff_welcome_email','user',new_id,details='sent' if email_result.get('sent') else email_result.get('reason','failed'),ip_address=self._ip())
                 return self.send_json({'ok':True,'user_id':new_id,'client_name':client['name'],'welcome_email':email_result})
             if path == '/api/manager/campaign/delete':
@@ -846,7 +921,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade v20 em http://{args.host}:{args.port}')
+    print(f'Clube Fidelidade v21 em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()
