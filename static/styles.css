@@ -63,3 +63,7 @@ textarea{width:100%;padding:13px 14px;border:1px solid #d9ccc4;border-radius:12p
 .stat-card{background:rgba(255,255,255,.7);border:1px solid rgba(0,0,0,.08);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:7px}
 .stat-card strong{font-size:24px}
 .automation-row{border:1px solid rgba(0,0,0,.09);border-radius:14px;padding:14px;margin:12px 0;background:rgba(255,255,255,.55)}
+
+/* v34: leitura contínua do consentimento e privacidade recolhida no cartão */
+.privacy-consent-line{display:grid!important;grid-template-columns:auto minmax(0,1fr);column-gap:10px;align-items:start;line-height:1.45}.privacy-consent-line input{margin-top:4px!important}.privacy-consent-line span{display:block;min-width:0}.privacy-consent-line a{display:inline;text-decoration:underline}
+.privacy-link-wrap{margin-top:16px;text-align:center}.privacy-link{appearance:none;border:0;background:transparent;color:var(--accent);font:inherit;font-weight:800;text-decoration:underline;cursor:pointer;padding:8px 4px}.privacy-link:hover{opacity:.78}
