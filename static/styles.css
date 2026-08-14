@@ -75,3 +75,7 @@ textarea{width:100%;padding:13px 14px;border:1px solid #d9ccc4;border-radius:12p
 .account-popover-card{width:min(460px,calc(100vw - 32px));background:#fff;border:1px solid rgba(0,0,0,.10);border-radius:18px;padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.18)}
 .staff-edit-box{margin-top:18px;padding:16px;border:1px solid rgba(0,0,0,.10);border-radius:14px;background:rgba(255,255,255,.55)}
 @media(max-width:640px){.account-popover{padding:76px 14px 14px}.topbar .actions{gap:8px}.top-link-btn{font-size:14px}}
+
+/* v36: cartão do usuário com borda branca nos selos. */
+.wallet-stamps .stamp,.wallet-stamps .stamp.on{border-color:#fff}
+.account-popover-card-wide{width:min(900px,calc(100vw - 32px));max-height:calc(100vh - 112px);overflow:auto}

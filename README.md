@@ -1,8 +1,8 @@
-# Clube Fidelidade v35
+# Clube Fidelidade v36
 
 Versão multi-cliente com antifraude, QR temporário, fila de mensagens, automações, dashboard, LGPD, perfis Taboo/Administrador do cliente/Atendente e integração configurável com Apple Wallet e Google Wallet.
 
-## Novidades da v35
+## Novidades da v36
 - Apple Wallet e Google Wallet: geração real de passe quando as credenciais oficiais estiverem configuradas; atualizações são disparadas após selo, remoção e resgate.
 - QR temporário: o QR exibido no cartão web é renovado automaticamente e expira. O código textual continua disponível para contingência manual.
 - Antifraude: remoção de selo exige motivo, registrado no histórico e na auditoria.
