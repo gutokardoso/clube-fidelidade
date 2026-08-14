@@ -36,7 +36,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v34'
+VERSION='v35'
 
 
 def jdump(obj):
@@ -1297,6 +1297,22 @@ class Handler(BaseHTTPRequestHandler):
                 c=conn.execute('SELECT name FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone(); q=None
                 if email_configured(global_email_config()):q=enqueue_message(conn,None,'attendant_welcome',email,{'name':name,'password':password,'client_name':c['name']})
                 audit(conn,s['company_id'],s['user_id'],'client_admin_staff_create','user',new_id,details=email,ip_address=self._ip()); return self.send_json({'ok':True,'user_id':new_id,'queue_id':q})
+            if path == '/api/client-admin/staff/update':
+                if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                uid=int(payload.get('user_id') or 0); name=str(payload.get('name','')).strip()[:80]; email=str(payload.get('email','')).lower().strip()[:120]; password=str(payload.get('password',''))
+                if uid==int(s['user_id']):return self.send_json({'ok':False,'error':'cannot_edit_self'},400)
+                if not name or '@' not in email or (password and len(password)<10):return self.send_json({'ok':False,'error':'invalid_staff'},400)
+                with db_conn() as conn:
+                    u=conn.execute("SELECT id FROM users WHERE id=? AND campaign_id=? AND role='attendant'",(uid,s['campaign_id'])).fetchone()
+                    if not u:return self.send_json({'ok':False,'error':'staff_not_found'},404)
+                    duplicate=conn.execute("SELECT id FROM users WHERE lower(email)=lower(?) AND id<>?",(email,uid)).fetchone()
+                    if duplicate:return self.send_json({'ok':False,'error':'email_exists'},409)
+                    if password: conn.execute("UPDATE users SET name=?,email=?,password_hash=? WHERE id=?",(name,email,hash_password(password),uid))
+                    else: conn.execute("UPDATE users SET name=?,email=? WHERE id=?",(name,email,uid))
+                    conn.commit()
+                audit('client_admin_staff_update',s,{'user_id':uid,'name':name,'email':email})
+                return self.send_json({'ok':True})
             if path == '/api/client-admin/staff/delete':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 try: uid=int(payload.get('user_id',0))
