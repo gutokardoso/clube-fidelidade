@@ -79,3 +79,7 @@ textarea{width:100%;padding:13px 14px;border:1px solid #d9ccc4;border-radius:12p
 /* v36: cartão do usuário com borda branca nos selos. */
 .wallet-stamps .stamp,.wallet-stamps .stamp.on{border-color:#fff}
 .account-popover-card-wide{width:min(900px,calc(100vw - 32px));max-height:calc(100vh - 112px);overflow:auto}
+
+.timeline{display:grid;gap:8px}.timeline-item{display:grid;border-left:3px solid var(--accent);padding:10px 12px;background:rgba(255,255,255,.55)}.integration-badges{display:flex;gap:4px;flex-wrap:wrap;margin-top:5px}.status-pill{font-size:10px;padding:3px 6px;border-radius:999px}.status-pill.ok{background:#dff3e3;color:#1f6b2a}.status-pill.off{background:#eee;color:#777}.landing-features{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:24px}.feature-card,.landing-copy{background:rgba(255,255,255,.8);border:1px solid rgba(0,0,0,.08);border-radius:16px;padding:18px}.landing-copy{margin-top:14px}@media(max-width:760px){.landing-features{grid-template-columns:1fr 1fr}}
+
+.template-row,.notification-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(0,0,0,.08)}.template-row>div{display:grid}.template-row small,.notification-row span{color:var(--muted)}

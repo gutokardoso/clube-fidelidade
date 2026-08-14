@@ -19,6 +19,7 @@ from http import cookies
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from email.message import EmailMessage
+from io import BytesIO
 from cryptography.fernet import Fernet, InvalidToken
 import hashlib
 import threading
@@ -36,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v36'
+VERSION='v37'
 
 
 def jdump(obj):
@@ -835,6 +836,65 @@ class Handler(BaseHTTPRequestHandler):
                 with connect(DB_PATH) as conn:
                     rows=conn.execute('''SELECT m.public_id FROM wallet_registrations wr JOIN memberships m ON m.id=wr.membership_id WHERE wr.device_library_id=?''',(device,)).fetchall()
                 return self.send_json({'serialNumbers':[r['public_id'] for r in rows],'lastUpdated':str(now_ts())})
+        if path == '/api/attendant/customer/history':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                try: customer_id=int((qs.get('customer_id') or ['0'])[0])
+                except: customer_id=0
+                row=conn.execute("SELECT cu.id,cu.name,m.id membership_id,m.public_id,m.progress,m.rewards_available,c.name campaign_name,c.goal,c.reward_name FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE cu.id=? AND m.campaign_id=?",(customer_id,sess['campaign_id'])).fetchone()
+                if not row:return self.send_json({'ok':False,'error':'customer_not_found'},404)
+                hist=[rowdict(x) for x in conn.execute("SELECT t.type,t.value,t.previous_progress,t.new_progress,t.rewards_delta,t.note,t.created_at,u.name user_name FROM transactions t LEFT JOIN users u ON u.id=t.user_id WHERE t.membership_id=? ORDER BY t.created_at DESC LIMIT 300",(row['membership_id'],)).fetchall()]
+                return self.send_json({'ok':True,'customer':rowdict(row),'history':hist})
+        if path == '/api/admin/report.csv':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                rows=conn.execute("SELECT cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,m.public_id,m.progress,m.rewards_available,m.status FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? ORDER BY cu.name",(sess['campaign_id'],)).fetchall()
+                import csv,io
+                b=io.StringIO();w=csv.writer(b);w.writerow(['Nome','E-mail','Celular','Nascimento','CPF','Código','Selos','Recompensas','Status'])
+                [w.writerow([r['name'],r['email'],r['phone'],r['birth_date'],r['cpf'],'CLUBE:'+r['public_id'],r['progress'],r['rewards_available'],r['status']]) for r in rows]
+                return self.send_bytes(b.getvalue().encode('utf-8-sig'),'text/csv; charset=utf-8',200,{'Content-Disposition':'attachment; filename=relatorio-clientes.csv'})
+        if path == '/api/manager/report.csv':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'manager')
+                if not sess:return
+                rows=conn.execute("SELECT c.name empresa,cu.name cliente,cu.email,cu.phone,m.public_id,m.progress,m.rewards_available,m.status FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? ORDER BY c.name,cu.name",(sess['company_id'],)).fetchall()
+                import csv,io
+                b=io.StringIO();w=csv.writer(b);w.writerow(['Empresa','Cliente','E-mail','Celular','Código','Selos','Recompensas','Status'])
+                [w.writerow([r['empresa'],r['cliente'],r['email'],r['phone'],'CLUBE:'+r['public_id'],r['progress'],r['rewards_available'],r['status']]) for r in rows]
+                return self.send_bytes(b.getvalue().encode('utf-8-sig'),'text/csv; charset=utf-8',200,{'Content-Disposition':'attachment; filename=relatorio-geral.csv'})
+        if path == '/api/manager/join-qr':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'manager')
+                if not sess:return
+                try: cid=int((qs.get('campaign_id') or ['0'])[0])
+                except: cid=0
+                c=conn.execute('SELECT code FROM campaigns WHERE id=? AND company_id=?',(cid,sess['company_id'])).fetchone()
+                if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                base=(os.environ.get('CLUBE_PUBLIC_URL') or ('https://'+self.headers.get('Host',''))).rstrip('/')
+                img=qrcode.make(base+'/join?campaign='+urllib.parse.quote(c['code'])); bio=BytesIO(); img.save(bio,format='PNG')
+                return self.send_bytes(bio.getvalue(),'image/png',200,{'Cache-Control':'no-store'})
+        if path == '/api/admin/templates':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                return self.send_json({'ok':True,'templates':[rowdict(r) for r in conn.execute('SELECT * FROM message_templates WHERE campaign_id=? ORDER BY name',(sess['campaign_id'],)).fetchall()]})
+        if path == '/api/manager/notifications':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'manager')
+                if not sess:return
+                rows=[]
+                failed=conn.execute("SELECT c.id,c.name,COUNT(*) n FROM message_queue q JOIN campaigns c ON c.id=q.campaign_id WHERE c.company_id=? AND q.status='failed' GROUP BY c.id,c.name",(sess['company_id'],)).fetchall()
+                for r in failed: rows.append({'kind':'error','title':'Falhas de envio • '+r['name'],'message':str(r['n'])+' mensagem(ns) com falha.'})
+                camps=conn.execute('SELECT * FROM campaigns WHERE company_id=? AND active=1',(sess['company_id'],)).fetchall()
+                for c in camps:
+                    ec=email_configured(email_config_for_client(conn,c['id'])); wc=whatsapp_cloud_configured(whatsapp_config_for_client(conn,c['id']))
+                    if not ec: rows.append({'kind':'integration','title':'E-mail não configurado • '+c['name'],'message':'Disparos por e-mail estão desativados.'})
+                    if not wc: rows.append({'kind':'integration','title':'WhatsApp não configurado • '+c['name'],'message':'Disparos por WhatsApp estão desativados.'})
+                return self.send_json({'ok':True,'notifications':rows[:30]})
         if path == '/api/attendant/dashboard':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')
@@ -848,6 +908,8 @@ class Handler(BaseHTTPRequestHandler):
                 total=metrics['active_cards'] or 1; completed=conn.execute('SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND rewards_available>0',(cid,)).fetchone()['n']; metrics['completion_rate']=round(completed*100/total,1)
                 for days in (30,60,90): metrics[f'inactive_{days}']=conn.execute('''SELECT COUNT(*) n FROM memberships m WHERE m.campaign_id=? AND COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at)<?''',(cid,now-days*86400)).fetchone()['n']
                 pending=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE campaign_id=? AND status IN ('pending','retry','processing')",(cid,)).fetchone()['n']; metrics['messages_pending']=pending
+                metrics['birthdays_month']=conn.execute("SELECT COUNT(*) n FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND substr(cu.birth_date,6,2)=?",(cid,datetime.now(ZoneInfo('America/Sao_Paulo')).strftime('%m'))).fetchone()['n']
+                returned=conn.execute("SELECT COUNT(*) n FROM memberships m WHERE m.campaign_id=? AND (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND t.type='stamp')>=2",(cid,)).fetchone()['n']; metrics['return_rate']=round(returned*100/total,1)
                 return self.send_json({'ok':True,'metrics':metrics})
         if path == '/api/attendant/automations':
             with connect(DB_PATH) as conn:
@@ -897,6 +959,7 @@ class Handler(BaseHTTPRequestHandler):
                     c['whatsapp_configured']=bool(c.get('whatsapp_phone_number_id') and c.get('whatsapp_access_token_enc') and c.get('whatsapp_api_version'))
                     c['whatsapp_signup_status']=c.get('whatsapp_signup_status') or ('connected' if c['whatsapp_configured'] else 'not_connected')
                     c['whatsapp_integration_mode']=c.get('whatsapp_integration_mode') or 'manual'
+                    c['email_configured']=bool(c['brevo_configured'] if c['email_provider']=='brevo' else c['smtp_configured']); c['wallet_google']=wallet_status()['google']['ready']; c['wallet_apple']=wallet_status()['apple']['ready']
                     c['smtp_password_enc']=None
                     c['brevo_api_key_enc']=None
                     c['whatsapp_access_token_enc']=None
@@ -1197,6 +1260,15 @@ class Handler(BaseHTTPRequestHandler):
                     results.append({'customer_id':r['id'],'name':r['name'],'email':r['email'],'queued':True,'queue_id':qid})
                     audit(conn,s['company_id'],s['user_id'],'email_queued','customer',r['id'],details=f'queue={qid}',ip_address=self._ip())
                 return self.send_json({'ok':True,'results':results,'queued_count':len(results)})
+            if path == '/api/admin/template/save':
+                if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                name=str(payload.get('name','')).strip()[:80];channel=str(payload.get('channel','both'));subject=str(payload.get('subject','')).strip()[:150];body=str(payload.get('body','')).strip()[:4000]
+                if not name or not body or channel not in ('email','whatsapp','both'):return self.send_json({'ok':False,'error':'invalid_template'},400)
+                tid=insert_id(conn,'INSERT INTO message_templates(campaign_id,name,channel,subject,body,created_at) VALUES(?,?,?,?,?,?)',(s['campaign_id'],name,channel,subject,body,now_ts()))
+                return self.send_json({'ok':True,'template_id':tid})
+            if path == '/api/admin/template/delete':
+                if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                conn.execute('DELETE FROM message_templates WHERE id=? AND campaign_id=?',(int(payload.get('template_id') or 0),s['campaign_id']));return self.send_json({'ok':True})
             if path in ('/api/attendant/stamp','/api/attendant/stamp/remove','/api/attendant/redeem'):
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
@@ -1266,7 +1338,7 @@ class Handler(BaseHTTPRequestHandler):
                 tx_id=insert_id(conn,'''INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,ip_address,created_at)
                   VALUES(?,?,?,?,?,?,?,?,?,?)''',(m['id'],s['user_id'],'redeem',1,m['progress'],m['progress'],-1,idem,self._ip(),now_ts()))
                 conn.execute('UPDATE memberships SET rewards_available=rewards_available-1 WHERE id=?',(m['id'],))
-                audit(conn,s['company_id'],s['user_id'],'reward_redeem','membership',m['public_id'],ip_address=self._ip()); notify_wallet_updates(conn,m['public_id'])
+                audit(conn,s['company_id'],s['user_id'],'reward_redeem','membership',m['public_id'],details='Recompensa resgatada; novo ciclo permanece ativo.',ip_address=self._ip()); notify_wallet_updates(conn,m['public_id'])
                 return self.send_json({'ok':True,'transaction_id':tx_id,'customer_name':m['customer_name']})
             if path == '/api/attendant/messages/retry':
                 if s['role']!='attendant' or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)

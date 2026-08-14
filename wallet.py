@@ -144,7 +144,7 @@ def google_wallet_jwt(card):
     private_key=os.environ['GOOGLE_PRIVATE_KEY'].replace('\\n','\n')
     class_suffix=re.sub(r'[^A-Za-z0-9_.-]','_',str(card.get('campaign_code') or 'clube'))
     obj_suffix=re.sub(r'[^A-Za-z0-9_.-]','_',card['public_id'])
-    class_id=f'{issuer}.clube_{class_suffix}'
+    class_id=(os.environ.get('GOOGLE_WALLET_CLASS_ID','').strip() or f'{issuer}.clube_{class_suffix}')
     object_id=f'{issuer}.{obj_suffix}'
     class_obj={'id':class_id,'issuerName':card.get('campaign_name') or 'Clube Fidelidade','programName':'Clube de Fidelidade','reviewStatus':'UNDER_REVIEW'}
     object_obj={
