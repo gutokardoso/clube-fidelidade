@@ -1,8 +1,8 @@
-# Clube Fidelidade v38
+# Clube Fidelidade v39
 
 Versão multi-cliente com antifraude, QR temporário, fila de mensagens, automações, dashboard, LGPD, perfis Taboo/Administrador do cliente/Atendente e integração configurável com Apple Wallet e Google Wallet.
 
-## Novidades da v38
+## Novidades da v39
 - Apple Wallet e Google Wallet: geração real de passe quando as credenciais oficiais estiverem configuradas; atualizações são disparadas após selo, remoção e resgate.
 - QR temporário: o QR exibido no cartão web é renovado automaticamente e expira. O código textual continua disponível para contingência manual.
 - Antifraude: remoção de selo exige motivo, registrado no histórico e na auditoria.
@@ -28,5 +28,5 @@ Sem credenciais de Wallet, o cartão web continua funcionando normalmente.
 Nunca envie chaves, tokens ou certificados ao navegador. Credenciais por cliente são armazenadas criptografadas no banco usando `CLUBE_ENCRYPTION_KEY`. Mantenha essa chave fixa após iniciar o uso em produção.
 
 
-## v38
+## v39
 Dashboard ampliado, histórico individual, ciclo de resgate, permissões administrativas de clientes, filtros/status por empresa, QR de cadastro, exportação CSV, Wallet contextual e landing comercial.
