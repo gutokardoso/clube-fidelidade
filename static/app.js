@@ -17,5 +17,8 @@
   }
   async function session(){return api('/api/session')}
   async function logout(){await api('/api/logout',{method:'POST',body:'{}'});location='/login'}
-  window.Clube={api,fmtDate,idem,deviceId,session,logout,$,$$};
+  const normalizeSearch=v=>String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+  const searchScore=(value,q)=>{q=normalizeSearch(q);if(!q)return 1;const v=normalizeSearch(value);if(v===q)return 100;if(v.startsWith(q))return 80;if(v.split(/\s+/).some(w=>w.startsWith(q)))return 60;if(v.includes(q))return 40;return 0};
+  function confirmDialog(message,{title='Confirmar ação',confirmText='Confirmar',danger=false}={}){return new Promise(resolve=>{let ov=document.getElementById('clubeConfirm');if(ov)ov.remove();ov=document.createElement('div');ov.id='clubeConfirm';ov.className='dialog-overlay';ov.innerHTML=`<div class="dialog-card" role="dialog" aria-modal="true"><h3>${title}</h3><p></p><div class="actions"><button class="btn secondary" data-no>Cancelar</button><button class="btn ${danger?'danger':'ok'}" data-yes>${confirmText}</button></div></div>`;ov.querySelector('p').textContent=message;document.body.appendChild(ov);const done=v=>{ov.remove();resolve(v)};ov.querySelector('[data-no]').onclick=()=>done(false);ov.querySelector('[data-yes]').onclick=()=>done(true);ov.onclick=e=>{if(e.target===ov)done(false)}})}
+  window.Clube={api,fmtDate,idem,deviceId,session,logout,$,$$,normalizeSearch,searchScore,confirmDialog};
 })();

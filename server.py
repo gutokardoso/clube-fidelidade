@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v39'
+VERSION='v40'
 
 
 def jdump(obj):
@@ -722,6 +722,9 @@ class Handler(BaseHTTPRequestHandler):
         path = p.path
         qs = urllib.parse.parse_qs(p.query)
         if path == '/': return self.send_text((STATIC/'index.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION))
+        if path.startswith('/empresa/'):
+            code=path.split('/empresa/',1)[1].strip().upper()
+            return self.send_redirect('/join?campaign='+urllib.parse.quote(code),302)
         if path == '/privacy':
             code=(qs.get('campaign') or [''])[0].upper().strip(); client='seu estabelecimento'
             if code:
@@ -929,7 +932,17 @@ class Handler(BaseHTTPRequestHandler):
                 sess=self._require_auth(conn,'manager')
                 if not sess:return
                 pending=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE status IN ('pending','retry','processing')").fetchone()['n']; failed=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE status='failed'").fetchone()['n']
-                return self.send_json({'ok':True,'version':VERSION,'database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite','wallet':wallet_status(),'queue':{'pending':pending,'failed':failed},'encryption':bool(_secret_box()),'meta':meta_embedded_signup_configured(),'global_email':email_configured(global_email_config())})
+                return self.send_json({'ok':True,'version':VERSION,'database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite','wallet':wallet_status(),'queue':{'pending':pending,'failed':failed},'encryption':bool(_secret_box()),'meta':meta_embedded_signup_configured(),'global_email':email_configured(global_email_config()),'public_base_url':os.environ.get('PUBLIC_BASE_URL',''),'environment':os.environ.get('APP_ENV','production'),'backup':'available'})
+        if path == '/api/manager/backup':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'manager')
+                if not sess:return
+                cid=sess['company_id']; payload={'generated_at':now_iso(),'version':VERSION,'company_id':cid}
+                payload['campaigns']=[rowdict(r) for r in conn.execute('SELECT id,code,name,reward_name,goal,active,created_at FROM campaigns WHERE company_id=? ORDER BY id',(cid,)).fetchall()]
+                payload['staff']=[rowdict(r) for r in conn.execute("SELECT id,name,email,role,active,is_client_admin,campaign_id,created_at FROM users WHERE company_id=? ORDER BY id",(cid,)).fetchall()]
+                payload['customers']=[rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,m.public_id,m.progress,m.rewards_available,m.status,m.campaign_id FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? ORDER BY cu.id''',(cid,)).fetchall()]
+                payload['transactions']=[rowdict(r) for r in conn.execute('''SELECT t.id,t.membership_id,t.user_id,t.type,t.value,t.previous_progress,t.new_progress,t.rewards_delta,t.note,t.created_at FROM transactions t JOIN memberships m ON m.id=t.membership_id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? ORDER BY t.id''',(cid,)).fetchall()]
+                data=json.dumps(payload,ensure_ascii=False,indent=2).encode('utf-8'); return self.send_bytes(data,'application/json; charset=utf-8',headers={'Content-Disposition':f'attachment; filename="clube-backup-{datetime.now().strftime("%Y%m%d-%H%M")}.json"'})
         if path == '/api/privacy/export':
             public_id=(qs.get('id') or [''])[0].strip(); cpf=normalize_cpf((qs.get('cpf') or [''])[0])
             if not cpf:return self.send_json({'ok':False,'error':'invalid_cpf'},400)
@@ -949,6 +962,7 @@ class Handler(BaseHTTPRequestHandler):
                 metrics['redeems']=conn.execute('''SELECT COUNT(*) n FROM transactions t JOIN memberships m ON m.id=t.membership_id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? AND t.type='redeem' ''',(cid,)).fetchone()['n']
                 campaigns=[rowdict(r) for r in conn.execute("""SELECT c.*,
                     (SELECT COUNT(*) FROM memberships m WHERE m.campaign_id=c.id) card_count,
+                    (SELECT COUNT(*) FROM users ux WHERE ux.campaign_id=c.id AND ux.role='attendant' AND ux.active=1) staff_count,
                     (SELECT COALESCE(SUM(CASE WHEN t.type='stamp' THEN t.value WHEN t.type='adjustment' THEN t.value ELSE 0 END),0)
                        FROM transactions t JOIN memberships m2 ON m2.id=t.membership_id WHERE m2.campaign_id=c.id) stamp_count
                     FROM campaigns c WHERE c.company_id=? ORDER BY c.id DESC""",(cid,)).fetchall()]
@@ -1085,6 +1099,9 @@ class Handler(BaseHTTPRequestHandler):
                 existing_customer=conn.execute('''SELECT cu.id FROM customers cu JOIN memberships m ON m.customer_id=cu.id
                     WHERE m.campaign_id=? AND cu.cpf=? LIMIT 1''',(c['id'],cpf)).fetchone()
                 customer_id=existing_customer['id'] if existing_customer else None
+                duplicate_contact=conn.execute('''SELECT cu.id,cu.cpf FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND (lower(cu.email)=lower(?) OR cu.phone=?) AND cu.cpf<>? LIMIT 1''',(c['id'],email,phone,cpf)).fetchone()
+                if duplicate_contact:
+                    return self.send_redirect('/join?campaign='+urllib.parse.quote(code)+'&error=duplicate_contact') if path=='/join' else self.send_json({'ok':False,'error':'duplicate_contact'},409)
                 if customer_id is None:
                     customer_id=insert_id(conn,'INSERT INTO customers(name,contact,email,phone,birth_date,cpf,privacy_accepted_at,marketing_email,marketing_whatsapp,marketing_accepted_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                         (name,email,email,phone,birth_date,cpf,now_ts(),1 if marketing_email else 0,1 if marketing_whatsapp else 0,now_ts() if (marketing_email or marketing_whatsapp) else None,now_ts()))
@@ -1557,15 +1574,19 @@ class Handler(BaseHTTPRequestHandler):
                 try: campaign_id=int(payload.get('campaign_id',0))
                 except (TypeError,ValueError): campaign_id=0
                 c=conn.execute('SELECT id,name,code FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id'])).fetchone()
-                if not c: return self.send_json({'ok':False,'error':'campaign_not_found'},404)
-                linked_staff=conn.execute("SELECT COUNT(*) n FROM users WHERE campaign_id=? AND role='attendant'",(campaign_id,)).fetchone()['n']
-                if linked_staff: return self.send_json({'ok':False,'error':'client_has_attendants','linked_attendants':linked_staff},409)
-                members=conn.execute('SELECT COUNT(*) n FROM memberships WHERE campaign_id=?',(campaign_id,)).fetchone()['n']
-                audit(conn,s['company_id'],s['user_id'],'client_delete','campaign',campaign_id,details=f"{c['code']};members={members}",ip_address=self._ip())
-                conn.execute('DELETE FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id']))
-                # Remove clientes que ficaram sem nenhum cartão após a exclusão do cliente.
-                conn.execute('DELETE FROM customers WHERE id NOT IN (SELECT DISTINCT customer_id FROM memberships)')
-                return self.send_json({'ok':True,'deleted_campaign_id':campaign_id,'deleted_memberships':members})
+                if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                conn.execute('UPDATE campaigns SET active=0 WHERE id=? AND company_id=?',(campaign_id,s['company_id']))
+                audit(conn,s['company_id'],s['user_id'],'client_archive','campaign',campaign_id,details=c['code'],ip_address=self._ip())
+                return self.send_json({'ok':True,'archived_campaign_id':campaign_id})
+            if path == '/api/manager/campaign/restore':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                try: campaign_id=int(payload.get('campaign_id',0))
+                except (TypeError,ValueError): campaign_id=0
+                c=conn.execute('SELECT id,code FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id'])).fetchone()
+                if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                conn.execute('UPDATE campaigns SET active=1 WHERE id=? AND company_id=?',(campaign_id,s['company_id']))
+                audit(conn,s['company_id'],s['user_id'],'client_restore','campaign',campaign_id,details=c['code'],ip_address=self._ip())
+                return self.send_json({'ok':True})
             if path == '/api/manager/staff/delete':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 try: user_id=int(payload.get('user_id',0))

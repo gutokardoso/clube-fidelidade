@@ -1,8 +1,8 @@
-# Clube Fidelidade v39
+# Clube Fidelidade v40
 
 Versão multi-cliente com antifraude, QR temporário, fila de mensagens, automações, dashboard, LGPD, perfis Taboo/Administrador do cliente/Atendente e integração configurável com Apple Wallet e Google Wallet.
 
-## Novidades da v39
+## Novidades da v40
 - Apple Wallet e Google Wallet: geração real de passe quando as credenciais oficiais estiverem configuradas; atualizações são disparadas após selo, remoção e resgate.
 - QR temporário: o QR exibido no cartão web é renovado automaticamente e expira. O código textual continua disponível para contingência manual.
 - Antifraude: remoção de selo exige motivo, registrado no histórico e na auditoria.
@@ -28,5 +28,13 @@ Sem credenciais de Wallet, o cartão web continua funcionando normalmente.
 Nunca envie chaves, tokens ou certificados ao navegador. Credenciais por cliente são armazenadas criptografadas no banco usando `CLUBE_ENCRYPTION_KEY`. Mantenha essa chave fixa após iniciar o uso em produção.
 
 
-## v39
+## v40
 Dashboard ampliado, histórico individual, ciclo de resgate, permissões administrativas de clientes, filtros/status por empresa, QR de cadastro, exportação CSV, Wallet contextual e landing comercial.
+
+
+## Operação recomendada (v40)
+- Produção e staging devem usar bancos separados. Defina `APP_ENV=staging` no serviço de homologação e nunca reutilize o `DATABASE_URL` de produção.
+- Configure `PUBLIC_BASE_URL` com o domínio próprio. No Railway, aponte o domínio via Settings > Networking e mantenha HTTPS.
+- O Painel Taboo oferece **BACKUP** em JSON com empresas, equipe, cartões e transações. Faça backups periódicos e teste a restauração em staging antes de qualquer necessidade real.
+- Exclusão de empresa no painel agora é arquivamento reversível; use **Restaurar** para reativar.
+- Antes de publicar uma versão, rode `python smoke_test.py` em staging e valide cadastro, QR, selo, resgate, e-mail e Wallet.
