@@ -1,8 +1,8 @@
-# Clube Fidelidade v41
+# Clube Fidelidade v42
 
 Versão multi-cliente com antifraude, QR temporário, fila de mensagens, automações, dashboard, LGPD, perfis Taboo/Administrador do cliente/Atendente e integração configurável com Apple Wallet e Google Wallet.
 
-## Novidades da v41
+## Novidades da v42
 - Apple Wallet e Google Wallet: geração real de passe quando as credenciais oficiais estiverem configuradas; atualizações são disparadas após selo, remoção e resgate.
 - QR temporário: o QR exibido no cartão web é renovado automaticamente e expira. O código textual continua disponível para contingência manual.
 - Antifraude: remoção de selo exige motivo, registrado no histórico e na auditoria.
@@ -28,13 +28,24 @@ Sem credenciais de Wallet, o cartão web continua funcionando normalmente.
 Nunca envie chaves, tokens ou certificados ao navegador. Credenciais por cliente são armazenadas criptografadas no banco usando `CLUBE_ENCRYPTION_KEY`. Mantenha essa chave fixa após iniciar o uso em produção.
 
 
-## v41
+## v42
 Dashboard ampliado, histórico individual, ciclo de resgate, permissões administrativas de clientes, filtros/status por empresa, QR de cadastro, exportação CSV, Wallet contextual e landing comercial.
 
 
-## Operação recomendada (v41)
+## Operação recomendada (v42)
 - Produção e staging devem usar bancos separados. Defina `APP_ENV=staging` no serviço de homologação e nunca reutilize o `DATABASE_URL` de produção.
 - Configure `PUBLIC_BASE_URL` com o domínio próprio. No Railway, aponte o domínio via Settings > Networking e mantenha HTTPS.
 - O Painel Taboo oferece **BACKUP** em JSON com empresas, equipe, cartões e transações. Faça backups periódicos e teste a restauração em staging antes de qualquer necessidade real.
 - Exclusão de empresa no painel agora é arquivamento reversível; use **Restaurar** para reativar.
 - Antes de publicar uma versão, rode `python smoke_test.py` em staging e valide cadastro, QR, selo, resgate, e-mail e Wallet.
+
+## v42 — Selos + Pontos e catálogo de recompensas
+
+- Cada empresa pode usar fidelidade por **Selos** ou por **Pontos**.
+- Em Pontos, a regra pode ser R$ 2, R$ 3, R$ 5 ou R$ 10 gastos para gerar 1 ponto.
+- O atendente informa o valor da compra e o sistema calcula os pontos automaticamente.
+- O **administrador da empresa** cadastra, edita, ativa e desativa recompensas do catálogo.
+- O **atendente** pode visualizar o catálogo e efetuar resgates, mas não pode alterá-lo.
+- O cartão por pontos exibe o saldo e oferece acesso ao catálogo público de recompensas.
+- Apple Wallet e Google Wallet passam a exibir saldo de pontos quando o programa for desse tipo.
+- Programas antigos permanecem como `stamps` por padrão, preservando compatibilidade.

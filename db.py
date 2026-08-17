@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS campaigns (
   icon TEXT NOT NULL DEFAULT '☕',
   logo_image TEXT,
   card_theme TEXT NOT NULL DEFAULT 'green',
+  loyalty_type TEXT NOT NULL DEFAULT 'stamps',
+  points_spend_cents INTEGER NOT NULL DEFAULT 200,
   active INTEGER NOT NULL DEFAULT 1,
   min_stamp_interval_sec INTEGER NOT NULL DEFAULT 0,
   max_stamps_per_hour INTEGER NOT NULL DEFAULT 0,
@@ -64,6 +66,7 @@ CREATE TABLE IF NOT EXISTS memberships (
   public_id TEXT NOT NULL UNIQUE,
   qr_token TEXT NOT NULL UNIQUE,
   progress INTEGER NOT NULL DEFAULT 0,
+  points_balance INTEGER NOT NULL DEFAULT 0,
   rewards_available INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','blocked')),
   created_at INTEGER NOT NULL,
@@ -117,6 +120,10 @@ CREATE TABLE IF NOT EXISTS wallet_registrations (
 CREATE INDEX IF NOT EXISTS idx_tx_membership_time ON transactions(membership_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tx_user_time ON transactions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memberships_campaign ON memberships(campaign_id);
+CREATE TABLE IF NOT EXISTS reward_catalog (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, name TEXT NOT NULL, description TEXT, points_cost INTEGER NOT NULL, image_data TEXT, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reward_catalog_campaign ON reward_catalog(campaign_id, active, points_cost);
 '''
 
 POSTGRES_SCHEMA = '''
@@ -149,6 +156,8 @@ CREATE TABLE IF NOT EXISTS campaigns (
   icon TEXT NOT NULL DEFAULT '☕',
   logo_image TEXT,
   card_theme TEXT NOT NULL DEFAULT 'green',
+  loyalty_type TEXT NOT NULL DEFAULT 'stamps',
+  points_spend_cents INTEGER NOT NULL DEFAULT 200,
   active INTEGER NOT NULL DEFAULT 1,
   min_stamp_interval_sec INTEGER NOT NULL DEFAULT 0,
   max_stamps_per_hour INTEGER NOT NULL DEFAULT 0,
@@ -176,6 +185,7 @@ CREATE TABLE IF NOT EXISTS memberships (
   public_id TEXT NOT NULL UNIQUE,
   qr_token TEXT NOT NULL UNIQUE,
   progress INTEGER NOT NULL DEFAULT 0,
+  points_balance INTEGER NOT NULL DEFAULT 0,
   rewards_available INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','blocked')),
   created_at BIGINT NOT NULL,
@@ -229,6 +239,10 @@ CREATE TABLE IF NOT EXISTS wallet_registrations (
 CREATE INDEX IF NOT EXISTS idx_tx_membership_time ON transactions(membership_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tx_user_time ON transactions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memberships_campaign ON memberships(campaign_id);
+CREATE TABLE IF NOT EXISTS reward_catalog (
+  id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, name TEXT NOT NULL, description TEXT, points_cost INTEGER NOT NULL, image_data TEXT, active INTEGER NOT NULL DEFAULT 1, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reward_catalog_campaign ON reward_catalog(campaign_id, active, points_cost);
 '''
 
 
@@ -350,7 +364,7 @@ def init_db(db_path=None, seed=True):
                 if col not in customer_cols:
                     conn.execute(f'ALTER TABLE customers ADD COLUMN {col} TEXT')
 
-        # Migração v41: permissões por cliente, LGPD, fila, automações e Wallet.
+        # Migração v42: permissões por cliente, LGPD, fila, automações e Wallet.
         if _is_postgres(target):
             conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_client_admin INTEGER NOT NULL DEFAULT 0")
             for col,typ,default in [('privacy_accepted_at','BIGINT','NULL'),('marketing_email','INTEGER','0'),('marketing_whatsapp','INTEGER','0'),('marketing_accepted_at','BIGINT','NULL')]:
@@ -363,10 +377,10 @@ def init_db(db_path=None, seed=True):
                 if col not in ccols: conn.execute(f"ALTER TABLE customers ADD COLUMN {col} {typ} DEFAULT {default}")
         conn.executescript("CREATE TABLE IF NOT EXISTS message_queue (\n  id BIGSERIAL PRIMARY KEY, campaign_id BIGINT REFERENCES campaigns(id) ON DELETE CASCADE, kind TEXT NOT NULL, recipient TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, available_at BIGINT NOT NULL, created_at BIGINT NOT NULL, sent_at BIGINT\n);\nCREATE TABLE IF NOT EXISTS automation_rules (\n  id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, rule_type TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'email', enabled INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(campaign_id,rule_type)\n);\nCREATE TABLE IF NOT EXISTS automation_runs (\n  id BIGSERIAL PRIMARY KEY, rule_id BIGINT NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE, membership_id BIGINT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, period_key TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(rule_id,membership_id,period_key)\n);\nCREATE TABLE IF NOT EXISTS wallet_registrations (\n  id BIGSERIAL PRIMARY KEY, membership_id BIGINT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, device_library_id TEXT NOT NULL, push_token TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(membership_id,device_library_id)\n);\n" if _is_postgres(target) else "CREATE TABLE IF NOT EXISTS message_queue (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE, kind TEXT NOT NULL, recipient TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, available_at INTEGER NOT NULL, created_at INTEGER NOT NULL, sent_at INTEGER\n);\nCREATE TABLE IF NOT EXISTS automation_rules (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, rule_type TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'email', enabled INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(campaign_id,rule_type)\n);\nCREATE TABLE IF NOT EXISTS automation_runs (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, rule_id INTEGER NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE, membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, period_key TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(rule_id,membership_id,period_key)\n);\nCREATE TABLE IF NOT EXISTS wallet_registrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, device_library_id TEXT NOT NULL, push_token TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(membership_id,device_library_id)\n);\n")
 
-        # Migração v41b: templates de comunicação e notificações.
+        # Migração v42b: templates de comunicação e notificações.
         conn.executescript(("CREATE TABLE IF NOT EXISTS message_templates (id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, name TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'both', subject TEXT, body TEXT NOT NULL, created_at BIGINT NOT NULL); CREATE TABLE IF NOT EXISTS notifications (id BIGSERIAL PRIMARY KEY, company_id BIGINT, campaign_id BIGINT, kind TEXT NOT NULL, title TEXT NOT NULL, message TEXT NOT NULL, created_at BIGINT NOT NULL);" if _is_postgres(target) else "CREATE TABLE IF NOT EXISTS message_templates (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, name TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'both', subject TEXT, body TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER, campaign_id INTEGER, kind TEXT NOT NULL, title TEXT NOT NULL, message TEXT NOT NULL, created_at INTEGER NOT NULL);"))
 
-        # Migração v41: tema de cor individual do cartão por cliente.
+        # Migração v42: tema de cor individual do cartão por cliente.
         if _is_postgres(target):
             conn.execute("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS card_theme TEXT NOT NULL DEFAULT 'green'")
         else:
@@ -398,6 +412,20 @@ def init_db(db_path=None, seed=True):
             campaign_cols={r['name'] for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()}
             for col,typ in integration_cols:
                 if col not in campaign_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
+
+
+        # Migração v42: programas por selos ou pontos + catálogo de recompensas.
+        loyalty_cols=[('loyalty_type',"TEXT NOT NULL DEFAULT 'stamps'"),('points_spend_cents',"INTEGER NOT NULL DEFAULT 200")]
+        if _is_postgres(target):
+            for col,typ in loyalty_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS {col} {typ}')
+            conn.execute("ALTER TABLE memberships ADD COLUMN IF NOT EXISTS points_balance INTEGER NOT NULL DEFAULT 0")
+        else:
+            ccols={r['name'] for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()}
+            for col,typ in loyalty_cols:
+                if col not in ccols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
+            mcols={r['name'] for r in conn.execute("PRAGMA table_info(memberships)").fetchall()}
+            if 'points_balance' not in mcols: conn.execute("ALTER TABLE memberships ADD COLUMN points_balance INTEGER NOT NULL DEFAULT 0")
+        conn.executescript(("CREATE TABLE IF NOT EXISTS reward_catalog (id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, name TEXT NOT NULL, description TEXT, points_cost INTEGER NOT NULL, image_data TEXT, active INTEGER NOT NULL DEFAULT 1, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL); CREATE INDEX IF NOT EXISTS idx_reward_catalog_campaign ON reward_catalog(campaign_id, active, points_cost);" if _is_postgres(target) else "CREATE TABLE IF NOT EXISTS reward_catalog (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, name TEXT NOT NULL, description TEXT, points_cost INTEGER NOT NULL, image_data TEXT, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_reward_catalog_campaign ON reward_catalog(campaign_id, active, points_cost);"))
 
         # Migração v10: todo atendente pode ser vinculado a um cliente (campaign_id).
         if _is_postgres(target):

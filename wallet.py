@@ -106,8 +106,8 @@ def build_apple_pkpass(card):
       'webServiceURL':public_url+'/api/apple-wallet/v1',
       'authenticationToken':apple_auth_token(card['public_id']),
       'generic':{
-        'primaryFields':[{'key':'stamps','label':'SELOS','value':f"{card.get('progress',0)} de {card.get('goal',0)}"}],
-        'secondaryFields':[{'key':'reward','label':'RECOMPENSA','value':card.get('reward_name') or ''}],
+        'primaryFields':[{'key':'balance','label':'PONTOS' if card.get('loyalty_type')=='points' else 'SELOS','value':str(card.get('points_balance',0)) if card.get('loyalty_type')=='points' else f"{card.get('progress',0)} de {card.get('goal',0)}"}],
+        'secondaryFields':[{'key':'reward','label':'RECOMPENSAS' if card.get('loyalty_type')=='points' else 'RECOMPENSA','value':'Consulte o catálogo no cartão' if card.get('loyalty_type')=='points' else (card.get('reward_name') or '')}],
         'auxiliaryFields':[{'key':'code','label':'CÓDIGO','value':'CLUBE:'+card['public_id']}]
       },
       'barcodes':[{'format':'PKBarcodeFormatQR','message':'CLUBE:'+card['public_id'],'messageEncoding':'iso-8859-1'}],
@@ -150,9 +150,9 @@ def google_wallet_jwt(card):
     object_obj={
       'id':object_id,'classId':class_id,'state':'ACTIVE',
       'accountId':'CLUBE:'+card['public_id'],'accountName':card.get('customer_name') or '',
-      'loyaltyPoints':{'label':'Selos','balance':{'string':f"{card.get('progress',0)} de {card.get('goal',0)}"}},
+      'loyaltyPoints':{'label':'Pontos' if card.get('loyalty_type')=='points' else 'Selos','balance':{'string':str(card.get('points_balance',0)) if card.get('loyalty_type')=='points' else f"{card.get('progress',0)} de {card.get('goal',0)}"}},
       'barcode':{'type':'QR_CODE','value':'CLUBE:'+card['public_id'],'alternateText':'CLUBE:'+card['public_id']},
-      'textModulesData':[{'id':'reward','header':'Recompensa','body':card.get('reward_name') or ''}]
+      'textModulesData':[{'id':'reward','header':'Recompensas' if card.get('loyalty_type')=='points' else 'Recompensa','body':'Consulte o catálogo no cartão' if card.get('loyalty_type')=='points' else (card.get('reward_name') or '')}]
     }
     payload={'iss':email,'aud':'google','typ':'savetowallet','iat':int(time.time()),'payload':{'loyaltyClasses':[class_obj],'loyaltyObjects':[object_obj]}}
     origin=os.environ.get('CLUBE_PUBLIC_URL','').strip()
@@ -177,7 +177,7 @@ def _google_access_token():
 def google_update_object(card):
     if not wallet_status()['google']['ready']: return False
     _,object_id=google_wallet_jwt(card)
-    body={'accountName':card.get('customer_name') or '','accountId':'CLUBE:'+card['public_id'],'loyaltyPoints':{'label':'Selos','balance':{'string':f"{card.get('progress',0)} de {card.get('goal',0)}"}},'textModulesData':[{'id':'reward','header':'Recompensa','body':card.get('reward_name') or ''}]}
+    body={'accountName':card.get('customer_name') or '','accountId':'CLUBE:'+card['public_id'],'loyaltyPoints':{'label':'Pontos' if card.get('loyalty_type')=='points' else 'Selos','balance':{'string':str(card.get('points_balance',0)) if card.get('loyalty_type')=='points' else f"{card.get('progress',0)} de {card.get('goal',0)}"}},'textModulesData':[{'id':'reward','header':'Recompensas' if card.get('loyalty_type')=='points' else 'Recompensa','body':'Consulte o catálogo no cartão' if card.get('loyalty_type')=='points' else (card.get('reward_name') or '')}]}
     req=urllib.request.Request('https://walletobjects.googleapis.com/walletobjects/v1/loyaltyObject/'+urllib.parse.quote(object_id,safe='.'),data=json.dumps(body).encode(),method='PATCH',headers={'Authorization':'Bearer '+_google_access_token(),'Content-Type':'application/json'})
     try:
         with urllib.request.urlopen(req,timeout=15) as r:r.read()

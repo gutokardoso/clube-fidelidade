@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v41'
+VERSION='v42'
 
 
 def jdump(obj):
@@ -613,7 +613,7 @@ def background_loop():
         time.sleep(2)
 
 def card_record(conn,public_id):
-    row=conn.execute('''SELECT m.public_id,m.progress,m.rewards_available,m.status,m.created_at,cu.name customer_name,c.name campaign_name,c.code campaign_code,c.reward_name,c.goal,c.icon,c.logo_image,c.card_theme
+    row=conn.execute('''SELECT m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,m.created_at,cu.name customer_name,c.name campaign_name,c.code campaign_code,c.reward_name,c.goal,c.icon,c.logo_image,c.card_theme,c.loyalty_type,c.points_spend_cents
       FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=?''',(public_id,)).fetchone()
     return rowdict(row)
 
@@ -755,7 +755,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 template=template.replace('{{LOGO_BLOCK}}','<div class="brand campaign-logo-fallback">CLUBE</div>').replace('{{CAMPAIGN_NAME}}','Cliente não encontrado').replace('<form id="f" class="form" method="post" action="/join">','<form id="f" class="form hidden" method="post" action="/join">')
             return self.send_text(template)
-        if path in ['/login','/manager','/attendant','/card']:
+        if path in ['/login','/manager','/attendant','/card','/rewards']:
             name = path.strip('/') + '.html'
             template=(STATIC/name).read_text(encoding='utf-8').replace('{{VERSION}}',VERSION)
             if path == '/login' and (qs.get('error') or [''])[0]:
@@ -787,8 +787,8 @@ class Handler(BaseHTTPRequestHandler):
             public_id=(qs.get('id') or [''])[0]
             with connect(DB_PATH) as conn:
                 m=conn.execute('''SELECT m.public_id,m.qr_token,m.progress,m.rewards_available,m.status,m.created_at,
-                                  c.name campaign_name,c.reward_name,c.goal,c.icon,c.code,c.logo_image,c.card_theme,
-                                  cu.name customer_name,co.name company_name,co.primary_color,co.logo_text
+                                  c.name campaign_name,c.reward_name,c.goal,c.icon,c.code,c.logo_image,c.card_theme,c.loyalty_type,c.points_spend_cents,
+                                  m.points_balance,cu.name customer_name,co.name company_name,co.primary_color,co.logo_text
                                   FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id JOIN companies co ON co.id=c.company_id
                                   WHERE m.public_id=?''',(public_id,)).fetchone()
                 if not m: return self.send_json({'ok':False,'error':'card_not_found'},404)
@@ -845,7 +845,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess:return
                 try: customer_id=int((qs.get('customer_id') or ['0'])[0])
                 except: customer_id=0
-                row=conn.execute("SELECT cu.id,cu.name,m.id membership_id,m.public_id,m.progress,m.rewards_available,c.name campaign_name,c.goal,c.reward_name FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE cu.id=? AND m.campaign_id=?",(customer_id,sess['campaign_id'])).fetchone()
+                row=conn.execute("SELECT cu.id,cu.name,m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,c.name campaign_name,c.goal,c.reward_name,c.loyalty_type,c.points_spend_cents FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE cu.id=? AND m.campaign_id=?",(customer_id,sess['campaign_id'])).fetchone()
                 if not row:return self.send_json({'ok':False,'error':'customer_not_found'},404)
                 hist=[rowdict(x) for x in conn.execute("SELECT t.type,t.value,t.previous_progress,t.new_progress,t.rewards_delta,t.note,t.created_at,u.name user_name FROM transactions t LEFT JOIN users u ON u.id=t.user_id WHERE t.membership_id=? ORDER BY t.created_at DESC LIMIT 300",(row['membership_id'],)).fetchall()]
                 return self.send_json({'ok':True,'customer':rowdict(row),'history':hist})
@@ -906,13 +906,19 @@ class Handler(BaseHTTPRequestHandler):
                 metrics={}
                 metrics['active_cards']=conn.execute("SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND status='active'",(cid,)).fetchone()['n']
                 metrics['new_month']=conn.execute('SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND created_at>=?',(cid,month_start)).fetchone()['n']
+                campaign=conn.execute("SELECT loyalty_type FROM campaigns WHERE id=?",(cid,)).fetchone(); loyalty_type=(campaign['loyalty_type'] if campaign else 'stamps') or 'stamps'; metrics['loyalty_type']=loyalty_type
                 metrics['stamps_month']=conn.execute("SELECT COALESCE(SUM(t.value),0) n FROM transactions t JOIN memberships m ON m.id=t.membership_id WHERE m.campaign_id=? AND t.type='stamp' AND t.created_at>=?",(cid,month_start)).fetchone()['n']
+                metrics['points_month']=conn.execute("SELECT COALESCE(SUM(CASE WHEN t.type='adjustment' AND t.value>0 THEN t.value ELSE 0 END),0) n FROM transactions t JOIN memberships m ON m.id=t.membership_id WHERE m.campaign_id=? AND t.created_at>=?",(cid,month_start)).fetchone()['n']
                 metrics['redeems_month']=conn.execute("SELECT COUNT(*) n FROM transactions t JOIN memberships m ON m.id=t.membership_id WHERE m.campaign_id=? AND t.type='redeem' AND t.created_at>=?",(cid,month_start)).fetchone()['n']
-                total=metrics['active_cards'] or 1; completed=conn.execute('SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND rewards_available>0',(cid,)).fetchone()['n']; metrics['completion_rate']=round(completed*100/total,1)
+                total=metrics['active_cards'] or 1
+                if loyalty_type=='points':
+                    cheapest=conn.execute("SELECT MIN(points_cost) n FROM reward_catalog WHERE campaign_id=? AND active=1",(cid,)).fetchone()['n']; completed=conn.execute("SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND points_balance>=?",(cid,int(cheapest or 999999999))).fetchone()['n'] if cheapest else 0
+                else: completed=conn.execute('SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND rewards_available>0',(cid,)).fetchone()['n']
+                metrics['completion_rate']=round(completed*100/total,1)
                 for days in (30,60,90): metrics[f'inactive_{days}']=conn.execute('''SELECT COUNT(*) n FROM memberships m WHERE m.campaign_id=? AND COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at)<?''',(cid,now-days*86400)).fetchone()['n']
                 pending=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE campaign_id=? AND status IN ('pending','retry','processing')",(cid,)).fetchone()['n']; metrics['messages_pending']=pending
                 metrics['birthdays_month']=conn.execute("SELECT COUNT(*) n FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND substr(cu.birth_date,6,2)=?",(cid,datetime.now(ZoneInfo('America/Sao_Paulo')).strftime('%m'))).fetchone()['n']
-                returned=conn.execute("SELECT COUNT(*) n FROM memberships m WHERE m.campaign_id=? AND (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND t.type='stamp')>=2",(cid,)).fetchone()['n']; metrics['return_rate']=round(returned*100/total,1)
+                returned=conn.execute("SELECT COUNT(*) n FROM memberships m WHERE m.campaign_id=? AND (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND ((?='points' AND t.type='adjustment' AND t.value>0) OR (?='stamps' AND t.type='stamp')))>=2",(cid,loyalty_type,loyalty_type)).fetchone()['n']; metrics['return_rate']=round(returned*100/total,1)
                 return self.send_json({'ok':True,'metrics':metrics})
         if path == '/api/attendant/automations':
             with connect(DB_PATH) as conn:
@@ -973,7 +979,7 @@ class Handler(BaseHTTPRequestHandler):
                     c['whatsapp_configured']=bool(c.get('whatsapp_phone_number_id') and c.get('whatsapp_access_token_enc') and c.get('whatsapp_api_version'))
                     c['whatsapp_signup_status']=c.get('whatsapp_signup_status') or ('connected' if c['whatsapp_configured'] else 'not_connected')
                     c['whatsapp_integration_mode']=c.get('whatsapp_integration_mode') or 'manual'
-                    c['email_configured']=bool(c['brevo_configured'] if c['email_provider']=='brevo' else c['smtp_configured']); c['wallet_google']=wallet_status()['google']['ready']; c['wallet_apple']=wallet_status()['apple']['ready']
+                    c['email_configured']=bool(c['brevo_configured'] if c['email_provider']=='brevo' else c['smtp_configured']); c['reward_catalog_count']=conn.execute("SELECT COUNT(*) n FROM reward_catalog WHERE campaign_id=? AND active=1",(c['id'],)).fetchone()['n']; c['wallet_google']=wallet_status()['google']['ready']; c['wallet_apple']=wallet_status()['apple']['ready']
                     c['smtp_password_enc']=None
                     c['brevo_api_key_enc']=None
                     c['whatsapp_access_token_enc']=None
@@ -993,13 +999,38 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant')
                 if not s: return
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                customers=[rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,cu.created_at,m.public_id,m.progress,m.rewards_available
-                    FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                customers=[rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,cu.created_at,m.public_id,m.progress,m.points_balance,m.rewards_available,c.loyalty_type
+                    FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id
                     WHERE m.campaign_id=? ORDER BY cu.name''',(s['campaign_id'],)).fetchall()]
                 month=datetime.now(ZoneInfo('America/Sao_Paulo')).month
                 birthdays=[c for c in customers if c.get('birth_date') and len(c['birth_date'])>=10 and int(c['birth_date'][5:7])==month]
                 birthdays.sort(key=lambda c: (int(c['birth_date'][8:10]), c['name'].lower()))
                 return self.send_json({'ok':True,'customers':customers,'birthdays':birthdays,'month':month,'whatsapp_cloud':whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])),'whatsapp_configured':whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])),'email_configured':email_configured(email_config_for_client(conn,s['campaign_id']))})
+
+        if path == '/api/card/rewards':
+            public_id=(qs.get('id') or [''])[0].strip()
+            with connect(DB_PATH) as conn:
+                m=conn.execute("SELECT m.id,m.public_id,m.points_balance,c.id campaign_id,c.name campaign_name,c.loyalty_type FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=?",(public_id,)).fetchone()
+                if not m:return self.send_json({'ok':False,'error':'card_not_found'},404)
+                rewards=[rowdict(r) for r in conn.execute("SELECT id,name,description,points_cost,image_data,active FROM reward_catalog WHERE campaign_id=? AND active=1 ORDER BY points_cost,name",(m['campaign_id'],)).fetchall()]
+                return self.send_json({'ok':True,'loyalty_type':m['loyalty_type'],'points_balance':m['points_balance'],'campaign_name':m['campaign_name'],'rewards':rewards})
+        if path == '/api/attendant/rewards':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                c=conn.execute("SELECT id,name,loyalty_type,points_spend_cents FROM campaigns WHERE id=? AND company_id=?",(sess['campaign_id'],sess['company_id'])).fetchone()
+                if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                rewards=[rowdict(r) for r in conn.execute("SELECT id,name,description,points_cost,image_data,active FROM reward_catalog WHERE campaign_id=? AND active=1 ORDER BY points_cost,name",(sess['campaign_id'],)).fetchall()]
+                return self.send_json({'ok':True,'campaign':rowdict(c),'rewards':rewards})
+        if path == '/api/admin/rewards':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                rewards=[rowdict(r) for r in conn.execute("SELECT id,name,description,points_cost,image_data,active,created_at,updated_at FROM reward_catalog WHERE campaign_id=? ORDER BY active DESC,points_cost,name",(sess['campaign_id'],)).fetchall()]
+                c=conn.execute("SELECT loyalty_type,points_spend_cents FROM campaigns WHERE id=?",(sess['campaign_id'],)).fetchone()
+                return self.send_json({'ok':True,'campaign':rowdict(c) if c else {},'rewards':rewards})
+
         if path == '/api/attendant/messages':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')
@@ -1014,7 +1045,7 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant')
                 if not s: return
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                m=conn.execute('''SELECT m.*,cu.name customer_name,c.name campaign_name,c.reward_name,c.goal,c.icon,c.logo_image,c.company_id
+                m=conn.execute('''SELECT m.*,cu.name customer_name,c.name campaign_name,c.reward_name,c.goal,c.icon,c.logo_image,c.company_id,c.loyalty_type,c.points_spend_cents
                   FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE (m.public_id=? OR m.qr_token=?) AND c.company_id=? AND c.id=?''',(token,token,s['company_id'],s['campaign_id'])).fetchone()
                 if not m: return self.send_json({'ok':False,'error':'membership_not_found'},404)
                 return self.send_json({'ok':True,'membership':rowdict(m)})
@@ -1286,6 +1317,91 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/admin/template/delete':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 conn.execute('DELETE FROM message_templates WHERE id=? AND campaign_id=?',(int(payload.get('template_id') or 0),s['campaign_id']));return self.send_json({'ok':True})
+
+            if path == '/api/admin/reward/save':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                name=str(payload.get('name','')).strip()[:100]; description=str(payload.get('description','')).strip()[:300]
+                try: points_cost=int(payload.get('points_cost') or 0)
+                except: points_cost=0
+                image_data=str(payload.get('image_data','') or '')
+                if not name or points_cost<1:return self.send_json({'ok':False,'error':'invalid_reward'},400)
+                if image_data and (len(image_data)>900000 or not image_data.startswith(('data:image/png;base64,','data:image/jpeg;base64,','data:image/webp;base64,'))):return self.send_json({'ok':False,'error':'invalid_reward_image'},400)
+                with connect(DB_PATH) as conn:
+                    c=conn.execute("SELECT loyalty_type FROM campaigns WHERE id=? AND company_id=?",(s['campaign_id'],s['company_id'])).fetchone()
+                    if not c or c['loyalty_type']!='points':return self.send_json({'ok':False,'error':'points_program_required'},409)
+                    rid=insert_id(conn,"INSERT INTO reward_catalog(campaign_id,name,description,points_cost,image_data,active,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?)",(s['campaign_id'],name,description,points_cost,image_data or None,now_ts(),now_ts()))
+                    audit(conn,s['company_id'],s['user_id'],'reward_catalog_create','reward',rid,details=f'{name};{points_cost} pontos',ip_address=self._ip())
+                return self.send_json({'ok':True,'reward_id':rid})
+            if path == '/api/admin/reward/update':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                try: rid=int(payload.get('reward_id') or 0); points_cost=int(payload.get('points_cost') or 0)
+                except: rid=0; points_cost=0
+                name=str(payload.get('name','')).strip()[:100]; description=str(payload.get('description','')).strip()[:300]; image_data=payload.get('image_data',None)
+                if rid<1 or not name or points_cost<1:return self.send_json({'ok':False,'error':'invalid_reward'},400)
+                with connect(DB_PATH) as conn:
+                    r=conn.execute("SELECT id FROM reward_catalog WHERE id=? AND campaign_id=?",(rid,s['campaign_id'])).fetchone()
+                    if not r:return self.send_json({'ok':False,'error':'reward_not_found'},404)
+                    if image_data is None: conn.execute("UPDATE reward_catalog SET name=?,description=?,points_cost=?,updated_at=? WHERE id=?",(name,description,points_cost,now_ts(),rid))
+                    else:
+                        image_data=str(image_data or '')
+                        if image_data and (len(image_data)>900000 or not image_data.startswith(('data:image/png;base64,','data:image/jpeg;base64,','data:image/webp;base64,'))):return self.send_json({'ok':False,'error':'invalid_reward_image'},400)
+                        conn.execute("UPDATE reward_catalog SET name=?,description=?,points_cost=?,image_data=?,updated_at=? WHERE id=?",(name,description,points_cost,image_data or None,now_ts(),rid))
+                    audit(conn,s['company_id'],s['user_id'],'reward_catalog_update','reward',rid,details=f'{name};{points_cost} pontos',ip_address=self._ip())
+                return self.send_json({'ok':True})
+            if path == '/api/admin/reward/toggle':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                try: rid=int(payload.get('reward_id') or 0)
+                except: rid=0
+                active=1 if payload.get('active') else 0
+                with connect(DB_PATH) as conn:
+                    r=conn.execute("SELECT id FROM reward_catalog WHERE id=? AND campaign_id=?",(rid,s['campaign_id'])).fetchone()
+                    if not r:return self.send_json({'ok':False,'error':'reward_not_found'},404)
+                    conn.execute("UPDATE reward_catalog SET active=?,updated_at=? WHERE id=?",(active,now_ts(),rid)); audit(conn,s['company_id'],s['user_id'],'reward_catalog_toggle','reward',rid,details=f'active={active}',ip_address=self._ip())
+                return self.send_json({'ok':True})
+            if path == '/api/attendant/points/earn':
+                if s['role']!='attendant' or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                token,token_error=resolve_member_token(str(payload.get('token','')))
+                if token_error:return self.send_json({'ok':False,'error':token_error},410 if token_error=='qr_expired' else 400)
+                try: purchase_cents=int(payload.get('purchase_cents') or 0)
+                except: purchase_cents=0
+                idem=str(payload.get('idempotency_key','')).strip()
+                if purchase_cents<1 or not idem:return self.send_json({'ok':False,'error':'invalid_purchase'},400)
+                with connect(DB_PATH) as conn:
+                    m=fetchone_for_update(conn,"SELECT m.*,c.company_id,c.name campaign_name,c.loyalty_type,c.points_spend_cents,cu.name customer_name FROM memberships m JOIN campaigns c ON c.id=m.campaign_id JOIN customers cu ON cu.id=m.customer_id WHERE (m.public_id=? OR m.qr_token=?) AND c.company_id=? AND c.id=?",(token,token,s['company_id'],s['campaign_id']))
+                    if not m:return self.send_json({'ok':False,'error':'membership_not_found'},404)
+                    if m['loyalty_type']!='points':return self.send_json({'ok':False,'error':'points_program_required'},409)
+                    rate=max(1,int(m['points_spend_cents'] or 200)); earned=purchase_cents//rate
+                    if earned<1:return self.send_json({'ok':False,'error':'purchase_below_point_rule','message':'O valor da compra não gera nenhum ponto nesta regra.'},409)
+                    prev=int(m['points_balance'] or 0); new=prev+earned
+                    tx_id=insert_id(conn,"INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,device_id,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(m['id'],s['user_id'],'adjustment',earned,prev,new,0,idem,str(payload.get('device_id',''))[:120],self._ip(),f'Pontos por compra de R$ {purchase_cents/100:.2f}',now_ts()))
+                    conn.execute("UPDATE memberships SET points_balance=? WHERE id=?",(new,m['id'])); audit(conn,s['company_id'],s['user_id'],'points_earn','membership',m['public_id'],details=f'R${purchase_cents/100:.2f};+{earned} pontos',ip_address=self._ip()); notify_wallet_updates(conn,m['public_id'])
+                return self.send_json({'ok':True,'transaction_id':tx_id,'customer_name':m['customer_name'],'points_earned':earned,'points_balance':new})
+            if path == '/api/attendant/points/redeem':
+                if s['role']!='attendant' or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                token,token_error=resolve_member_token(str(payload.get('token','')))
+                if token_error:return self.send_json({'ok':False,'error':token_error},410 if token_error=='qr_expired' else 400)
+                try: reward_id=int(payload.get('reward_id') or 0)
+                except: reward_id=0
+                idem=str(payload.get('idempotency_key','')).strip()
+                if reward_id<1 or not idem:return self.send_json({'ok':False,'error':'invalid_reward'},400)
+                with connect(DB_PATH) as conn:
+                    m=fetchone_for_update(conn,"SELECT m.*,c.company_id,c.loyalty_type,cu.name customer_name FROM memberships m JOIN campaigns c ON c.id=m.campaign_id JOIN customers cu ON cu.id=m.customer_id WHERE (m.public_id=? OR m.qr_token=?) AND c.company_id=? AND c.id=?",(token,token,s['company_id'],s['campaign_id']))
+                    if not m:return self.send_json({'ok':False,'error':'membership_not_found'},404)
+                    if m['loyalty_type']!='points':return self.send_json({'ok':False,'error':'points_program_required'},409)
+                    r=conn.execute("SELECT * FROM reward_catalog WHERE id=? AND campaign_id=? AND active=1",(reward_id,s['campaign_id'])).fetchone()
+                    if not r:return self.send_json({'ok':False,'error':'reward_not_found'},404)
+                    prev=int(m['points_balance'] or 0); cost=int(r['points_cost'])
+                    if prev<cost:return self.send_json({'ok':False,'error':'insufficient_points','message':'Saldo de pontos insuficiente para esta recompensa.'},409)
+                    new=prev-cost
+                    tx_id=insert_id(conn,"INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(m['id'],s['user_id'],'redeem',-cost,prev,new,0,idem,self._ip(),f'Resgate: {r["name"]} ({cost} pontos)',now_ts()))
+                    conn.execute("UPDATE memberships SET points_balance=? WHERE id=?",(new,m['id'])); audit(conn,s['company_id'],s['user_id'],'points_redeem','membership',m['public_id'],details=f'{r["name"]};-{cost} pontos',ip_address=self._ip()); notify_wallet_updates(conn,m['public_id'])
+                return self.send_json({'ok':True,'transaction_id':tx_id,'customer_name':m['customer_name'],'reward_name':r['name'],'points_spent':cost,'points_balance':new})
+
             if path in ('/api/attendant/stamp','/api/attendant/stamp/remove','/api/attendant/redeem'):
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
@@ -1297,9 +1413,10 @@ class Handler(BaseHTTPRequestHandler):
                     begin_write(conn)
                     dupe=conn.execute('SELECT id FROM transactions WHERE idempotency_key=?',(idem,)).fetchone()
                     if dupe: return self.send_json({'ok':True,'duplicate':True,'transaction_id':dupe['id']})
-                    m=fetchone_for_update(conn,'''SELECT m.*,c.goal,c.min_stamp_interval_sec,c.max_stamps_per_hour,c.max_stamps_per_attendant_day,c.company_id,c.name campaign_name,cu.name customer_name
+                    m=fetchone_for_update(conn,'''SELECT m.*,c.goal,c.min_stamp_interval_sec,c.max_stamps_per_hour,c.max_stamps_per_attendant_day,c.company_id,c.name campaign_name,c.loyalty_type,cu.name customer_name
                       FROM memberships m JOIN campaigns c ON c.id=m.campaign_id JOIN customers cu ON cu.id=m.customer_id WHERE (m.public_id=? OR m.qr_token=?) AND c.company_id=? AND c.id=?''',(token,token,s['company_id'],s['campaign_id']))
                     if not m: return self.send_json({'ok':False,'error':'membership_not_found'},404)
+                    if m['loyalty_type']!='stamps': return self.send_json({'ok':False,'error':'stamps_program_required'},409)
                     validate_stamp(conn,m,m,s,qty)
                     prev=m['progress']; rewards=0; new=prev
                     for _ in range(qty):
@@ -1412,11 +1529,14 @@ class Handler(BaseHTTPRequestHandler):
                 conn.execute('DELETE FROM users WHERE id=?',(uid,)); audit(conn,s['company_id'],s['user_id'],'client_admin_staff_delete','user',uid,ip_address=self._ip());return self.send_json({'ok':True})
             if path == '/api/manager/campaign':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
-                name=str(payload.get('name','')).strip()[:80]; reward=str(payload.get('reward_name','')).strip()[:100]; code=re.sub(r'[^A-Z0-9_-]','',str(payload.get('code','')).upper())[:24]
+                name=str(payload.get('name','')).strip()[:80]; reward=str(payload.get('reward_name','')).strip()[:100] or 'Catálogo de recompensas'; code=re.sub(r'[^A-Z0-9_-]','',str(payload.get('code','')).upper())[:24]
+                loyalty_type=str(payload.get('loyalty_type','stamps')).strip().lower()
+                try: points_spend_cents=int(payload.get('points_spend_cents') or 200)
+                except: points_spend_cents=200
                 icon=str(payload.get('icon','☕'))[:8]; goal=int(payload.get('goal',5))
                 card_theme=str(payload.get('card_theme','green')).strip().lower()
                 if card_theme not in CARD_THEMES: card_theme='green'
-                if not name or not reward or not code or goal not in (3,5,8,10,15): return self.send_json({'ok':False,'error':'invalid_campaign'},400)
+                if not name or not code or loyalty_type not in ('stamps','points') or (loyalty_type=='stamps' and (not reward or goal not in (3,5,8,10,15))) or (loyalty_type=='points' and points_spend_cents not in (200,300,500,1000)): return self.send_json({'ok':False,'error':'invalid_campaign'},400)
                 try:
                     logo_image=validate_logo_data(payload.get('logo_image'))
                     if not logo_image:
@@ -1449,11 +1569,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({'ok':False,'error':str(exc)},503)
                 wa_status='connected' if (wa_phone_id and wa_token_enc) else ('awaiting_connection' if wa_mode=='embedded' else 'not_connected')
                 try:
-                    new_id=insert_id(conn,'''INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,logo_image,card_theme,min_stamp_interval_sec,max_stamps_per_hour,max_stamps_per_attendant_day,
+                    new_id=insert_id(conn,'''INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,logo_image,card_theme,loyalty_type,points_spend_cents,min_stamp_interval_sec,max_stamps_per_hour,max_stamps_per_attendant_day,
                         smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,email_provider,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,
                         whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_access_token_enc,whatsapp_api_version,whatsapp_integration_mode,whatsapp_signup_status,created_at)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
-                        s['company_id'],code,name,reward,goal,icon,logo_image,card_theme,int(payload.get('min_interval',0)),int(payload.get('max_hour',0)),int(payload.get('max_day',500)),
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
+                        s['company_id'],code,name,reward,goal,icon,logo_image,card_theme,loyalty_type,points_spend_cents,int(payload.get('min_interval',0)),int(payload.get('max_hour',0)),int(payload.get('max_day',500)),
                         smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,email_provider,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,
                         wa_phone_id,wa_waba_id,wa_token_enc,wa_version,wa_mode,wa_status,now_ts()))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
@@ -1463,11 +1583,14 @@ class Handler(BaseHTTPRequestHandler):
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 try: campaign_id=int(payload.get('campaign_id',0))
                 except (TypeError,ValueError): campaign_id=0
-                name=str(payload.get('name','')).strip()[:80]; reward=str(payload.get('reward_name','')).strip()[:100]; code=re.sub(r'[^A-Z0-9_-]','',str(payload.get('code','')).upper())[:24]
+                name=str(payload.get('name','')).strip()[:80]; reward=str(payload.get('reward_name','')).strip()[:100] or 'Catálogo de recompensas'; code=re.sub(r'[^A-Z0-9_-]','',str(payload.get('code','')).upper())[:24]
+                loyalty_type=str(payload.get('loyalty_type','stamps')).strip().lower()
+                try: points_spend_cents=int(payload.get('points_spend_cents') or 200)
+                except: points_spend_cents=200
                 icon=str(payload.get('icon','☕'))[:8]
                 try: goal=int(payload.get('goal',5)); min_interval=int(payload.get('min_interval',0)); max_hour=int(payload.get('max_hour',0)); max_day=int(payload.get('max_day',500))
                 except (TypeError,ValueError): return self.send_json({'ok':False,'error':'invalid_campaign'},400)
-                if campaign_id<1 or not name or not reward or not code or goal not in (3,5,8,10,15) or min_interval<0 or max_hour<0 or max_day<1:
+                if campaign_id<1 or not name or not code or loyalty_type not in ('stamps','points') or (loyalty_type=='stamps' and (not reward or goal not in (3,5,8,10,15))) or (loyalty_type=='points' and points_spend_cents not in (200,300,500,1000)) or min_interval<0 or max_hour<0 or max_day<1:
                     return self.send_json({'ok':False,'error':'invalid_campaign'},400)
                 c=conn.execute('SELECT * FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id'])).fetchone()
                 card_theme=str(payload.get('card_theme',c.get('card_theme') or 'green')).strip().lower()
@@ -1504,10 +1627,10 @@ class Handler(BaseHTTPRequestHandler):
                 except RuntimeError as exc:
                     return self.send_json({'ok':False,'error':str(exc)},503)
                 try:
-                    conn.execute('''UPDATE campaigns SET code=?,name=?,reward_name=?,goal=?,icon=?,logo_image=?,card_theme=?,min_stamp_interval_sec=?,max_stamps_per_hour=?,max_stamps_per_attendant_day=?,
+                    conn.execute('''UPDATE campaigns SET code=?,name=?,reward_name=?,goal=?,icon=?,logo_image=?,card_theme=?,loyalty_type=?,points_spend_cents=?,min_stamp_interval_sec=?,max_stamps_per_hour=?,max_stamps_per_attendant_day=?,
                         smtp_host=?,smtp_port=?,smtp_user=?,smtp_password_enc=?,smtp_from=?,smtp_from_name=?,smtp_security=?,email_provider=?,brevo_api_key_enc=?,brevo_sender_email=?,brevo_sender_name=?,brevo_reply_to=?,
                         whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_integration_mode=?,whatsapp_signup_status=?
-                        WHERE id=? AND company_id=?''',(code,name,reward,goal,icon,logo_image,card_theme,min_interval,max_hour,max_day,
+                        WHERE id=? AND company_id=?''',(code,name,reward,goal,icon,logo_image,card_theme,loyalty_type,points_spend_cents,min_interval,max_hour,max_day,
                         smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,email_provider,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,
                         wa_phone_id,wa_waba_id,wa_token_enc,wa_version,wa_mode,'connected' if (wa_phone_id and wa_token_enc) else ('awaiting_connection' if wa_mode=='embedded' else 'not_connected'),campaign_id,s['company_id']))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
