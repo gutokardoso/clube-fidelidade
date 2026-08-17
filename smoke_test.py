@@ -12,7 +12,7 @@ from db import init_db, connect
 import server
 
 init_db(db_path, seed=True)
-assert server.VERSION == 'v42'
+assert server.VERSION == 'v43'
 with connect(db_path) as conn:
     tables = {r['name'] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     assert {'message_queue','automation_rules','automation_runs','wallet_registrations'} <= tables
