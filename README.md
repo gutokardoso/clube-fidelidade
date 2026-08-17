@@ -49,3 +49,9 @@ Dashboard ampliado, histórico individual, ciclo de resgate, permissões adminis
 - O cartão por pontos exibe o saldo e oferece acesso ao catálogo público de recompensas.
 - Apple Wallet e Google Wallet passam a exibir saldo de pontos quando o programa for desse tipo.
 - Programas antigos permanecem como `stamps` por padrão, preservando compatibilidade.
+
+## v44 — Correção do cadastro de empresas
+
+- Corrigido `NameError: validate_logo_data is not defined` ao criar ou editar uma empresa no Painel Taboo.
+- A validação da logo agora verifica PNG/JPG/WEBP, base64 válido, assinatura real do arquivo e limite de 500 KB.
+- Adicionado teste de regressão para impedir que o erro volte em versões futuras.

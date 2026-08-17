@@ -12,7 +12,7 @@ from db import init_db, connect
 import server
 
 init_db(db_path, seed=True)
-assert server.VERSION == 'v43'
+assert server.VERSION == 'v44'
 with connect(db_path) as conn:
     tables = {r['name'] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     assert {'message_queue','automation_rules','automation_runs','wallet_registrations'} <= tables
@@ -24,6 +24,18 @@ with connect(db_path) as conn:
 token, exp = server.make_dynamic_qr('mem_smoke', 60)
 resolved, error = server.resolve_member_token(token)
 assert error is None and resolved == 'mem_smoke' and exp > server.now_ts()
+
+
+# Regressão v44: criação/edição de empresa não pode falhar por ausência do validador de logo.
+import base64
+valid_png = b'\x89PNG\r\n\x1a\n' + b'fake-png-payload'
+valid_data = 'data:image/png;base64,' + base64.b64encode(valid_png).decode('ascii')
+assert server.validate_logo_data(valid_data) == valid_data
+try:
+    server.validate_logo_data('data:image/png;base64,' + base64.b64encode(b'not-a-png').decode('ascii'))
+    raise AssertionError('invalid logo accepted')
+except ValueError as exc:
+    assert str(exc) == 'invalid_logo_format'
 
 print('smoke_test: ok')
 

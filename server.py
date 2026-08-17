@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v43'
+VERSION='v44'
 
 
 def jdump(obj):
@@ -309,6 +309,37 @@ def send_email_message(msg, config=None):
     except Exception as exc:
         print(f'[EMAIL] SEND_FAILED to={msg.get("To","")} error={type(exc).__name__}')
         return {'sent':False,'reason':'smtp_send_failed','source':c.get('source','global')}
+
+def validate_logo_data(value):
+    """Valida e normaliza a logo enviada pelo Painel Taboo.
+
+    Mantém o data URL original para persistência, mas valida MIME, base64,
+    tamanho máximo de 500 KB e a assinatura real do arquivo.
+    """
+    if not value:
+        return None
+    text=str(value).strip()
+    match=re.fullmatch(r'data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\s]+)',text)
+    if not match:
+        raise ValueError('invalid_logo_format')
+    try:
+        raw=base64.b64decode(re.sub(r'\s+','',match.group(2)),validate=True)
+    except (binascii.Error,ValueError):
+        raise ValueError('invalid_logo_format')
+    if not raw:
+        raise ValueError('invalid_logo_format')
+    if len(raw)>500_000:
+        raise ValueError('logo_too_large')
+    mime=match.group(1)
+    valid=(
+        (mime=='image/png' and raw.startswith(b'\x89PNG\r\n\x1a\n')) or
+        (mime=='image/jpeg' and raw.startswith(b'\xff\xd8\xff')) or
+        (mime=='image/webp' and len(raw)>=12 and raw[:4]==b'RIFF' and raw[8:12]==b'WEBP')
+    )
+    if not valid:
+        raise ValueError('invalid_logo_format')
+    return f'data:{mime};base64,'+base64.b64encode(raw).decode('ascii')
+
 
 def decode_image_data(value, max_bytes=700_000):
     if not value:
