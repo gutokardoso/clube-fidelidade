@@ -105,7 +105,7 @@ def _google_class_id(card):
     campaign=re.sub(r'[^A-Za-z0-9_.-]','_',str(card.get('campaign_code') or 'cliente').lower())
     # One class per company/campaign is required for independent logo/color branding.
     suffix=base if base.endswith('_'+campaign) else f'{base}_{campaign}'
-    return f'{issuer}.{suffix}_v60'
+    return f'{issuer}.{suffix}_v61'
 
 
 def _google_logo_url(card):
@@ -119,7 +119,7 @@ def _google_logo_url(card):
     # an older processed logo even after the class is patched. The renderer revision
     # suffix MUST change whenever the server-side crop/resize algorithm changes.
     digest=hashlib.sha256(str(card.get('logo_image')).encode('utf-8')).hexdigest()[:12]
-    return f"{base}/api/wallet/logo-v60/{urllib.parse.quote(code)}/{digest}.png"
+    return f"{base}/api/wallet/logo-v61/{urllib.parse.quote(code)}/{digest}.png"
 
 
 def _google_class_object(card):
@@ -169,7 +169,7 @@ def _google_object(card):
     balance=str(card.get('points_balance',0)) if points else f"{card.get('progress',0)} de {card.get('goal',0)}"
     reward='Catálogo de recompensas' if points else (card.get('reward_name') or 'Recompensa do programa')
     body={
-      'id':f'{issuer}.{obj_suffix}_v60',
+      'id':f'{issuer}.{obj_suffix}_v61',
       'classId':_google_class_id(card),
       'state':'ACTIVE',
       'accountId':'CLUBE:'+card['public_id'],
@@ -279,23 +279,12 @@ def google_wallet_jwt(card, include_class=True):
     return _sign_rs256({'alg':'RS256','typ':'JWT'},payload,private_key),object_obj['id']
 
 def google_save_url(card):
-    # Ensure company branding is current before creating the Save URL.
-    class_ready=google_ensure_class(card)
-    # If this card already exists in Wallet, patch it now as well so newly added
-    # links (such as the reward catalog) appear immediately. A 404 simply means
-    # it is a new card and the Save JWT below will create the object.
-    try:
-        obj=_google_object(card)
-        obj_body={k:v for k,v in obj.items() if k not in ('id','classId','state')}
-        _google_patch('loyaltyObject',obj['id'],obj_body)
-        print('[GOOGLE_WALLET] object updated before save:',obj['id'])
-    except urllib.error.HTTPError as exc:
-        if exc.code!=404:
-            detail=exc.read().decode('utf-8','ignore')[:400]
-            print('[GOOGLE_WALLET] object update before save failed:',exc.code,detail)
-    except Exception as exc:
-        print('[GOOGLE_WALLET] object update before save failed:',repr(exc))
-    token,_=google_wallet_jwt(card, include_class=not class_ready)
+    # Fast path: do not block the user's click with Google Wallet API calls.
+    # The Save-to-Wallet JWT carries the current v61 class and object, so Google
+    # creates/updates the pass as part of the save flow itself. This makes the
+    # redirect to pay.google.com immediate instead of waiting for class/object
+    # PATCH requests before returning HTTP 302.
+    token,_=google_wallet_jwt(card, include_class=True)
     return 'https://pay.google.com/gp/v/save/'+token
 
 
