@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v58'
+VERSION='v59'
 
 
 def jdump(obj):
@@ -841,11 +841,17 @@ class Handler(BaseHTTPRequestHandler):
                 if not conn.execute('SELECT id FROM memberships WHERE public_id=? AND status=?',(public_id,'active')).fetchone(): return self.send_json({'ok':False,'error':'membership_not_found'},404)
             token,exp=make_dynamic_qr(public_id,60)
             return self.send_json({'ok':True,'token':token,'expires_at':exp})
-        if path.startswith('/api/wallet/logo/'):
-            campaign_code=urllib.parse.unquote(path.split('/api/wallet/logo/',1)[1]).strip()
-            if campaign_code.lower().endswith('.png'):
-                campaign_code=campaign_code[:-4]
-            campaign_code=campaign_code.strip().upper()
+        if path.startswith('/api/wallet/logo-v59/') or path.startswith('/api/wallet/logo/'):
+            if path.startswith('/api/wallet/logo-v59/'):
+                # Versioned path is intentionally immutable. Changing the path, not
+                # only the query string, forces Google Wallet to fetch the new logo.
+                tail=path.split('/api/wallet/logo-v59/',1)[1].strip('/')
+                campaign_code=urllib.parse.unquote(tail.split('/',1)[0]).strip().upper()
+            else:
+                campaign_code=urllib.parse.unquote(path.split('/api/wallet/logo/',1)[1]).strip()
+                if campaign_code.lower().endswith('.png'):
+                    campaign_code=campaign_code[:-4]
+                campaign_code=campaign_code.strip().upper()
             if not campaign_code:return self.send_text('not found',404,'text/plain')
             with connect(DB_PATH) as conn:
                 c=conn.execute('SELECT logo_image FROM campaigns WHERE UPPER(code)=UPPER(?) AND active=1',(campaign_code,)).fetchone()
@@ -854,7 +860,7 @@ class Handler(BaseHTTPRequestHandler):
                 # Google Wallet renders programLogo inside a fixed circular slot.
                 # Many uploaded logos are square images with a large white/solid
                 # background around the real artwork, so simply resizing the whole
-                # upload makes the brand mark look tiny. v58 removes only the
+                # upload makes the brand mark look tiny. v59 removes the
                 # background that is CONNECTED to the image borders, preserving
                 # white details that belong to the logo itself.
                 raw,_subtype=decode_image_data(c['logo_image'])
@@ -913,14 +919,14 @@ class Handler(BaseHTTPRequestHandler):
                 # 3) Fit the cropped artwork almost edge-to-edge in a square source
                 # canvas. The Google UI adds the circular presentation itself.
                 size=840
-                safe=int(size*0.97)
+                safe=size
                 scale=min(safe/max(1,src.width),safe/max(1,src.height))
                 target=(max(1,round(src.width*scale)),max(1,round(src.height*scale)))
                 src=src.resize(target,PILImage.Resampling.LANCZOS)
                 canvas=PILImage.new('RGBA',(size,size),(255,255,255,0))
                 canvas.alpha_composite(src,((size-src.width)//2,(size-src.height)//2))
                 out=io.BytesIO(); canvas.save(out,format='PNG',optimize=True)
-                return self.send_bytes(out.getvalue(),'image/png',200,{'Cache-Control':'public, max-age=300','X-Content-Type-Options':'nosniff'})
+                return self.send_bytes(out.getvalue(),'image/png',200,{'Cache-Control':'public, max-age=31536000, immutable','X-Content-Type-Options':'nosniff','X-Wallet-Logo-Revision':'v59'})
             except Exception as exc:
                 print('[GOOGLE_WALLET] logo render failed:',repr(exc))
                 return self.send_text('invalid image',422,'text/plain')

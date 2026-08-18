@@ -1,4 +1,12 @@
-# Clube Fidelidade v58
+# Clube Fidelidade v59
+
+## Novidades da v59
+
+- Google Wallet: `programLogo` passa a usar uma **URL física versionada** (`/api/wallet/logo-v59/...`) em vez de depender de query string, evitando que a Wallet reaproveite a imagem antiga em cache.
+- Logo processada ocupa 100% da área útil do PNG depois da remoção do fundo/margens, mantendo proporção e transparência.
+- Programas por pontos: o texto clicável do módulo de links agora é **“Catálogo de recompensas”** e abre diretamente o catálogo.
+- O texto não clicável de catálogo foi removido da face principal do cartão por pontos para não simular um link onde o Google não permite interação.
+- Versão sincronizada para **v59** no servidor, painel, páginas com `{{VERSION}}` e README.
 
 ## Novidades da v58
 

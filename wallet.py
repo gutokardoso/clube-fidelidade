@@ -119,7 +119,7 @@ def _google_logo_url(card):
     # an older processed logo even after the class is patched. The renderer revision
     # suffix MUST change whenever the server-side crop/resize algorithm changes.
     digest=hashlib.sha256(str(card.get('logo_image')).encode('utf-8')).hexdigest()[:12]
-    return f"{base}/api/wallet/logo/{urllib.parse.quote(code)}.png?v={digest}-r58"
+    return f"{base}/api/wallet/logo-v59/{urllib.parse.quote(code)}/{digest}.png"
 
 
 def _google_class_object(card):
@@ -135,17 +135,22 @@ def _google_class_object(card):
       'accountIdLabel':'Código do cartão',
       'classTemplateInfo':{
         'cardTemplateOverride':{
-          'cardRowTemplateInfos':[
-            {'twoItems':{
-              'startItem':{'firstValue':{'fields':[{'fieldPath':'object.loyaltyPoints.balance'}]}},
-              'endItem':{'firstValue':{'fields':[{'fieldPath':"object.textModulesData['reward']"}]}}
-            }},
-            {'oneItem':{'item':{'firstValue':{'fields':[{'fieldPath':'object.accountName'}]}}}}
-          ]
+          'cardRowTemplateInfos':(
+            [
+              {'oneItem':{'item':{'firstValue':{'fields':[{'fieldPath':'object.loyaltyPoints.balance'}]}}}},
+              {'oneItem':{'item':{'firstValue':{'fields':[{'fieldPath':'object.accountName'}]}}}}
+            ] if card.get('loyalty_type')=='points' else [
+              {'twoItems':{
+                'startItem':{'firstValue':{'fields':[{'fieldPath':'object.loyaltyPoints.balance'}]}},
+                'endItem':{'firstValue':{'fields':[{'fieldPath':"object.textModulesData['reward']"}]}}
+              }},
+              {'oneItem':{'item':{'firstValue':{'fields':[{'fieldPath':'object.accountName'}]}}}}
+            ]
+          )
         },
         'listTemplateOverride':{
           'firstRowOption':{'fieldOption':{'fields':[{'fieldPath':'object.loyaltyPoints.balance'}]}},
-          'secondRowOption':{'fields':[{'fieldPath':"object.textModulesData['reward']"}]}
+          'secondRowOption':{'fields':[{'fieldPath':'object.accountName'}]} if card.get('loyalty_type')=='points' else {'fields':[{'fieldPath':"object.textModulesData['reward']"}]}
         }
       }
     }
@@ -162,7 +167,7 @@ def _google_object(card):
     obj_suffix=re.sub(r'[^A-Za-z0-9_.-]','_',card['public_id'])
     points=card.get('loyalty_type')=='points'
     balance=str(card.get('points_balance',0)) if points else f"{card.get('progress',0)} de {card.get('goal',0)}"
-    reward='Catálogo de recompensas disponível no link abaixo' if points else (card.get('reward_name') or 'Recompensa do programa')
+    reward='Catálogo de recompensas' if points else (card.get('reward_name') or 'Recompensa do programa')
     body={
       'id':f'{issuer}.{obj_suffix}',
       'classId':_google_class_id(card),
@@ -171,18 +176,20 @@ def _google_object(card):
       'accountName':card.get('customer_name') or '',
       'loyaltyPoints':{'label':'Pontos' if points else 'Selos','balance':{'string':balance}},
       'barcode':{'type':'QR_CODE','value':'CLUBE:'+card['public_id'],'alternateText':'CLUBE:'+card['public_id']},
-      'textModulesData':[
-        {'id':'reward','header':'Próxima recompensa' if not points else 'Recompensas','body':reward},
-        {'id':'status','header':'Seu saldo','body':(str(card.get('points_balance',0))+' pontos') if points else (str(card.get('progress',0))+' de '+str(card.get('goal',0))+' selos')},
-        {'id':'member','header':'Cliente','body':card.get('customer_name') or ''}
-      ]
+      'textModulesData':(
+        ([{'id':'reward','header':'Próxima recompensa','body':reward}] if not points else []) +
+        [
+          {'id':'status','header':'Seu saldo','body':(str(card.get('points_balance',0))+' pontos') if points else (str(card.get('progress',0))+' de '+str(card.get('goal',0))+' selos')},
+          {'id':'member','header':'Cliente','body':card.get('customer_name') or ''}
+        ]
+      )
     }
     origin=_google_public_url()
     if origin:
         public_id_q=urllib.parse.quote(card['public_id'])
         links=[]
         if points:
-            links.append({'uri':origin+'/rewards?id='+public_id_q,'description':'Ver catálogo de recompensas'})
+            links.append({'uri':origin+'/rewards?id='+public_id_q,'description':'Catálogo de recompensas'})
         links.append({'uri':origin+'/card?id='+public_id_q,'description':'Abrir cartão digital'})
         body['linksModuleData']={'uris':links}
     return body
