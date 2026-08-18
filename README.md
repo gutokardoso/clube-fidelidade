@@ -55,3 +55,6 @@ Dashboard ampliado, histórico individual, ciclo de resgate, permissões adminis
 - Corrigido `NameError: validate_logo_data is not defined` ao criar ou editar uma empresa no Painel Taboo.
 - A validação da logo agora verifica PNG/JPG/WEBP, base64 válido, assinatura real do arquivo e limite de 500 KB.
 - Adicionado teste de regressão para impedir que o erro volte em versões futuras.
+
+## v46 — Permissões do Fidelidade 360
+Administrador configura programa, níveis VIP, aceleradores, bônus e vales. Atendentes têm visualização somente leitura e podem apenas consultar/utilizar vales apresentados por clientes. As rotas administrativas exigem `is_client_admin` também no backend.

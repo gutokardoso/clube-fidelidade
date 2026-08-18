@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v45'
+VERSION='v46'
 
 
 def jdump(obj):
@@ -964,6 +964,24 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 rows=[rowdict(r) for r in conn.execute("SELECT id,name,email,active,is_client_admin,created_at FROM users WHERE campaign_id=? AND role='attendant' ORDER BY is_client_admin DESC,name",(sess['campaign_id'],)).fetchall()]
                 return self.send_json({'ok':True,'staff':rows})
+
+        if path == '/api/attendant/loyalty360-summary':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                cid=sess['campaign_id']; now=now_ts()
+                camp=conn.execute("SELECT id,name,loyalty_type,points_spend_cents,cashback_percent,points_expiry_days,referral_bonus_points,referee_bonus_points FROM campaigns WHERE id=? AND company_id=?",(cid,sess['company_id'])).fetchone()
+                if not camp:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                tiers=[rowdict(x) for x in conn.execute("SELECT name,min_points,benefit,active FROM loyalty_tiers WHERE campaign_id=? AND active=1 ORDER BY min_points",(cid,)).fetchall()]
+                mult=[rowdict(x) for x in conn.execute("SELECT name,factor,weekday,start_hour,end_hour,active FROM point_multipliers WHERE campaign_id=? AND active=1 ORDER BY id DESC",(cid,)).fetchall()]
+                rewards_count=conn.execute("SELECT COUNT(*) n FROM reward_catalog WHERE campaign_id=? AND active=1",(cid,)).fetchone()['n']
+                metrics={}
+                metrics['customers']=conn.execute("SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND status='active'",(cid,)).fetchone()['n']
+                metrics['points_circulation']=conn.execute("SELECT COALESCE(SUM(points_balance),0) n FROM memberships WHERE campaign_id=?",(cid,)).fetchone()['n']
+                metrics['cashback_cents']=conn.execute("SELECT COALESCE(SUM(cashback_balance_cents),0) n FROM memberships WHERE campaign_id=?",(cid,)).fetchone()['n']
+                metrics['inactive30']=conn.execute("SELECT COUNT(*) n FROM memberships m WHERE campaign_id=? AND COALESCE((SELECT MAX(created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at)<?",(cid,now-30*86400)).fetchone()['n']
+                return self.send_json({'ok':True,'can_edit':bool(sess['is_client_admin']),'campaign':rowdict(camp),'tiers':tiers,'multipliers':mult,'rewards_count':rewards_count,'metrics':metrics})
+
         if path == '/api/admin/loyalty360':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')
@@ -985,6 +1003,17 @@ class Handler(BaseHTTPRequestHandler):
                 scores=[int(x['score']) for x in nps]
                 metrics['nps']=round((sum(1 for x in scores if x>=9)-sum(1 for x in scores if x<=6))*100/len(scores)) if scores else None
                 return self.send_json({'ok':True,'campaign':camp,'tiers':tiers,'multipliers':mult,'nps':nps,'referrals':referrals,'gift_cards':gifts,'metrics':metrics})
+
+        if path == '/api/attendant/gift-card':
+            code=(qs.get('code') or [''])[0].strip().upper()
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not code:return self.send_json({'ok':False,'error':'gift_code_required'},400)
+                gift=conn.execute("SELECT id,code,value_cents,balance_cents,status,created_at FROM gift_cards WHERE campaign_id=? AND upper(code)=upper(?)",(sess['campaign_id'],code)).fetchone()
+                if not gift:return self.send_json({'ok':False,'error':'gift_not_found'},404)
+                return self.send_json({'ok':True,'gift':rowdict(gift)})
+
         if path == '/api/card/history360':
             public_id=(qs.get('id') or [''])[0].strip()
             with connect(DB_PATH) as conn:
@@ -1302,6 +1331,24 @@ class Handler(BaseHTTPRequestHandler):
                 if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 import secrets
                 value=max(100,int(payload.get('value_cents') or 0)); code='VALE-'+secrets.token_hex(4).upper(); insert_id(conn,"INSERT INTO gift_cards(campaign_id,code,value_cents,balance_cents,status,created_at) VALUES(?,?,?,?,?,?)",(s['campaign_id'],code,value,value,'active',now_ts())); return self.send_json({'ok':True,'code':code})
+
+            if path == '/api/attendant/gift-card/redeem':
+                if s['role']!='attendant' or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                code=str(payload.get('code') or '').strip().upper()
+                try: amount=int(payload.get('amount_cents') or 0)
+                except: amount=0
+                if not code or amount<1:return self.send_json({'ok':False,'error':'invalid_gift_redeem'},400)
+                with connect(DB_PATH) as conn2:
+                    gift=fetchone_for_update(conn2,"SELECT * FROM gift_cards WHERE campaign_id=? AND upper(code)=upper(?)",(s['campaign_id'],code))
+                    if not gift:return self.send_json({'ok':False,'error':'gift_not_found'},404)
+                    if gift['status']!='active':return self.send_json({'ok':False,'error':'gift_inactive'},409)
+                    balance=int(gift['balance_cents'] or 0)
+                    if amount>balance:return self.send_json({'ok':False,'error':'insufficient_gift_balance','balance_cents':balance},409)
+                    new_balance=balance-amount; new_status='used' if new_balance==0 else 'active'
+                    conn2.execute("UPDATE gift_cards SET balance_cents=?,status=? WHERE id=?",(new_balance,new_status,gift['id']))
+                    audit(conn2,s['company_id'],s['user_id'],'gift_card_redeem','gift_card',gift['id'],details=f'{code};R${amount/100:.2f};saldo=R${new_balance/100:.2f}',ip_address=self._ip())
+                return self.send_json({'ok':True,'code':code,'amount_cents':amount,'balance_cents':new_balance,'status':new_status})
+
             if path == '/api/attendant/password':
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
                 current_password=str(payload.get('current_password',''))

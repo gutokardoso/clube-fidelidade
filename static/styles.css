@@ -95,3 +95,5 @@ textarea{width:100%;padding:13px 14px;border:1px solid #d9ccc4;border-radius:12p
 
 /* v43: home institucional para verificação de acesso Meta */
 .landing-about{line-height:1.65}.landing-about h2{margin-top:0}.landing-provider{margin-top:22px;padding:18px;border-radius:14px;background:#f7f1ed;border:1px solid var(--line)}.landing-provider p{margin-bottom:0}.landing-links{display:flex;gap:18px;flex-wrap:wrap;margin-top:20px}.landing-links a{font-weight:800;color:var(--accent)}
+
+.summary-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:12px 0;border-bottom:1px solid rgba(127,127,127,.18)}.summary-row:last-child{border-bottom:0}.summary-row span{display:flex;flex-direction:column;gap:3px}.summary-row small{opacity:.72}@media(max-width:640px){.summary-row{align-items:flex-start;flex-direction:column;gap:5px}}
