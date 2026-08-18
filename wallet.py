@@ -8,6 +8,7 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -232,26 +233,26 @@ def build_apple_pkpass(card):
         return out.getvalue()
 
 
-def google_wallet_jwt(card):
+def google_wallet_jwt(card, include_class=True):
     if not wallet_status()['google']['ready']: raise RuntimeError('google_wallet_not_configured')
     email=os.environ['GOOGLE_SERVICE_ACCOUNT_EMAIL'].strip()
     private_key=os.environ['GOOGLE_PRIVATE_KEY'].replace('\\n','\n')
     class_obj=_google_class_object(card)
     object_obj=_google_object(card)
-    payload={'iss':email,'aud':'google','typ':'savetowallet','iat':int(time.time()),'payload':{'loyaltyClasses':[class_obj],'loyaltyObjects':[object_obj]}}
+    wallet_payload={'loyaltyObjects':[object_obj]}
+    if include_class:
+        wallet_payload['loyaltyClasses']=[class_obj]
+    payload={'iss':email,'aud':'google','typ':'savetowallet','iat':int(time.time()),'payload':wallet_payload}
     origin=_google_public_url()
     if origin: payload['origins']=[origin]
     return _sign_rs256({'alg':'RS256','typ':'JWT'},payload,private_key),object_obj['id']
 
 def google_save_url(card):
-    # If this class already exists (for example after a previous Wallet preview),
-    # refresh its branding before generating the Save to Google Wallet link.
-    # A JWT does not reliably replace fields of an already-created class.
-    try:
-        google_update_class(card)
-    except Exception:
-        pass
-    token,_=google_wallet_jwt(card)
+    # Ensure the company-specific class really exists before creating the Save URL.
+    # Previous versions only PATCHed it; a new per-company class returned 404 and
+    # therefore never persisted its programLogo/branding in Google Wallet.
+    class_ready=google_ensure_class(card)
+    token,_=google_wallet_jwt(card, include_class=not class_ready)
     return 'https://pay.google.com/gp/v/save/'+token
 
 
@@ -272,17 +273,50 @@ def _google_patch(resource, resource_id, body):
     )
     with urllib.request.urlopen(req,timeout=15) as r:r.read()
 
+def _google_insert(resource, body):
+    req=urllib.request.Request(
+        'https://walletobjects.googleapis.com/walletobjects/v1/'+resource,
+        data=json.dumps(body,ensure_ascii=False,separators=(',',':')).encode('utf-8'),method='POST',
+        headers={'Authorization':'Bearer '+_google_access_token(),'Content-Type':'application/json'}
+    )
+    with urllib.request.urlopen(req,timeout=15) as r:
+        return json.loads(r.read().decode('utf-8') or '{}')
 
-def google_update_class(card):
+def google_ensure_class(card):
     if not wallet_status()['google']['ready']: return False
     klass=_google_class_object(card)
     body={k:v for k,v in klass.items() if k not in ('id','reviewStatus')}
     try:
         _google_patch('loyaltyClass',klass['id'],body)
+        print('[GOOGLE_WALLET] class updated:', klass['id'], 'logo=', bool(klass.get('programLogo')))
         return True
-    except Exception as exc:
-        print('[GOOGLE_WALLET] class update failed:', repr(exc))
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            detail=exc.read().decode('utf-8','ignore')[:500]
+            print('[GOOGLE_WALLET] class update failed:', exc.code, detail)
+            return False
+    try:
+        _google_insert('loyaltyClass',klass)
+        print('[GOOGLE_WALLET] class created:', klass['id'], 'logo=', bool(klass.get('programLogo')))
+        return True
+    except urllib.error.HTTPError as exc:
+        detail=exc.read().decode('utf-8','ignore')[:500]
+        # A concurrent request may have created it after our 404; patch once more.
+        if exc.code == 409:
+            try:
+                _google_patch('loyaltyClass',klass['id'],body)
+                print('[GOOGLE_WALLET] class updated after conflict:', klass['id'])
+                return True
+            except Exception as patch_exc:
+                print('[GOOGLE_WALLET] class patch after conflict failed:', repr(patch_exc))
+        print('[GOOGLE_WALLET] class create failed:', exc.code, detail)
         return False
+    except Exception as exc:
+        print('[GOOGLE_WALLET] class create failed:', repr(exc))
+        return False
+
+def google_update_class(card):
+    return google_ensure_class(card)
 
 
 def google_update_object(card):
