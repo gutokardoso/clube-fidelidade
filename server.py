@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v46'
+VERSION='v47'
 
 
 def jdump(obj):
@@ -980,7 +980,7 @@ class Handler(BaseHTTPRequestHandler):
                 metrics['points_circulation']=conn.execute("SELECT COALESCE(SUM(points_balance),0) n FROM memberships WHERE campaign_id=?",(cid,)).fetchone()['n']
                 metrics['cashback_cents']=conn.execute("SELECT COALESCE(SUM(cashback_balance_cents),0) n FROM memberships WHERE campaign_id=?",(cid,)).fetchone()['n']
                 metrics['inactive30']=conn.execute("SELECT COUNT(*) n FROM memberships m WHERE campaign_id=? AND COALESCE((SELECT MAX(created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at)<?",(cid,now-30*86400)).fetchone()['n']
-                return self.send_json({'ok':True,'can_edit':bool(sess['is_client_admin']),'campaign':rowdict(camp),'tiers':tiers,'multipliers':mult,'rewards_count':rewards_count,'metrics':metrics})
+                return self.send_json({'ok':True,'can_edit':bool(sess['is_client_admin']),'program_source':'taboo','campaign':rowdict(camp),'tiers':tiers,'multipliers':mult,'rewards_count':rewards_count,'metrics':metrics})
 
         if path == '/api/admin/loyalty360':
             with connect(DB_PATH) as conn:
@@ -1002,7 +1002,7 @@ class Handler(BaseHTTPRequestHandler):
                 metrics['referrals']=conn.execute("SELECT COUNT(*) n FROM referrals WHERE campaign_id=? AND status='rewarded'",(cid,)).fetchone()['n']
                 scores=[int(x['score']) for x in nps]
                 metrics['nps']=round((sum(1 for x in scores if x>=9)-sum(1 for x in scores if x<=6))*100/len(scores)) if scores else None
-                return self.send_json({'ok':True,'campaign':camp,'tiers':tiers,'multipliers':mult,'nps':nps,'referrals':referrals,'gift_cards':gifts,'metrics':metrics})
+                return self.send_json({'ok':True,'program_source':'taboo','campaign':camp,'tiers':tiers,'multipliers':mult,'nps':nps,'referrals':referrals,'gift_cards':gifts,'metrics':metrics})
 
         if path == '/api/attendant/gift-card':
             code=(qs.get('code') or [''])[0].strip().upper()
@@ -1301,15 +1301,22 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant')
                 if not s:return
                 if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
-                lt=str(payload.get('loyalty_type') or 'stamps');
-                if lt not in ('stamps','points','cashback','hybrid'):return self.send_json({'ok':False,'error':'invalid_loyalty_type'},400)
-                cashback=max(0,min(100,float(payload.get('cashback_percent') or 0))); expiry=max(0,int(payload.get('points_expiry_days') or 0)); rb=max(0,int(payload.get('referral_bonus_points') or 0)); nb=max(0,int(payload.get('referee_bonus_points') or 0))
-                conn.execute("UPDATE campaigns SET loyalty_type=?,cashback_percent=?,points_expiry_days=?,referral_bonus_points=?,referee_bonus_points=? WHERE id=?",(lt,cashback,expiry,rb,nb,s['campaign_id']))
-                return self.send_json({'ok':True})
+                campaign=conn.execute("SELECT loyalty_type FROM campaigns WHERE id=? AND company_id=?",(s['campaign_id'],s['company_id'])).fetchone()
+                if not campaign:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                # O tipo principal é definido exclusivamente no Painel Taboo.
+                # O administrador da empresa configura apenas recursos avançados do mesmo programa.
+                if campaign['loyalty_type']=='points':
+                    expiry=max(0,int(payload.get('points_expiry_days') or 0))
+                    rb=max(0,int(payload.get('referral_bonus_points') or 0))
+                    nb=max(0,int(payload.get('referee_bonus_points') or 0))
+                    conn.execute("UPDATE campaigns SET points_expiry_days=?,referral_bonus_points=?,referee_bonus_points=? WHERE id=?",(expiry,rb,nb,s['campaign_id']))
+                return self.send_json({'ok':True,'loyalty_type':campaign['loyalty_type']})
             if path == '/api/admin/loyalty360/tier':
                 s=self._require_auth(conn,'attendant');
                 if not s:return
                 if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                campaign=conn.execute("SELECT loyalty_type FROM campaigns WHERE id=?",(s['campaign_id'],)).fetchone()
+                if not campaign or campaign['loyalty_type']!='points':return self.send_json({'ok':False,'error':'points_program_required'},409)
                 name=str(payload.get('name') or '').strip()[:60]; mp=max(0,int(payload.get('min_points') or 0)); benefit=str(payload.get('benefit') or '').strip()[:200]
                 if not name:return self.send_json({'ok':False,'error':'invalid_tier'},400)
                 insert_id(conn,"INSERT INTO loyalty_tiers(campaign_id,name,min_points,benefit,active,created_at) VALUES(?,?,?,?,1,?)",(s['campaign_id'],name,mp,benefit,now_ts())); return self.send_json({'ok':True})
@@ -1317,6 +1324,8 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant');
                 if not s:return
                 if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                campaign=conn.execute("SELECT loyalty_type FROM campaigns WHERE id=?",(s['campaign_id'],)).fetchone()
+                if not campaign or campaign['loyalty_type']!='points':return self.send_json({'ok':False,'error':'points_program_required'},409)
                 name=str(payload.get('name') or '').strip()[:80]; factor=max(1,min(10,float(payload.get('factor') or 1))); weekday=str(payload.get('weekday') or 'all')[:20]
                 insert_id(conn,"INSERT INTO point_multipliers(campaign_id,name,factor,weekday,start_hour,end_hour,active,created_at) VALUES(?,?,?,?,?,?,1,?)",(s['campaign_id'],name,factor,weekday,str(payload.get('start_hour') or ''),str(payload.get('end_hour') or ''),now_ts())); return self.send_json({'ok':True})
             if path == '/api/card/nps':

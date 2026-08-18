@@ -437,7 +437,7 @@ def init_db(db_path=None, seed=True):
             if 'points_balance' not in mcols: conn.execute("ALTER TABLE memberships ADD COLUMN points_balance INTEGER NOT NULL DEFAULT 0")
         conn.executescript(("CREATE TABLE IF NOT EXISTS reward_catalog (id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, name TEXT NOT NULL, description TEXT, points_cost INTEGER NOT NULL, image_data TEXT, active INTEGER NOT NULL DEFAULT 1, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL); CREATE INDEX IF NOT EXISTS idx_reward_catalog_campaign ON reward_catalog(campaign_id, active, points_cost);" if _is_postgres(target) else "CREATE TABLE IF NOT EXISTS reward_catalog (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, name TEXT NOT NULL, description TEXT, points_cost INTEGER NOT NULL, image_data TEXT, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_reward_catalog_campaign ON reward_catalog(campaign_id, active, points_cost);"))
 
-        # Migração v46: fidelidade 360.
+        # Migração v47: fidelidade 360.
         campaign360=[('cashback_percent','REAL NOT NULL DEFAULT 0'),('points_expiry_days','INTEGER NOT NULL DEFAULT 0'),('referral_bonus_points','INTEGER NOT NULL DEFAULT 0'),('referee_bonus_points','INTEGER NOT NULL DEFAULT 0')]
         if _is_postgres(target):
             for col,typ in campaign360: conn.execute(f'ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS {col} {typ}')

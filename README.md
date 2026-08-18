@@ -56,5 +56,14 @@ Dashboard ampliado, histórico individual, ciclo de resgate, permissões adminis
 - A validação da logo agora verifica PNG/JPG/WEBP, base64 válido, assinatura real do arquivo e limite de 500 KB.
 - Adicionado teste de regressão para impedir que o erro volte em versões futuras.
 
-## v46 — Permissões do Fidelidade 360
+## v47 — Permissões do Fidelidade 360
 Administrador configura programa, níveis VIP, aceleradores, bônus e vales. Atendentes têm visualização somente leitura e podem apenas consultar/utilizar vales apresentados por clientes. As rotas administrativas exigem `is_client_admin` também no backend.
+
+## v47 — Um programa por empresa
+
+- Cada empresa possui **um único programa principal**, definido no Painel Taboo como Selos ou Pontos.
+- A antiga área “Fidelidade 360” foi renomeada visualmente para **Programa de Fidelidade**.
+- O administrador da empresa não consegue mais trocar o tipo de fidelidade; ele apenas configura recursos avançados do programa já existente.
+- Níveis VIP, aceleradores, validade de pontos e bônus de indicação aparecem somente em programas por Pontos.
+- Programas por Selos não exibem controles exclusivos de Pontos.
+- O backend também impede criação de níveis/aceleradores fora de programas de Pontos.
