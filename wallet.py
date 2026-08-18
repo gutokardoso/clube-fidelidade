@@ -100,7 +100,7 @@ def _google_class_id(card):
 def _google_logo_url(card):
     base=_google_public_url()
     code=str(card.get('campaign_code') or '').strip()
-    return f"{base}/api/wallet/logo/{urllib.parse.quote(code)}" if base and code and card.get('logo_image') else ''
+    return f"{base}/api/wallet/logo/{urllib.parse.quote(code)}.png" if base and code and card.get('logo_image') else ''
 
 
 def _google_class_object(card):
@@ -237,6 +237,13 @@ def google_wallet_jwt(card):
     return _sign_rs256({'alg':'RS256','typ':'JWT'},payload,private_key),object_obj['id']
 
 def google_save_url(card):
+    # If this class already exists (for example after a previous Wallet preview),
+    # refresh its branding before generating the Save to Google Wallet link.
+    # A JWT does not reliably replace fields of an already-created class.
+    try:
+        google_update_class(card)
+    except Exception:
+        pass
     token,_=google_wallet_jwt(card)
     return 'https://pay.google.com/gp/v/save/'+token
 

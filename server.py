@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v50'
+VERSION='v51'
 
 
 def jdump(obj):
@@ -842,15 +842,28 @@ class Handler(BaseHTTPRequestHandler):
             token,exp=make_dynamic_qr(public_id,60)
             return self.send_json({'ok':True,'token':token,'expires_at':exp})
         if path.startswith('/api/wallet/logo/'):
-            campaign_code=urllib.parse.unquote(path.split('/api/wallet/logo/',1)[1]).strip().upper()
+            campaign_code=urllib.parse.unquote(path.split('/api/wallet/logo/',1)[1]).strip()
+            if campaign_code.lower().endswith('.png'):
+                campaign_code=campaign_code[:-4]
+            campaign_code=campaign_code.strip().upper()
             if not campaign_code:return self.send_text('not found',404,'text/plain')
             with connect(DB_PATH) as conn:
                 c=conn.execute('SELECT logo_image FROM campaigns WHERE code=? AND active=1',(campaign_code,)).fetchone()
             if not c or not c['logo_image']:return self.send_text('not found',404,'text/plain')
             try:
-                raw,subtype=decode_image_data(c['logo_image'])
-                ctype='image/jpeg' if subtype=='jpeg' else 'image/'+subtype
-                return self.send_bytes(raw,ctype,200,{'Cache-Control':'public, max-age=3600'})
+                # Google Wallet recommends a square PNG logo of at least 660x660.
+                # Campaign logos can arrive as JPEG/WebP or in arbitrary proportions,
+                # so expose a dedicated Wallet-safe PNG with transparent padding.
+                raw,_subtype=decode_image_data(c['logo_image'])
+                from PIL import Image as PILImage
+                src=PILImage.open(io.BytesIO(raw)).convert('RGBA')
+                size=840
+                safe=int(size*0.70)  # 15% safe margin on each side for circular mask
+                src.thumbnail((safe,safe),PILImage.Resampling.LANCZOS)
+                canvas=PILImage.new('RGBA',(size,size),(255,255,255,0))
+                canvas.alpha_composite(src,((size-src.width)//2,(size-src.height)//2))
+                out=io.BytesIO(); canvas.save(out,format='PNG',optimize=True)
+                return self.send_bytes(out.getvalue(),'image/png',200,{'Cache-Control':'public, max-age=3600','X-Content-Type-Options':'nosniff'})
             except Exception:
                 return self.send_text('invalid image',422,'text/plain')
         if path.startswith('/api/wallet/apple/'):

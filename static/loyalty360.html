@@ -63,4 +63,4 @@ $('#gift').onsubmit=async e=>{e.preventDefault();const j=await post('/api/admin/
 $('#giftLookupBtn').onclick=async()=>{try{const j=await api('/api/attendant/gift-card?code='+encodeURIComponent($('#giftCode').value.trim())),g=j.gift;$('#giftLookupResult').innerHTML=`<div class="notice success"><b>${esc(g.code)}</b><br>Saldo: ${money(g.balance_cents)} · ${esc(g.status)}</div>`}catch(e){$('#giftLookupResult').innerHTML='<div class="notice error">Vale não encontrado.</div>'}};
 $('#giftLookupForm').onsubmit=async e=>{e.preventDefault();const code=$('#giftCode').value.trim(),amount=cents($('#giftUseValue').value);if(!code||amount<1)return;try{const j=await post('/api/attendant/gift-card/redeem',{code,amount_cents:amount});$('#giftLookupResult').innerHTML=`<div class="notice success">Vale utilizado. Saldo restante: <b>${money(j.balance_cents)}</b></div>`}catch(e){$('#giftLookupResult').innerHTML=`<div class="notice error">${esc(e.data?.error||'Não foi possível utilizar o vale.')}</div>`}};
 boot();
-</script><div class="build-marker">v50</div></body></html>
+</script><div class="build-marker">{{VERSION}}</div></body></html>
