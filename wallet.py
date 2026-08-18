@@ -83,7 +83,17 @@ def _theme_hex(theme):
 
 
 def _google_public_url():
-    return (os.environ.get('CLUBE_PUBLIC_URL') or os.environ.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
+    # Prefer an explicitly configured public URL, but Railway already exposes
+    # the production hostname automatically.  Without this fallback the
+    # per-client LoyaltyClass was created without programLogo and Google
+    # rejected it with: "LoyaltyClass cannot be created without a program logo."
+    explicit=(os.environ.get('CLUBE_PUBLIC_URL') or os.environ.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
+    if explicit:
+        return explicit
+    railway=(os.environ.get('RAILWAY_PUBLIC_DOMAIN') or '').strip().strip('/')
+    if railway:
+        return railway if railway.startswith(('http://','https://')) else 'https://'+railway
+    return ''
 
 
 def _google_class_id(card):
