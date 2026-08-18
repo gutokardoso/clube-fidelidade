@@ -1,7 +1,9 @@
-# Clube Fidelidade v63
+# Clube Fidelidade v64
 
 
-## Novidades da v63
+## Novidades da v64
+
+- Redesign premium dos painéis de administrador da empresa e atendente: navegação rápida, hero contextual por perfil, atendimento em destaque, cards e tabelas mais limpos, indicadores reorganizados, busca e ações rápidas, responsividade para tablet/mobile e hierarquia visual unificada.
 - Cartão web: instrução abaixo do QR agora é dinâmica: programas por selos exibem “ganhar seu selo” e programas por pontos exibem “acumular seus pontos”.
 
 ## Novidades da v62
