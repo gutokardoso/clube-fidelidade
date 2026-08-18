@@ -1,5 +1,8 @@
-# Clube Fidelidade v62
+# Clube Fidelidade v63
 
+
+## Novidades da v63
+- Cartão web: instrução abaixo do QR agora é dinâmica: programas por selos exibem “ganhar seu selo” e programas por pontos exibem “acumular seus pontos”.
 
 ## Novidades da v62
 - Google Wallet: lista geral corrigida para exibir **nome da empresa** na primeira linha e **saldo de pontos/selos** na segunda.
