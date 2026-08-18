@@ -100,7 +100,14 @@ def _google_class_id(card):
 def _google_logo_url(card):
     base=_google_public_url()
     code=str(card.get('campaign_code') or '').strip()
-    return f"{base}/api/wallet/logo/{urllib.parse.quote(code)}.png" if base and code and card.get('logo_image') else ''
+    
+    if not (base and code and card.get('logo_image')):
+        return ''
+    # Cache-bust the image URL whenever the stored logo changes. Google Wallet
+    # caches remote image assets aggressively, so reusing the same URL can keep
+    # the old fallback initial even after the class is patched.
+    digest=hashlib.sha256(str(card.get('logo_image')).encode('utf-8')).hexdigest()[:12]
+    return f"{base}/api/wallet/logo/{urllib.parse.quote(code)}.png?v={digest}"
 
 
 def _google_class_object(card):
@@ -273,7 +280,8 @@ def google_update_class(card):
     try:
         _google_patch('loyaltyClass',klass['id'],body)
         return True
-    except Exception:
+    except Exception as exc:
+        print('[GOOGLE_WALLET] class update failed:', repr(exc))
         return False
 
 

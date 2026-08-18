@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v51'
+VERSION='v52'
 
 
 def jdump(obj):
@@ -848,7 +848,7 @@ class Handler(BaseHTTPRequestHandler):
             campaign_code=campaign_code.strip().upper()
             if not campaign_code:return self.send_text('not found',404,'text/plain')
             with connect(DB_PATH) as conn:
-                c=conn.execute('SELECT logo_image FROM campaigns WHERE code=? AND active=1',(campaign_code,)).fetchone()
+                c=conn.execute('SELECT logo_image FROM campaigns WHERE UPPER(code)=UPPER(?) AND active=1',(campaign_code,)).fetchone()
             if not c or not c['logo_image']:return self.send_text('not found',404,'text/plain')
             try:
                 # Google Wallet recommends a square PNG logo of at least 660x660.
