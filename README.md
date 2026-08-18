@@ -1,4 +1,10 @@
-# Clube Fidelidade v56
+# Clube Fidelidade v57
+## Novidades da v57
+
+- Google Wallet: corrigido o cache da `programLogo`. A URL pública da logo agora inclui uma revisão do processador (`r57`), garantindo que o Google busque novamente a imagem quando o algoritmo de recorte/redimensionamento mudar.
+- Mantido o recorte de margens transparentes e de fundo uniforme da v56, agora efetivamente refletido no Google Wallet.
+- Marcadores de versão do README e do painel atualizados para v57.
+
 
 Versão multi-cliente com antifraude, QR temporário, fila de mensagens, automações, dashboard, LGPD, perfis Taboo/Administrador do cliente/Atendente e integração configurável com Apple Wallet e Google Wallet.
 

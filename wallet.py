@@ -116,9 +116,10 @@ def _google_logo_url(card):
         return ''
     # Cache-bust the image URL whenever the stored logo changes. Google Wallet
     # caches remote image assets aggressively, so reusing the same URL can keep
-    # the old fallback initial even after the class is patched.
+    # an older processed logo even after the class is patched. The renderer revision
+    # suffix MUST change whenever the server-side crop/resize algorithm changes.
     digest=hashlib.sha256(str(card.get('logo_image')).encode('utf-8')).hexdigest()[:12]
-    return f"{base}/api/wallet/logo/{urllib.parse.quote(code)}.png?v={digest}"
+    return f"{base}/api/wallet/logo/{urllib.parse.quote(code)}.png?v={digest}-r57"
 
 
 def _google_class_object(card):
