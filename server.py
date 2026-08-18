@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v44'
+VERSION='v45'
 
 
 def jdump(obj):
@@ -786,7 +786,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 template=template.replace('{{LOGO_BLOCK}}','<div class="brand campaign-logo-fallback">CLUBE</div>').replace('{{CAMPAIGN_NAME}}','Cliente não encontrado').replace('<form id="f" class="form" method="post" action="/join">','<form id="f" class="form hidden" method="post" action="/join">')
             return self.send_text(template)
-        if path in ['/login','/manager','/attendant','/card','/rewards']:
+        if path in ['/login','/manager','/attendant','/card','/rewards','/loyalty360']:
             name = path.strip('/') + '.html'
             template=(STATIC/name).read_text(encoding='utf-8').replace('{{VERSION}}',VERSION)
             if path == '/login' and (qs.get('error') or [''])[0]:
@@ -964,6 +964,35 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 rows=[rowdict(r) for r in conn.execute("SELECT id,name,email,active,is_client_admin,created_at FROM users WHERE campaign_id=? AND role='attendant' ORDER BY is_client_admin DESC,name",(sess['campaign_id'],)).fetchall()]
                 return self.send_json({'ok':True,'staff':rows})
+        if path == '/api/admin/loyalty360':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                cid=sess['campaign_id']; now=now_ts()
+                camp=rowdict(conn.execute("SELECT * FROM campaigns WHERE id=?",(cid,)).fetchone())
+                tiers=[rowdict(x) for x in conn.execute("SELECT * FROM loyalty_tiers WHERE campaign_id=? ORDER BY min_points",(cid,)).fetchall()]
+                mult=[rowdict(x) for x in conn.execute("SELECT * FROM point_multipliers WHERE campaign_id=? ORDER BY id DESC",(cid,)).fetchall()]
+                nps=[rowdict(x) for x in conn.execute("SELECT * FROM nps_responses WHERE campaign_id=? ORDER BY id DESC LIMIT 100",(cid,)).fetchall()]
+                referrals=[rowdict(x) for x in conn.execute("SELECT * FROM referrals WHERE campaign_id=? ORDER BY id DESC LIMIT 100",(cid,)).fetchall()]
+                gifts=[rowdict(x) for x in conn.execute("SELECT * FROM gift_cards WHERE campaign_id=? ORDER BY id DESC LIMIT 100",(cid,)).fetchall()]
+                metrics={}
+                metrics['customers']=conn.execute("SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND status='active'",(cid,)).fetchone()['n']
+                metrics['points_circulation']=conn.execute("SELECT COALESCE(SUM(points_balance),0) n FROM memberships WHERE campaign_id=?",(cid,)).fetchone()['n']
+                metrics['cashback_cents']=conn.execute("SELECT COALESCE(SUM(cashback_balance_cents),0) n FROM memberships WHERE campaign_id=?",(cid,)).fetchone()['n']
+                metrics['inactive30']=conn.execute("SELECT COUNT(*) n FROM memberships m WHERE campaign_id=? AND COALESCE((SELECT MAX(created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at)<?",(cid,now-30*86400)).fetchone()['n']
+                metrics['referrals']=conn.execute("SELECT COUNT(*) n FROM referrals WHERE campaign_id=? AND status='rewarded'",(cid,)).fetchone()['n']
+                scores=[int(x['score']) for x in nps]
+                metrics['nps']=round((sum(1 for x in scores if x>=9)-sum(1 for x in scores if x<=6))*100/len(scores)) if scores else None
+                return self.send_json({'ok':True,'campaign':camp,'tiers':tiers,'multipliers':mult,'nps':nps,'referrals':referrals,'gift_cards':gifts,'metrics':metrics})
+        if path == '/api/card/history360':
+            public_id=(qs.get('id') or [''])[0].strip()
+            with connect(DB_PATH) as conn:
+                m=conn.execute("SELECT m.*,c.name campaign_name,c.loyalty_type,c.cashback_percent,c.points_expiry_days,c.referral_bonus_points,c.referee_bonus_points FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=?",(public_id,)).fetchone()
+                if not m:return self.send_json({'ok':False,'error':'card_not_found'},404)
+                hist=[rowdict(x) for x in conn.execute("SELECT type,value,note,created_at FROM transactions WHERE membership_id=? ORDER BY id DESC LIMIT 100",(m['id'],)).fetchall()]
+                tier=conn.execute("SELECT name FROM loyalty_tiers WHERE campaign_id=? AND min_points<=? ORDER BY min_points DESC LIMIT 1",(m['campaign_id'],m['points_balance'])).fetchone()
+                return self.send_json({'ok':True,'card':rowdict(m),'history':hist,'tier':tier['name'] if tier else None})
         if path == '/api/manager/diagnostics':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'manager')
@@ -1239,6 +1268,40 @@ class Handler(BaseHTTPRequestHandler):
             s=self._require_auth(conn)
             if not s: return
             if not self._require_csrf(s,payload): return self.send_json({'ok':False,'error':'csrf_failed'},403)
+            if path == '/api/admin/loyalty360/settings':
+                s=self._require_auth(conn,'attendant')
+                if not s:return
+                if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                lt=str(payload.get('loyalty_type') or 'stamps');
+                if lt not in ('stamps','points','cashback','hybrid'):return self.send_json({'ok':False,'error':'invalid_loyalty_type'},400)
+                cashback=max(0,min(100,float(payload.get('cashback_percent') or 0))); expiry=max(0,int(payload.get('points_expiry_days') or 0)); rb=max(0,int(payload.get('referral_bonus_points') or 0)); nb=max(0,int(payload.get('referee_bonus_points') or 0))
+                conn.execute("UPDATE campaigns SET loyalty_type=?,cashback_percent=?,points_expiry_days=?,referral_bonus_points=?,referee_bonus_points=? WHERE id=?",(lt,cashback,expiry,rb,nb,s['campaign_id']))
+                return self.send_json({'ok':True})
+            if path == '/api/admin/loyalty360/tier':
+                s=self._require_auth(conn,'attendant');
+                if not s:return
+                if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                name=str(payload.get('name') or '').strip()[:60]; mp=max(0,int(payload.get('min_points') or 0)); benefit=str(payload.get('benefit') or '').strip()[:200]
+                if not name:return self.send_json({'ok':False,'error':'invalid_tier'},400)
+                insert_id(conn,"INSERT INTO loyalty_tiers(campaign_id,name,min_points,benefit,active,created_at) VALUES(?,?,?,?,1,?)",(s['campaign_id'],name,mp,benefit,now_ts())); return self.send_json({'ok':True})
+            if path == '/api/admin/loyalty360/multiplier':
+                s=self._require_auth(conn,'attendant');
+                if not s:return
+                if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                name=str(payload.get('name') or '').strip()[:80]; factor=max(1,min(10,float(payload.get('factor') or 1))); weekday=str(payload.get('weekday') or 'all')[:20]
+                insert_id(conn,"INSERT INTO point_multipliers(campaign_id,name,factor,weekday,start_hour,end_hour,active,created_at) VALUES(?,?,?,?,?,?,1,?)",(s['campaign_id'],name,factor,weekday,str(payload.get('start_hour') or ''),str(payload.get('end_hour') or ''),now_ts())); return self.send_json({'ok':True})
+            if path == '/api/card/nps':
+                public_id=str(payload.get('id') or '').strip(); score=int(payload.get('score') or -1); comment=str(payload.get('comment') or '').strip()[:500]
+                if score<0 or score>10:return self.send_json({'ok':False,'error':'invalid_score'},400)
+                m=conn.execute("SELECT id,campaign_id FROM memberships WHERE public_id=?",(public_id,)).fetchone();
+                if not m:return self.send_json({'ok':False,'error':'card_not_found'},404)
+                insert_id(conn,"INSERT INTO nps_responses(campaign_id,membership_id,score,comment,created_at) VALUES(?,?,?,?,?)",(m['campaign_id'],m['id'],score,comment,now_ts())); return self.send_json({'ok':True})
+            if path == '/api/admin/gift-card':
+                s=self._require_auth(conn,'attendant');
+                if not s:return
+                if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                import secrets
+                value=max(100,int(payload.get('value_cents') or 0)); code='VALE-'+secrets.token_hex(4).upper(); insert_id(conn,"INSERT INTO gift_cards(campaign_id,code,value_cents,balance_cents,status,created_at) VALUES(?,?,?,?,?,?)",(s['campaign_id'],code,value,value,'active',now_ts())); return self.send_json({'ok':True,'code':code})
             if path == '/api/attendant/password':
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
                 current_password=str(payload.get('current_password',''))

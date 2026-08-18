@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS campaigns (
   card_theme TEXT NOT NULL DEFAULT 'green',
   loyalty_type TEXT NOT NULL DEFAULT 'stamps',
   points_spend_cents INTEGER NOT NULL DEFAULT 200,
+  cashback_percent REAL NOT NULL DEFAULT 0,
+  points_expiry_days INTEGER NOT NULL DEFAULT 0,
+  referral_bonus_points INTEGER NOT NULL DEFAULT 0,
+  referee_bonus_points INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
   min_stamp_interval_sec INTEGER NOT NULL DEFAULT 0,
   max_stamps_per_hour INTEGER NOT NULL DEFAULT 0,
@@ -67,6 +71,7 @@ CREATE TABLE IF NOT EXISTS memberships (
   qr_token TEXT NOT NULL UNIQUE,
   progress INTEGER NOT NULL DEFAULT 0,
   points_balance INTEGER NOT NULL DEFAULT 0,
+  cashback_balance_cents INTEGER NOT NULL DEFAULT 0,
   rewards_available INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','blocked')),
   created_at INTEGER NOT NULL,
@@ -158,6 +163,10 @@ CREATE TABLE IF NOT EXISTS campaigns (
   card_theme TEXT NOT NULL DEFAULT 'green',
   loyalty_type TEXT NOT NULL DEFAULT 'stamps',
   points_spend_cents INTEGER NOT NULL DEFAULT 200,
+  cashback_percent REAL NOT NULL DEFAULT 0,
+  points_expiry_days INTEGER NOT NULL DEFAULT 0,
+  referral_bonus_points INTEGER NOT NULL DEFAULT 0,
+  referee_bonus_points INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
   min_stamp_interval_sec INTEGER NOT NULL DEFAULT 0,
   max_stamps_per_hour INTEGER NOT NULL DEFAULT 0,
@@ -186,6 +195,7 @@ CREATE TABLE IF NOT EXISTS memberships (
   qr_token TEXT NOT NULL UNIQUE,
   progress INTEGER NOT NULL DEFAULT 0,
   points_balance INTEGER NOT NULL DEFAULT 0,
+  cashback_balance_cents INTEGER NOT NULL DEFAULT 0,
   rewards_available INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','blocked')),
   created_at BIGINT NOT NULL,
@@ -426,6 +436,21 @@ def init_db(db_path=None, seed=True):
             mcols={r['name'] for r in conn.execute("PRAGMA table_info(memberships)").fetchall()}
             if 'points_balance' not in mcols: conn.execute("ALTER TABLE memberships ADD COLUMN points_balance INTEGER NOT NULL DEFAULT 0")
         conn.executescript(("CREATE TABLE IF NOT EXISTS reward_catalog (id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, name TEXT NOT NULL, description TEXT, points_cost INTEGER NOT NULL, image_data TEXT, active INTEGER NOT NULL DEFAULT 1, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL); CREATE INDEX IF NOT EXISTS idx_reward_catalog_campaign ON reward_catalog(campaign_id, active, points_cost);" if _is_postgres(target) else "CREATE TABLE IF NOT EXISTS reward_catalog (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, name TEXT NOT NULL, description TEXT, points_cost INTEGER NOT NULL, image_data TEXT, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_reward_catalog_campaign ON reward_catalog(campaign_id, active, points_cost);"))
+
+        # Migração v45: fidelidade 360.
+        campaign360=[('cashback_percent','REAL NOT NULL DEFAULT 0'),('points_expiry_days','INTEGER NOT NULL DEFAULT 0'),('referral_bonus_points','INTEGER NOT NULL DEFAULT 0'),('referee_bonus_points','INTEGER NOT NULL DEFAULT 0')]
+        if _is_postgres(target):
+            for col,typ in campaign360: conn.execute(f'ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS {col} {typ}')
+            conn.execute('ALTER TABLE memberships ADD COLUMN IF NOT EXISTS cashback_balance_cents INTEGER NOT NULL DEFAULT 0')
+        else:
+            ccols={r['name'] for r in conn.execute('PRAGMA table_info(campaigns)').fetchall()}; mcols={r['name'] for r in conn.execute('PRAGMA table_info(memberships)').fetchall()}
+            for col,typ in campaign360:
+                if col not in ccols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
+            if 'cashback_balance_cents' not in mcols: conn.execute('ALTER TABLE memberships ADD COLUMN cashback_balance_cents INTEGER NOT NULL DEFAULT 0')
+        if _is_postgres(target):
+            conn.executescript("CREATE TABLE IF NOT EXISTS loyalty_tiers (id BIGSERIAL PRIMARY KEY,campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,name TEXT NOT NULL,min_points INTEGER NOT NULL DEFAULT 0,benefit TEXT,active INTEGER NOT NULL DEFAULT 1,created_at BIGINT NOT NULL); CREATE TABLE IF NOT EXISTS point_multipliers (id BIGSERIAL PRIMARY KEY,campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,name TEXT,factor REAL NOT NULL DEFAULT 1,weekday TEXT DEFAULT 'all',start_hour TEXT,end_hour TEXT,active INTEGER NOT NULL DEFAULT 1,created_at BIGINT NOT NULL); CREATE TABLE IF NOT EXISTS referrals (id BIGSERIAL PRIMARY KEY,campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,referrer_membership_id BIGINT REFERENCES memberships(id),referred_membership_id BIGINT REFERENCES memberships(id),code TEXT,status TEXT NOT NULL DEFAULT 'pending',created_at BIGINT NOT NULL,rewarded_at BIGINT); CREATE TABLE IF NOT EXISTS nps_responses (id BIGSERIAL PRIMARY KEY,campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,membership_id BIGINT REFERENCES memberships(id),score INTEGER NOT NULL,comment TEXT,created_at BIGINT NOT NULL); CREATE TABLE IF NOT EXISTS gift_cards (id BIGSERIAL PRIMARY KEY,campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,code TEXT NOT NULL UNIQUE,value_cents INTEGER NOT NULL,balance_cents INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'active',created_at BIGINT NOT NULL);")
+        else:
+            conn.executescript("CREATE TABLE IF NOT EXISTS loyalty_tiers (id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,name TEXT NOT NULL,min_points INTEGER NOT NULL DEFAULT 0,benefit TEXT,active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS point_multipliers (id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,name TEXT,factor REAL NOT NULL DEFAULT 1,weekday TEXT DEFAULT 'all',start_hour TEXT,end_hour TEXT,active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS referrals (id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,referrer_membership_id INTEGER REFERENCES memberships(id),referred_membership_id INTEGER REFERENCES memberships(id),code TEXT,status TEXT NOT NULL DEFAULT 'pending',created_at INTEGER NOT NULL,rewarded_at INTEGER); CREATE TABLE IF NOT EXISTS nps_responses (id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,membership_id INTEGER REFERENCES memberships(id),score INTEGER NOT NULL,comment TEXT,created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS gift_cards (id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,code TEXT NOT NULL UNIQUE,value_cents INTEGER NOT NULL,balance_cents INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'active',created_at INTEGER NOT NULL);")
 
         # Migração v10: todo atendente pode ser vinculado a um cliente (campaign_id).
         if _is_postgres(target):
