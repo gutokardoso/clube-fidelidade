@@ -105,7 +105,7 @@ def _google_class_id(card):
     campaign=re.sub(r'[^A-Za-z0-9_.-]','_',str(card.get('campaign_code') or 'cliente').lower())
     # One class per company/campaign is required for independent logo/color branding.
     suffix=base if base.endswith('_'+campaign) else f'{base}_{campaign}'
-    return f'{issuer}.{suffix}_v61'
+    return f'{issuer}.{suffix}_v62'
 
 
 def _google_logo_url(card):
@@ -119,7 +119,7 @@ def _google_logo_url(card):
     # an older processed logo even after the class is patched. The renderer revision
     # suffix MUST change whenever the server-side crop/resize algorithm changes.
     digest=hashlib.sha256(str(card.get('logo_image')).encode('utf-8')).hexdigest()[:12]
-    return f"{base}/api/wallet/logo-v61/{urllib.parse.quote(code)}/{digest}.png"
+    return f"{base}/api/wallet/logo-v62/{urllib.parse.quote(code)}/{digest}.png"
 
 
 def _google_class_object(card):
@@ -131,7 +131,7 @@ def _google_class_object(card):
       'programName':'Clube de Fidelidade',
       'reviewStatus':'UNDER_REVIEW',
       'hexBackgroundColor':_theme_hex(card.get('card_theme')),
-      'accountNameLabel':'Cliente',
+      'accountNameLabel':'Empresa',
       'accountIdLabel':'Código do cartão',
       'classTemplateInfo':{
         'cardTemplateOverride':{
@@ -149,8 +149,9 @@ def _google_class_object(card):
           )
         },
         'listTemplateOverride':{
-          'firstRowOption':{'fieldOption':{'fields':[{'fieldPath':'object.loyaltyPoints.balance'}]}},
-          'secondRowOption':{'fields':[{'fieldPath':'object.accountName'}]} if card.get('loyalty_type')=='points' else {'fields':[{'fieldPath':"object.textModulesData['reward']"}]}
+          # Google Wallet's all-passes list: company first, live balance second.
+          'firstRowOption':{'fieldOption':{'fields':[{'fieldPath':'object.accountName'}]}},
+          'secondRowOption':{'fields':[{'fieldPath':'object.loyaltyPoints.balance'}]}
         }
       }
     }
@@ -169,11 +170,11 @@ def _google_object(card):
     balance=str(card.get('points_balance',0)) if points else f"{card.get('progress',0)} de {card.get('goal',0)}"
     reward='Catálogo de recompensas' if points else (card.get('reward_name') or 'Recompensa do programa')
     body={
-      'id':f'{issuer}.{obj_suffix}_v61',
+      'id':f'{issuer}.{obj_suffix}_v62',
       'classId':_google_class_id(card),
       'state':'ACTIVE',
       'accountId':'CLUBE:'+card['public_id'],
-      'accountName':card.get('customer_name') or '',
+      'accountName':card.get('campaign_name') or 'Clube Fidelidade',
       'loyaltyPoints':{'label':'Pontos' if points else 'Selos','balance':{'string':balance}},
       'barcode':{'type':'QR_CODE','value':'CLUBE:'+card['public_id'],'alternateText':'CLUBE:'+card['public_id']},
       'textModulesData':(
@@ -280,7 +281,7 @@ def google_wallet_jwt(card, include_class=True):
 
 def google_save_url(card):
     # Fast path: do not block the user's click with Google Wallet API calls.
-    # The Save-to-Wallet JWT carries the current v61 class and object, so Google
+    # The Save-to-Wallet JWT carries the current v62 class and object, so Google
     # creates/updates the pass as part of the save flow itself. This makes the
     # redirect to pay.google.com immediate instead of waiting for class/object
     # PATCH requests before returning HTTP 302.

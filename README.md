@@ -1,13 +1,16 @@
-# Clube Fidelidade v61
+# Clube Fidelidade v62
 
 
-## Novidades da v61
+## Novidades da v62
+- Google Wallet: lista geral corrigida para exibir **nome da empresa** na primeira linha e **saldo de pontos/selos** na segunda.
+- O nome do cliente continua disponível nos detalhes do passe, sem ser usado como título da listagem.
+
 
 - Google Wallet: redirecionamento para `pay.google.com` sem chamadas síncronas de PATCH/CREATE antes do HTTP 302, reduzindo a espera após o clique.
-- Google Wallet: nova `LoyaltyClass` e novo `LoyaltyObject` na revisão **v61**, impedindo reaproveitamento do layout antigo.
+- Google Wallet: nova `LoyaltyClass` e novo `LoyaltyObject` na revisão **v62**, impedindo reaproveitamento do layout antigo.
 - Programas por pontos: removido o bloco textual grande de recompensas do passe; **“Catálogo de recompensas”** fica no módulo nativo de links como CTA clicável para `/rewards?id=<cartão>`.
-- Logo: endpoint e IDs versionados em **v61** para evitar cache da revisão anterior.
-- Versão sincronizada para **v61** em servidor, páginas, painel e README.
+- Logo: endpoint e IDs versionados em **v62** para evitar cache da revisão anterior.
+- Versão sincronizada para **v62** em servidor, páginas, painel e README.
 
 ## Novidades da v59
 

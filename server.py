@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v61'
+VERSION='v62'
 
 
 def jdump(obj):
@@ -841,11 +841,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not conn.execute('SELECT id FROM memberships WHERE public_id=? AND status=?',(public_id,'active')).fetchone(): return self.send_json({'ok':False,'error':'membership_not_found'},404)
             token,exp=make_dynamic_qr(public_id,60)
             return self.send_json({'ok':True,'token':token,'expires_at':exp})
-        if path.startswith('/api/wallet/logo-v61/') or path.startswith('/api/wallet/logo/'):
-            if path.startswith('/api/wallet/logo-v61/'):
+        if path.startswith('/api/wallet/logo-v62/') or path.startswith('/api/wallet/logo/'):
+            if path.startswith('/api/wallet/logo-v62/'):
                 # Versioned path is intentionally immutable. Changing the path, not
                 # only the query string, forces Google Wallet to fetch the new logo.
-                tail=path.split('/api/wallet/logo-v61/',1)[1].strip('/')
+                tail=path.split('/api/wallet/logo-v62/',1)[1].strip('/')
                 campaign_code=urllib.parse.unquote(tail.split('/',1)[0]).strip().upper()
             else:
                 campaign_code=urllib.parse.unquote(path.split('/api/wallet/logo/',1)[1]).strip()
@@ -860,14 +860,14 @@ class Handler(BaseHTTPRequestHandler):
                 # Google Wallet renders programLogo inside a fixed circular slot.
                 # Many uploaded logos are square images with a large white/solid
                 # background around the real artwork, so simply resizing the whole
-                # upload makes the brand mark look tiny. v61 removes the
+                # upload makes the brand mark look tiny. v62 removes the
                 # background that is CONNECTED to the image borders, preserving
                 # white details that belong to the logo itself.
                 raw,_subtype=decode_image_data(c['logo_image'])
                 from PIL import Image as PILImage, ImageChops, ImageDraw as PILImageDraw
                 src=PILImage.open(io.BytesIO(raw)).convert('RGBA')
 
-                # v61: crop the ACTUAL artwork, not the uploaded square.
+                # v62: crop the ACTUAL artwork, not the uploaded square.
                 # Google masks programLogo as a circle and recommends a 15% safe
                 # margin. We therefore isolate pixels that differ from the edge
                 # background, crop tightly, then rebuild a square asset whose
@@ -923,7 +923,7 @@ class Handler(BaseHTTPRequestHandler):
                 # Preserve artwork alpha over the solid background.
                 canvas.alpha_composite(art,((size-art.width)//2,(size-art.height)//2))
                 out=io.BytesIO(); canvas.save(out,format='PNG',optimize=True)
-                return self.send_bytes(out.getvalue(),'image/png',200,{'Cache-Control':'public, max-age=31536000, immutable','X-Content-Type-Options':'nosniff','X-Wallet-Logo-Revision':'v61'})
+                return self.send_bytes(out.getvalue(),'image/png',200,{'Cache-Control':'public, max-age=31536000, immutable','X-Content-Type-Options':'nosniff','X-Wallet-Logo-Revision':'v62'})
             except Exception as exc:
                 print('[GOOGLE_WALLET] logo render failed:',repr(exc))
                 return self.send_text('invalid image',422,'text/plain')
