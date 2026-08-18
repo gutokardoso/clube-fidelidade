@@ -1,4 +1,13 @@
-# Clube Fidelidade v59
+# Clube Fidelidade v60
+
+
+## Novidades da v60
+
+- Google Wallet passa a usar **nova LoyaltyClass e novo LoyaltyObject na revisão v60**, eliminando resíduos visuais e módulos antigos de objetos já salvos em versões anteriores.
+- Logo: recorte real do conteúdo da marca, reconstrução em PNG 840×840 e margem segura de 15% conforme a máscara circular do Google Wallet.
+- Programas por pontos: **“Catálogo de recompensas” é um CTA clicável real** via `appLinkData` e também fica disponível no módulo de links.
+- Cartão web: o próprio texto **“Catálogo de recompensas”** é clicável.
+- Versão sincronizada para **v60** em servidor, páginas, painel e README.
 
 ## Novidades da v59
 

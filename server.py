@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v59'
+VERSION='v60'
 
 
 def jdump(obj):
@@ -841,11 +841,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not conn.execute('SELECT id FROM memberships WHERE public_id=? AND status=?',(public_id,'active')).fetchone(): return self.send_json({'ok':False,'error':'membership_not_found'},404)
             token,exp=make_dynamic_qr(public_id,60)
             return self.send_json({'ok':True,'token':token,'expires_at':exp})
-        if path.startswith('/api/wallet/logo-v59/') or path.startswith('/api/wallet/logo/'):
-            if path.startswith('/api/wallet/logo-v59/'):
+        if path.startswith('/api/wallet/logo-v60/') or path.startswith('/api/wallet/logo/'):
+            if path.startswith('/api/wallet/logo-v60/'):
                 # Versioned path is intentionally immutable. Changing the path, not
                 # only the query string, forces Google Wallet to fetch the new logo.
-                tail=path.split('/api/wallet/logo-v59/',1)[1].strip('/')
+                tail=path.split('/api/wallet/logo-v60/',1)[1].strip('/')
                 campaign_code=urllib.parse.unquote(tail.split('/',1)[0]).strip().upper()
             else:
                 campaign_code=urllib.parse.unquote(path.split('/api/wallet/logo/',1)[1]).strip()
@@ -860,73 +860,70 @@ class Handler(BaseHTTPRequestHandler):
                 # Google Wallet renders programLogo inside a fixed circular slot.
                 # Many uploaded logos are square images with a large white/solid
                 # background around the real artwork, so simply resizing the whole
-                # upload makes the brand mark look tiny. v59 removes the
+                # upload makes the brand mark look tiny. v60 removes the
                 # background that is CONNECTED to the image borders, preserving
                 # white details that belong to the logo itself.
                 raw,_subtype=decode_image_data(c['logo_image'])
                 from PIL import Image as PILImage, ImageChops, ImageDraw as PILImageDraw
                 src=PILImage.open(io.BytesIO(raw)).convert('RGBA')
 
-                # 1) Remove true transparent padding first.
+                # v60: crop the ACTUAL artwork, not the uploaded square.
+                # Google masks programLogo as a circle and recommends a 15% safe
+                # margin. We therefore isolate pixels that differ from the edge
+                # background, crop tightly, then rebuild a square asset whose
+                # artwork fills the whole safe area.
+                from PIL import ImageStat
                 alpha=src.getchannel('A')
-                bbox=alpha.getbbox()
-                if bbox:
-                    src=src.crop(bbox)
+                alpha_bbox=alpha.getbbox()
+                if alpha_bbox:
+                    src=src.crop(alpha_bbox)
 
-                # 2) For opaque images, estimate the border background from all
-                # four corners, build a tolerant background mask and flood-fill
-                # only edge-connected regions. This handles white/cream/JPEG
-                # backgrounds without deleting light pixels inside the artwork.
-                if src.width>2 and src.height>2 and src.getchannel('A').getextrema()==(255,255):
-                    corners=[src.getpixel((0,0))[:3],src.getpixel((src.width-1,0))[:3],
-                             src.getpixel((0,src.height-1))[:3],src.getpixel((src.width-1,src.height-1))[:3]]
-                    bg=tuple(sorted(px[i] for px in corners)[len(corners)//2] for i in range(3))
-                    rgb=src.convert('RGB')
-                    bg_img=PILImage.new('RGB',rgb.size,bg)
-                    diff=ImageChops.difference(rgb,bg_img)
-                    # A pixel is background-like when every RGB channel remains
-                    # close to the estimated border colour.
-                    dr,dg,db=diff.split()
-                    # ImageChops.lighter computes the per-pixel maximum.
-                    maxdiff=ImageChops.lighter(ImageChops.lighter(dr,dg),db)
-                    candidate=maxdiff.point(lambda v: 255 if v<=42 else 0, mode='1').convert('L')
-                    flood=candidate.copy()
-                    # Mark connected background as 128. Start from every corner
-                    # that is background-like to cope with non-rectangular marks.
-                    for xy in ((0,0),(src.width-1,0),(0,src.height-1),(src.width-1,src.height-1)):
-                        if flood.getpixel(xy)==255:
-                            PILImageDraw.floodfill(flood,xy,128,thresh=0)
-                    # If a border contains disconnected antialiased islands, seed
-                    # flood fill at regular intervals along all four edges.
-                    step=max(1,min(src.width,src.height)//24)
-                    seeds=[]
-                    for x in range(0,src.width,step): seeds.extend(((x,0),(x,src.height-1)))
-                    for y in range(0,src.height,step): seeds.extend(((0,y),(src.width-1,y)))
-                    for xy in seeds:
-                        if flood.getpixel(xy)==255:
-                            PILImageDraw.floodfill(flood,xy,128,thresh=0)
-                    bg_connected=flood.point(lambda v: 255 if v==128 else 0)
-                    new_alpha=ImageChops.subtract(src.getchannel('A'),bg_connected)
-                    src.putalpha(new_alpha)
-                    content_bbox=new_alpha.getbbox()
-                    if content_bbox:
-                        l,t,r,b=content_bbox
-                        # Keep only a very small antialiasing allowance around the
-                        # detected brand mark. Google applies its own circular mask.
-                        pad=max(1,round(max(r-l,b-t)*0.012))
-                        src=src.crop((max(0,l-pad),max(0,t-pad),min(src.width,r+pad),min(src.height,b+pad)))
+                rgb=src.convert('RGB')
+                w,h=rgb.size
+                # Robust edge background estimate from many border samples.
+                samples=[]
+                step=max(1,min(w,h)//64)
+                for x in range(0,w,step):
+                    samples.append(rgb.getpixel((x,0))); samples.append(rgb.getpixel((x,h-1)))
+                for y in range(0,h,step):
+                    samples.append(rgb.getpixel((0,y))); samples.append(rgb.getpixel((w-1,y)))
+                if samples:
+                    bg=tuple(sorted(px[c] for px in samples)[len(samples)//2] for c in range(3))
+                else:
+                    bg=(255,255,255)
 
-                # 3) Fit the cropped artwork almost edge-to-edge in a square source
-                # canvas. The Google UI adds the circular presentation itself.
+                bg_img=PILImage.new('RGB',rgb.size,bg)
+                diff=ImageChops.difference(rgb,bg_img)
+                dr,dg,db=diff.split()
+                maxdiff=ImageChops.lighter(ImageChops.lighter(dr,dg),db)
+                # Anything clearly different from the border is real artwork.
+                fg=maxdiff.point(lambda v: 255 if v>24 else 0).convert('L')
+                # Include non-transparent pixels when the source already has alpha.
+                if src.getchannel('A').getextrema() != (255,255):
+                    a=src.getchannel('A').point(lambda v:255 if v>20 else 0)
+                    fg=ImageChops.lighter(fg,a)
+                art_bbox=fg.getbbox()
+                if art_bbox:
+                    l,t,r,b=art_bbox
+                    # Tiny antialiasing allowance only.
+                    pad=max(1,round(max(r-l,b-t)*0.01))
+                    art=src.crop((max(0,l-pad),max(0,t-pad),min(src.width,r+pad),min(src.height,b+pad)))
+                else:
+                    art=src
+
                 size=840
-                safe=size
-                scale=min(safe/max(1,src.width),safe/max(1,src.height))
-                target=(max(1,round(src.width*scale)),max(1,round(src.height*scale)))
-                src=src.resize(target,PILImage.Resampling.LANCZOS)
-                canvas=PILImage.new('RGBA',(size,size),(255,255,255,0))
-                canvas.alpha_composite(src,((size-src.width)//2,(size-src.height)//2))
+                margin=round(size*0.15)
+                safe=size-2*margin
+                scale=min(safe/max(1,art.width),safe/max(1,art.height))
+                target=(max(1,round(art.width*scale)),max(1,round(art.height*scale)))
+                art=art.resize(target,PILImage.Resampling.LANCZOS)
+                # Use the detected original edge colour as the full square
+                # background, matching Google's logo guidelines.
+                canvas=PILImage.new('RGBA',(size,size),(*bg,255))
+                # Preserve artwork alpha over the solid background.
+                canvas.alpha_composite(art,((size-art.width)//2,(size-art.height)//2))
                 out=io.BytesIO(); canvas.save(out,format='PNG',optimize=True)
-                return self.send_bytes(out.getvalue(),'image/png',200,{'Cache-Control':'public, max-age=31536000, immutable','X-Content-Type-Options':'nosniff','X-Wallet-Logo-Revision':'v59'})
+                return self.send_bytes(out.getvalue(),'image/png',200,{'Cache-Control':'public, max-age=31536000, immutable','X-Content-Type-Options':'nosniff','X-Wallet-Logo-Revision':'v60'})
             except Exception as exc:
                 print('[GOOGLE_WALLET] logo render failed:',repr(exc))
                 return self.send_text('invalid image',422,'text/plain')

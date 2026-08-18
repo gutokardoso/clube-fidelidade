@@ -105,7 +105,7 @@ def _google_class_id(card):
     campaign=re.sub(r'[^A-Za-z0-9_.-]','_',str(card.get('campaign_code') or 'cliente').lower())
     # One class per company/campaign is required for independent logo/color branding.
     suffix=base if base.endswith('_'+campaign) else f'{base}_{campaign}'
-    return f'{issuer}.{suffix}'
+    return f'{issuer}.{suffix}_v60'
 
 
 def _google_logo_url(card):
@@ -119,7 +119,7 @@ def _google_logo_url(card):
     # an older processed logo even after the class is patched. The renderer revision
     # suffix MUST change whenever the server-side crop/resize algorithm changes.
     digest=hashlib.sha256(str(card.get('logo_image')).encode('utf-8')).hexdigest()[:12]
-    return f"{base}/api/wallet/logo-v59/{urllib.parse.quote(code)}/{digest}.png"
+    return f"{base}/api/wallet/logo-v60/{urllib.parse.quote(code)}/{digest}.png"
 
 
 def _google_class_object(card):
@@ -169,7 +169,7 @@ def _google_object(card):
     balance=str(card.get('points_balance',0)) if points else f"{card.get('progress',0)} de {card.get('goal',0)}"
     reward='Catálogo de recompensas' if points else (card.get('reward_name') or 'Recompensa do programa')
     body={
-      'id':f'{issuer}.{obj_suffix}',
+      'id':f'{issuer}.{obj_suffix}_v60',
       'classId':_google_class_id(card),
       'state':'ACTIVE',
       'accountId':'CLUBE:'+card['public_id'],
@@ -189,7 +189,15 @@ def _google_object(card):
         public_id_q=urllib.parse.quote(card['public_id'])
         links=[]
         if points:
-            links.append({'uri':origin+'/rewards?id='+public_id_q,'description':'Catálogo de recompensas'})
+            catalog_url=origin+'/rewards?id='+public_id_q
+            # Real clickable CTA rendered by Google Wallet. textModulesData cannot
+            # turn arbitrary text into a hyperlink, so use AppLinkData plus the
+            # standard links module.
+            body['appLinkData']={
+              'webAppLinkInfo':{'appTarget':{'targetUri':{'uri':catalog_url,'description':'Catálogo de recompensas'}}},
+              'displayText':{'defaultValue':{'language':'pt-BR','value':'Catálogo de recompensas'}}
+            }
+            links.append({'uri':catalog_url,'description':'Catálogo de recompensas'})
         links.append({'uri':origin+'/card?id='+public_id_q,'description':'Abrir cartão digital'})
         body['linksModuleData']={'uris':links}
     return body
