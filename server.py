@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v55'
+VERSION='v56'
 
 
 def jdump(obj):
@@ -866,18 +866,31 @@ class Handler(BaseHTTPRequestHandler):
                 if bbox:
                     src=src.crop(bbox)
                 if src.width and src.height and src.getchannel('A').getextrema()==(255,255):
-                    from PIL import ImageChops, ImageEnhance
-                    bg=PILImage.new('RGBA',src.size,src.getpixel((0,0)))
-                    diff=ImageChops.difference(src,bg).convert('L')
-                    diff=ImageEnhance.Contrast(diff).enhance(4.0)
-                    content_bbox=diff.point(lambda v: 255 if v>18 else 0).getbbox()
+                    # Uploaded brand marks are often exported on a white/near-white
+                    # square. Using only the exact top-left pixel leaves JPEG/PNG
+                    # antialiasing behind and Google then scales that whole square,
+                    # making the real logo look tiny. Estimate the background from
+                    # all four corners and ignore pixels close to that colour.
+                    from PIL import ImageChops
+                    corners=[src.getpixel((0,0)),src.getpixel((src.width-1,0)),
+                             src.getpixel((0,src.height-1)),src.getpixel((src.width-1,src.height-1))]
+                    bg_rgba=tuple(sorted(px[i] for px in corners)[len(corners)//2] for i in range(4))
+                    bg=PILImage.new('RGBA',src.size,bg_rgba)
+                    diff=ImageChops.difference(src,bg).convert('RGB')
+                    # Max channel distance is tolerant of compression/antialiasing
+                    # around an otherwise uniform white (or coloured) background.
+                    mask=diff.point(lambda v: 255 if v>28 else 0).convert('L')
+                    content_bbox=mask.getbbox()
                     if content_bbox:
-                        src=src.crop(content_bbox)
+                        # Tiny expansion avoids clipping antialiased logo edges.
+                        l,t,r,b=content_bbox
+                        pad=max(2,round(max(r-l,b-t)*0.025))
+                        src=src.crop((max(0,l-pad),max(0,t-pad),min(src.width,r+pad),min(src.height,b+pad)))
                 size=840
-                # Use 88% of the square after trimming. Google applies its own
-                # circular mask, so this keeps the mark visibly larger while
-                # retaining a small safety margin around the artwork.
-                safe=int(size*0.88)
+                # Fill more of Google's programLogo source canvas. The Wallet UI
+                # applies the circular presentation mask itself; 94% keeps a small
+                # safety margin while making the actual brand mark visibly larger.
+                safe=int(size*0.94)
                 scale=min(safe/src.width,safe/src.height)
                 target=(max(1,round(src.width*scale)),max(1,round(src.height*scale)))
                 src=src.resize(target,PILImage.Resampling.LANCZOS)
