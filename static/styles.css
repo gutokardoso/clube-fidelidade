@@ -103,3 +103,8 @@ textarea{width:100%;padding:13px 14px;border:1px solid #d9ccc4;border-radius:12p
 .current-program-label{display:block;font-size:11px;letter-spacing:.08em;opacity:.68;margin-bottom:6px}
 .current-program strong{font-size:20px}
 .program-current-card{border-width:2px}
+
+.field-status{font-size:12px;margin-top:7px;line-height:1.35}
+.field-status.checking{opacity:.75}
+.field-status.success{color:#207a48;font-weight:600}
+.field-status.error{color:#a52a2a;font-weight:600}

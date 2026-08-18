@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v47'
+VERSION='v48'
 
 
 def jdump(obj):
@@ -1822,20 +1822,54 @@ class Handler(BaseHTTPRequestHandler):
                 try: response=send_whatsapp_cloud(phone,'Teste de integração • Clube Fidelidade',cfg)
                 except Exception as exc: return self.send_json({'ok':False,'error':'whatsapp_test_failed','detail':str(exc)[:500]},502)
                 return self.send_json({'ok':True,'message_id':((response.get('messages') or [{}])[0]).get('id')})
+            if path == '/api/manager/staff/check-email':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                email=normalize_email(payload.get('email'))
+                if not email or '@' not in email:
+                    return self.send_json({'ok':False,'available':False,'error':'invalid_email','message':'Informe um e-mail válido.'},400)
+                configured_admin=normalize_email(os.environ.get('CLUBE_ADMIN_EMAIL',''))
+                if configured_admin and email == configured_admin:
+                    return self.send_json({
+                        'ok':True,'available':False,'error':'admin_email_reserved',
+                        'message':'Este e-mail pertence ao administrador geral da plataforma. Utilize outro e-mail para cadastrar um usuário da empresa.'
+                    })
+                existing=conn.execute('SELECT id,name,active,is_client_admin,campaign_id FROM users WHERE lower(email)=lower(?) LIMIT 1',(email,)).fetchone()
+                if existing:
+                    return self.send_json({
+                        'ok':True,'available':False,'error':'email_exists',
+                        'message':'Este e-mail já está cadastrado no sistema. Cada usuário deve possuir um e-mail próprio.'
+                    })
+                return self.send_json({'ok':True,'available':True,'message':'E-mail disponível para cadastro.'})
+
             if path == '/api/manager/staff':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
-                name=str(payload.get('name','')).strip()[:80]; email=str(payload.get('email','')).lower().strip()[:120]; password=str(payload.get('password','')).strip(); is_client_admin=1 if payload.get('is_client_admin') else 0
-                configured_admin=os.environ.get('CLUBE_ADMIN_EMAIL','').strip().lower()
-                if configured_admin and email == configured_admin:
-                    return self.send_json({'ok':False,'error':'admin_email_reserved'},409)
+                name=str(payload.get('name','')).strip()[:80]
+                email=normalize_email(payload.get('email'))
+                password=str(payload.get('password','')).strip()
+                is_client_admin=1 if payload.get('is_client_admin') else 0
                 try: campaign_id=int(payload.get('campaign_id',0))
                 except (TypeError,ValueError): campaign_id=0
-                if len(name)<2 or '@' not in email or len(password)<10 or campaign_id<1: return self.send_json({'ok':False,'error':'invalid_staff'},400)
+                if len(name)<2 or not email or '@' not in email or len(password)<10 or campaign_id<1:
+                    return self.send_json({'ok':False,'error':'invalid_staff','message':'Preencha nome, e-mail, cliente, perfil e uma senha com pelo menos 10 caracteres.'},400)
+                configured_admin=normalize_email(os.environ.get('CLUBE_ADMIN_EMAIL',''))
+                if configured_admin and email == configured_admin:
+                    return self.send_json({
+                        'ok':False,'error':'admin_email_reserved',
+                        'message':'Este e-mail pertence ao administrador geral da plataforma. Utilize outro e-mail para cadastrar um usuário da empresa.'
+                    },409)
+                existing=conn.execute('SELECT id FROM users WHERE lower(email)=lower(?) LIMIT 1',(email,)).fetchone()
+                if existing:
+                    return self.send_json({
+                        'ok':False,'error':'email_exists',
+                        'message':'Este e-mail já está cadastrado no sistema. Cada usuário deve possuir um e-mail próprio.'
+                    },409)
                 client=conn.execute('SELECT id,name FROM campaigns WHERE id=? AND company_id=? AND active=1',(campaign_id,s['company_id'])).fetchone()
-                if not client: return self.send_json({'ok':False,'error':'client_not_found'},404)
+                if not client:
+                    return self.send_json({'ok':False,'error':'client_not_found','message':'A empresa selecionada não foi encontrada ou está arquivada.'},404)
                 try:
                     new_id=insert_id(conn,'INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,is_client_admin,created_at) VALUES(?,?,?,?,?,?,?,?)',(s['company_id'],name,email,hash_password(password),'attendant',campaign_id,is_client_admin,now_ts()))
-                except integrity_errors(): return self.send_json({'ok':False,'error':'email_exists'},409)
+                except integrity_errors():
+                    return self.send_json({'ok':False,'error':'email_exists','message':'Este e-mail já está cadastrado no sistema. Cada usuário deve possuir um e-mail próprio.'},409)
                 audit(conn,s['company_id'],s['user_id'],'staff_create','user',new_id,details=f'{email}:attendant:client={campaign_id}',ip_address=self._ip())
                 smtp_cfg=global_email_config(); email_result={'queued':False,'reason':'email_provider_not_configured'}
                 if email_configured(smtp_cfg):

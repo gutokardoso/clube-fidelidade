@@ -56,10 +56,10 @@ Dashboard ampliado, histórico individual, ciclo de resgate, permissões adminis
 - A validação da logo agora verifica PNG/JPG/WEBP, base64 válido, assinatura real do arquivo e limite de 500 KB.
 - Adicionado teste de regressão para impedir que o erro volte em versões futuras.
 
-## v47 — Permissões do Fidelidade 360
+## v48 — Permissões do Fidelidade 360
 Administrador configura programa, níveis VIP, aceleradores, bônus e vales. Atendentes têm visualização somente leitura e podem apenas consultar/utilizar vales apresentados por clientes. As rotas administrativas exigem `is_client_admin` também no backend.
 
-## v47 — Um programa por empresa
+## v48 — Um programa por empresa
 
 - Cada empresa possui **um único programa principal**, definido no Painel Taboo como Selos ou Pontos.
 - A antiga área “Fidelidade 360” foi renomeada visualmente para **Programa de Fidelidade**.
@@ -67,3 +67,12 @@ Administrador configura programa, níveis VIP, aceleradores, bônus e vales. Ate
 - Níveis VIP, aceleradores, validade de pontos e bônus de indicação aparecem somente em programas por Pontos.
 - Programas por Selos não exibem controles exclusivos de Pontos.
 - O backend também impede criação de níveis/aceleradores fora de programas de Pontos.
+
+## v48 — Cadastro de usuários e validação de e-mail
+
+- Mantido o modelo seguro de **1 e-mail = 1 usuário**.
+- O e-mail do administrador geral da Taboo continua reservado e não pode ser reutilizado em perfis de empresas.
+- O cadastro verifica a disponibilidade do e-mail antes de enviar o formulário.
+- E-mails já cadastrados ou reservados recebem mensagens claras na própria tela.
+- O backend repete a validação para impedir bypass pela API.
+- Mensagens técnicas como `admin_email_reserved` não aparecem mais para o usuário.
