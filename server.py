@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v54'
+VERSION='v55'
 
 
 def jdump(obj):
@@ -857,9 +857,30 @@ class Handler(BaseHTTPRequestHandler):
                 raw,_subtype=decode_image_data(c['logo_image'])
                 from PIL import Image as PILImage
                 src=PILImage.open(io.BytesIO(raw)).convert('RGBA')
+                # Trim empty padding from uploaded logos before fitting them into
+                # Google's circular programLogo slot. First remove transparent
+                # margins; for fully opaque files, also remove a uniform border
+                # matching the top-left background (commonly white).
+                alpha=src.getchannel('A')
+                bbox=alpha.getbbox()
+                if bbox:
+                    src=src.crop(bbox)
+                if src.width and src.height and src.getchannel('A').getextrema()==(255,255):
+                    from PIL import ImageChops, ImageEnhance
+                    bg=PILImage.new('RGBA',src.size,src.getpixel((0,0)))
+                    diff=ImageChops.difference(src,bg).convert('L')
+                    diff=ImageEnhance.Contrast(diff).enhance(4.0)
+                    content_bbox=diff.point(lambda v: 255 if v>18 else 0).getbbox()
+                    if content_bbox:
+                        src=src.crop(content_bbox)
                 size=840
-                safe=int(size*0.70)  # 15% safe margin on each side for circular mask
-                src.thumbnail((safe,safe),PILImage.Resampling.LANCZOS)
+                # Use 88% of the square after trimming. Google applies its own
+                # circular mask, so this keeps the mark visibly larger while
+                # retaining a small safety margin around the artwork.
+                safe=int(size*0.88)
+                scale=min(safe/src.width,safe/src.height)
+                target=(max(1,round(src.width*scale)),max(1,round(src.height*scale)))
+                src=src.resize(target,PILImage.Resampling.LANCZOS)
                 canvas=PILImage.new('RGBA',(size,size),(255,255,255,0))
                 canvas.alpha_composite(src,((size-src.width)//2,(size-src.height)//2))
                 out=io.BytesIO(); canvas.save(out,format='PNG',optimize=True)
