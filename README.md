@@ -1,7 +1,10 @@
-# Clube Fidelidade v65
+# Clube Fidelidade v66
 
 
-## Novidades da v65
+## Novidades da v66
+
+- Vale-presente: geração corrigida no painel do Programa de Fidelidade com token CSRF, validação do valor, estado de carregamento e mensagem de sucesso/erro.
+- Clientes cadastrados: coluna e saldo agora seguem automaticamente o tipo de fidelidade da empresa (Pontos ou Selos).
 
 - **Histórico do cliente em modal:** o botão “HISTÓRICO” da lista de clientes agora abre uma janela centralizada, sem deslocar ou substituir a área de atendimento no topo da página.
 - O modal exibe nome do cliente, saldo atual, movimentações em timeline, data/hora, atendente responsável, saldo anterior → novo saldo, observações e destaque visual para entradas e saídas.
@@ -53,4 +56,4 @@
 
 ## Versão
 
-**v65**
+**v66**
