@@ -1,13 +1,12 @@
-# Clube Fidelidade v57
-## Novidades da v57
+# Clube Fidelidade v58
 
-- Google Wallet: corrigido o cache da `programLogo`. A URL pública da logo agora inclui uma revisão do processador (`r57`), garantindo que o Google busque novamente a imagem quando o algoritmo de recorte/redimensionamento mudar.
-- Mantido o recorte de margens transparentes e de fundo uniforme da v56, agora efetivamente refletido no Google Wallet.
-- Marcadores de versão do README e do painel atualizados para v57.
+## Novidades da v58
 
-
-Versão multi-cliente com antifraude, QR temporário, fila de mensagens, automações, dashboard, LGPD, perfis Taboo/Administrador do cliente/Atendente e integração configurável com Apple Wallet e Google Wallet.
-
+- Versão da aplicação sincronizada para **v58** no servidor, cartão do usuário, diagnóstico, painel e README.
+- Google Wallet: processamento de logo refeito para remover fundos claros/uniformes conectados às bordas e ampliar efetivamente a marca dentro do círculo do `programLogo`.
+- Google Wallet: URL da logo usa revisão `r58`, evitando reutilização do asset processado por versões anteriores.
+- Cartões por pontos no Google Wallet agora incluem o link **Ver catálogo de recompensas**, apontando diretamente para `/rewards?id=<cartão>`.
+- Mantido também o link **Abrir cartão digital**.
 
 ## Atualização v56
 

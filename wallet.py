@@ -119,7 +119,7 @@ def _google_logo_url(card):
     # an older processed logo even after the class is patched. The renderer revision
     # suffix MUST change whenever the server-side crop/resize algorithm changes.
     digest=hashlib.sha256(str(card.get('logo_image')).encode('utf-8')).hexdigest()[:12]
-    return f"{base}/api/wallet/logo/{urllib.parse.quote(code)}.png?v={digest}-r57"
+    return f"{base}/api/wallet/logo/{urllib.parse.quote(code)}.png?v={digest}-r58"
 
 
 def _google_class_object(card):
@@ -162,7 +162,7 @@ def _google_object(card):
     obj_suffix=re.sub(r'[^A-Za-z0-9_.-]','_',card['public_id'])
     points=card.get('loyalty_type')=='points'
     balance=str(card.get('points_balance',0)) if points else f"{card.get('progress',0)} de {card.get('goal',0)}"
-    reward='Consulte o catálogo de recompensas' if points else (card.get('reward_name') or 'Recompensa do programa')
+    reward='Catálogo de recompensas disponível no link abaixo' if points else (card.get('reward_name') or 'Recompensa do programa')
     body={
       'id':f'{issuer}.{obj_suffix}',
       'classId':_google_class_id(card),
@@ -179,7 +179,12 @@ def _google_object(card):
     }
     origin=_google_public_url()
     if origin:
-        body['linksModuleData']={'uris':[{'uri':origin+'/card?id='+urllib.parse.quote(card['public_id']),'description':'Abrir cartão digital'}]}
+        public_id_q=urllib.parse.quote(card['public_id'])
+        links=[]
+        if points:
+            links.append({'uri':origin+'/rewards?id='+public_id_q,'description':'Ver catálogo de recompensas'})
+        links.append({'uri':origin+'/card?id='+public_id_q,'description':'Abrir cartão digital'})
+        body['linksModuleData']={'uris':links}
     return body
 
 
@@ -259,10 +264,22 @@ def google_wallet_jwt(card, include_class=True):
     return _sign_rs256({'alg':'RS256','typ':'JWT'},payload,private_key),object_obj['id']
 
 def google_save_url(card):
-    # Ensure the company-specific class really exists before creating the Save URL.
-    # Previous versions only PATCHed it; a new per-company class returned 404 and
-    # therefore never persisted its programLogo/branding in Google Wallet.
+    # Ensure company branding is current before creating the Save URL.
     class_ready=google_ensure_class(card)
+    # If this card already exists in Wallet, patch it now as well so newly added
+    # links (such as the reward catalog) appear immediately. A 404 simply means
+    # it is a new card and the Save JWT below will create the object.
+    try:
+        obj=_google_object(card)
+        obj_body={k:v for k,v in obj.items() if k not in ('id','classId','state')}
+        _google_patch('loyaltyObject',obj['id'],obj_body)
+        print('[GOOGLE_WALLET] object updated before save:',obj['id'])
+    except urllib.error.HTTPError as exc:
+        if exc.code!=404:
+            detail=exc.read().decode('utf-8','ignore')[:400]
+            print('[GOOGLE_WALLET] object update before save failed:',exc.code,detail)
+    except Exception as exc:
+        print('[GOOGLE_WALLET] object update before save failed:',repr(exc))
     token,_=google_wallet_jwt(card, include_class=not class_ready)
     return 'https://pay.google.com/gp/v/save/'+token
 

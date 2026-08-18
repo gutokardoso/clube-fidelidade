@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v56'
+VERSION='v58'
 
 
 def jdump(obj):
@@ -851,54 +851,78 @@ class Handler(BaseHTTPRequestHandler):
                 c=conn.execute('SELECT logo_image FROM campaigns WHERE UPPER(code)=UPPER(?) AND active=1',(campaign_code,)).fetchone()
             if not c or not c['logo_image']:return self.send_text('not found',404,'text/plain')
             try:
-                # Google Wallet recommends a square PNG logo of at least 660x660.
-                # Campaign logos can arrive as JPEG/WebP or in arbitrary proportions,
-                # so expose a dedicated Wallet-safe PNG with transparent padding.
+                # Google Wallet renders programLogo inside a fixed circular slot.
+                # Many uploaded logos are square images with a large white/solid
+                # background around the real artwork, so simply resizing the whole
+                # upload makes the brand mark look tiny. v58 removes only the
+                # background that is CONNECTED to the image borders, preserving
+                # white details that belong to the logo itself.
                 raw,_subtype=decode_image_data(c['logo_image'])
-                from PIL import Image as PILImage
+                from PIL import Image as PILImage, ImageChops, ImageDraw as PILImageDraw
                 src=PILImage.open(io.BytesIO(raw)).convert('RGBA')
-                # Trim empty padding from uploaded logos before fitting them into
-                # Google's circular programLogo slot. First remove transparent
-                # margins; for fully opaque files, also remove a uniform border
-                # matching the top-left background (commonly white).
+
+                # 1) Remove true transparent padding first.
                 alpha=src.getchannel('A')
                 bbox=alpha.getbbox()
                 if bbox:
                     src=src.crop(bbox)
-                if src.width and src.height and src.getchannel('A').getextrema()==(255,255):
-                    # Uploaded brand marks are often exported on a white/near-white
-                    # square. Using only the exact top-left pixel leaves JPEG/PNG
-                    # antialiasing behind and Google then scales that whole square,
-                    # making the real logo look tiny. Estimate the background from
-                    # all four corners and ignore pixels close to that colour.
-                    from PIL import ImageChops
-                    corners=[src.getpixel((0,0)),src.getpixel((src.width-1,0)),
-                             src.getpixel((0,src.height-1)),src.getpixel((src.width-1,src.height-1))]
-                    bg_rgba=tuple(sorted(px[i] for px in corners)[len(corners)//2] for i in range(4))
-                    bg=PILImage.new('RGBA',src.size,bg_rgba)
-                    diff=ImageChops.difference(src,bg).convert('RGB')
-                    # Max channel distance is tolerant of compression/antialiasing
-                    # around an otherwise uniform white (or coloured) background.
-                    mask=diff.point(lambda v: 255 if v>28 else 0).convert('L')
-                    content_bbox=mask.getbbox()
+
+                # 2) For opaque images, estimate the border background from all
+                # four corners, build a tolerant background mask and flood-fill
+                # only edge-connected regions. This handles white/cream/JPEG
+                # backgrounds without deleting light pixels inside the artwork.
+                if src.width>2 and src.height>2 and src.getchannel('A').getextrema()==(255,255):
+                    corners=[src.getpixel((0,0))[:3],src.getpixel((src.width-1,0))[:3],
+                             src.getpixel((0,src.height-1))[:3],src.getpixel((src.width-1,src.height-1))[:3]]
+                    bg=tuple(sorted(px[i] for px in corners)[len(corners)//2] for i in range(3))
+                    rgb=src.convert('RGB')
+                    bg_img=PILImage.new('RGB',rgb.size,bg)
+                    diff=ImageChops.difference(rgb,bg_img)
+                    # A pixel is background-like when every RGB channel remains
+                    # close to the estimated border colour.
+                    dr,dg,db=diff.split()
+                    # ImageChops.lighter computes the per-pixel maximum.
+                    maxdiff=ImageChops.lighter(ImageChops.lighter(dr,dg),db)
+                    candidate=maxdiff.point(lambda v: 255 if v<=42 else 0, mode='1').convert('L')
+                    flood=candidate.copy()
+                    # Mark connected background as 128. Start from every corner
+                    # that is background-like to cope with non-rectangular marks.
+                    for xy in ((0,0),(src.width-1,0),(0,src.height-1),(src.width-1,src.height-1)):
+                        if flood.getpixel(xy)==255:
+                            PILImageDraw.floodfill(flood,xy,128,thresh=0)
+                    # If a border contains disconnected antialiased islands, seed
+                    # flood fill at regular intervals along all four edges.
+                    step=max(1,min(src.width,src.height)//24)
+                    seeds=[]
+                    for x in range(0,src.width,step): seeds.extend(((x,0),(x,src.height-1)))
+                    for y in range(0,src.height,step): seeds.extend(((0,y),(src.width-1,y)))
+                    for xy in seeds:
+                        if flood.getpixel(xy)==255:
+                            PILImageDraw.floodfill(flood,xy,128,thresh=0)
+                    bg_connected=flood.point(lambda v: 255 if v==128 else 0)
+                    new_alpha=ImageChops.subtract(src.getchannel('A'),bg_connected)
+                    src.putalpha(new_alpha)
+                    content_bbox=new_alpha.getbbox()
                     if content_bbox:
-                        # Tiny expansion avoids clipping antialiased logo edges.
                         l,t,r,b=content_bbox
-                        pad=max(2,round(max(r-l,b-t)*0.025))
+                        # Keep only a very small antialiasing allowance around the
+                        # detected brand mark. Google applies its own circular mask.
+                        pad=max(1,round(max(r-l,b-t)*0.012))
                         src=src.crop((max(0,l-pad),max(0,t-pad),min(src.width,r+pad),min(src.height,b+pad)))
+
+                # 3) Fit the cropped artwork almost edge-to-edge in a square source
+                # canvas. The Google UI adds the circular presentation itself.
                 size=840
-                # Fill more of Google's programLogo source canvas. The Wallet UI
-                # applies the circular presentation mask itself; 94% keeps a small
-                # safety margin while making the actual brand mark visibly larger.
-                safe=int(size*0.94)
-                scale=min(safe/src.width,safe/src.height)
+                safe=int(size*0.97)
+                scale=min(safe/max(1,src.width),safe/max(1,src.height))
                 target=(max(1,round(src.width*scale)),max(1,round(src.height*scale)))
                 src=src.resize(target,PILImage.Resampling.LANCZOS)
                 canvas=PILImage.new('RGBA',(size,size),(255,255,255,0))
                 canvas.alpha_composite(src,((size-src.width)//2,(size-src.height)//2))
                 out=io.BytesIO(); canvas.save(out,format='PNG',optimize=True)
-                return self.send_bytes(out.getvalue(),'image/png',200,{'Cache-Control':'public, max-age=3600','X-Content-Type-Options':'nosniff'})
-            except Exception:
+                return self.send_bytes(out.getvalue(),'image/png',200,{'Cache-Control':'public, max-age=300','X-Content-Type-Options':'nosniff'})
+            except Exception as exc:
+                print('[GOOGLE_WALLET] logo render failed:',repr(exc))
                 return self.send_text('invalid image',422,'text/plain')
         if path.startswith('/api/wallet/apple/'):
             public_id=urllib.parse.unquote(path.split('/api/wallet/apple/',1)[1])
