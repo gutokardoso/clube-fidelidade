@@ -1,10 +1,13 @@
-# Clube Fidelidade v64
+# Clube Fidelidade v65
 
 
-## Novidades da v64
+## Novidades da v65
 
-- Redesign premium dos painéis de administrador da empresa e atendente: navegação rápida, hero contextual por perfil, atendimento em destaque, cards e tabelas mais limpos, indicadores reorganizados, busca e ações rápidas, responsividade para tablet/mobile e hierarquia visual unificada.
-- Cartão web: instrução abaixo do QR agora é dinâmica: programas por selos exibem “ganhar seu selo” e programas por pontos exibem “acumular seus pontos”.
+- **Histórico do cliente em modal:** o botão “HISTÓRICO” da lista de clientes agora abre uma janela centralizada, sem deslocar ou substituir a área de atendimento no topo da página.
+- O modal exibe nome do cliente, saldo atual, movimentações em timeline, data/hora, atendente responsável, saldo anterior → novo saldo, observações e destaque visual para entradas e saídas.
+- Fechamento pelo botão ×, clique no fundo ou tecla `Esc`; em telas pequenas o modal se adapta ao formato mobile e mantém scroll somente no conteúdo do histórico.
+- Redesign premium dos painéis de administrador da empresa e atendente mantido: navegação rápida, hero contextual por perfil, atendimento em destaque, cards e tabelas mais limpos, indicadores reorganizados, busca e ações rápidas, responsividade para tablet/mobile e hierarquia visual unificada.
+- Cartão web: instrução abaixo do QR permanece dinâmica conforme programa por selos ou pontos.
 
 ## Novidades da v62
 - Google Wallet: lista geral corrigida para exibir **nome da empresa** na primeira linha e **saldo de pontos/selos** na segunda.
@@ -50,4 +53,4 @@
 
 ## Versão
 
-**v55**
+**v65**
