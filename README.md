@@ -1,8 +1,8 @@
-# Clube Fidelidade v49
+# Clube Fidelidade v50
 
 Versão multi-cliente com antifraude, QR temporário, fila de mensagens, automações, dashboard, LGPD, perfis Taboo/Administrador do cliente/Atendente e integração configurável com Apple Wallet e Google Wallet.
 
-## Base consolidada até a v49
+## Base consolidada até a v50
 - Apple Wallet e Google Wallet: geração real de passe quando as credenciais oficiais estiverem configuradas; atualizações são disparadas após selo, remoção e resgate.
 - QR temporário: o QR exibido no cartão web é renovado automaticamente e expira. O código textual continua disponível para contingência manual.
 - Antifraude: remoção de selo exige motivo, registrado no histórico e na auditoria.
@@ -56,10 +56,10 @@ Dashboard ampliado, histórico individual, ciclo de resgate, permissões adminis
 - A validação da logo agora verifica PNG/JPG/WEBP, base64 válido, assinatura real do arquivo e limite de 500 KB.
 - Adicionado teste de regressão para impedir que o erro volte em versões futuras.
 
-## v49 — Permissões do Fidelidade 360
+## v50 — Permissões do Fidelidade 360
 Administrador configura programa, níveis VIP, aceleradores, bônus e vales. Atendentes têm visualização somente leitura e podem apenas consultar/utilizar vales apresentados por clientes. As rotas administrativas exigem `is_client_admin` também no backend.
 
-## v49 — Um programa por empresa
+## v50 — Um programa por empresa
 
 - Cada empresa possui **um único programa principal**, definido no Painel Taboo como Selos ou Pontos.
 - A antiga área “Fidelidade 360” foi renomeada visualmente para **Programa de Fidelidade**.
@@ -68,7 +68,7 @@ Administrador configura programa, níveis VIP, aceleradores, bônus e vales. Ate
 - Programas por Selos não exibem controles exclusivos de Pontos.
 - O backend também impede criação de níveis/aceleradores fora de programas de Pontos.
 
-## v49 — Cadastro de usuários e validação de e-mail
+## v50 — Cadastro de usuários e validação de e-mail
 
 - Mantido o modelo seguro de **1 e-mail = 1 usuário**.
 - O e-mail do administrador geral da Taboo continua reservado e não pode ser reutilizado em perfis de empresas.
@@ -77,8 +77,18 @@ Administrador configura programa, níveis VIP, aceleradores, bônus e vales. Ate
 - O backend repete a validação para impedir bypass pela API.
 - Mensagens técnicas como `admin_email_reserved` não aparecem mais para o usuário.
 
-## Atualização v49
+## Atualização v50
 
 - Corrigido o versionamento exibido no `README.md`, que ainda mostrava `v42`.
-- Alinhados os marcadores de versão dos arquivos do projeto para `v49`.
+- Alinhados os marcadores de versão dos arquivos do projeto para `v50`.
 - Nenhuma regra funcional da v48 foi removida; esta versão consolida o projeto e corrige a identificação da versão no GitHub.
+
+
+## v50 — Google Wallet multiempresa
+
+- Cada empresa passa a usar uma classe Google Wallet própria, derivada do código da empresa, permitindo identidade visual independente.
+- O passe usa automaticamente a cor escolhida no cadastro da empresa e o logo cadastrado.
+- O cartão mostra saldo de selos/pontos, próxima recompensa, nome do cliente e QR/código do cartão.
+- Adicionado `cardTemplateOverride` e `listTemplateOverride` para organizar os dados no passe e na lista da Wallet.
+- Alterações de logo/cor passam a ser sincronizadas via atualização da classe; alterações de saldo/recompensa atualizam o objeto.
+- A rota pública `/api/wallet/logo/{codigo}` fornece o logo cadastrado para o Google Wallet sem expor credenciais.

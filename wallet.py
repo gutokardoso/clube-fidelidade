@@ -76,6 +76,94 @@ def _theme_rgb(theme):
     return {'green':(23,79,63),'orange':(209,138,31),'blue':(24,63,109),'red':(124,32,40),'black':(25,25,25)}.get(theme,(23,79,63))
 
 
+def _theme_hex(theme):
+    r,g,b=_theme_rgb(theme)
+    return f'#{r:02x}{g:02x}{b:02x}'
+
+
+def _google_public_url():
+    return (os.environ.get('CLUBE_PUBLIC_URL') or os.environ.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
+
+
+def _google_class_id(card):
+    issuer=os.environ['GOOGLE_WALLET_ISSUER_ID'].strip()
+    configured=(os.environ.get('GOOGLE_WALLET_CLASS_ID') or 'clube_fidelidade').strip()
+    # Railway may contain either a suffix (clube_fidelidade) or a complete ID.
+    base=configured.split('.',1)[1] if configured.startswith(issuer+'.') else configured
+    base=re.sub(r'[^A-Za-z0-9_.-]','_',base or 'clube_fidelidade')
+    campaign=re.sub(r'[^A-Za-z0-9_.-]','_',str(card.get('campaign_code') or 'cliente').lower())
+    # One class per company/campaign is required for independent logo/color branding.
+    suffix=base if base.endswith('_'+campaign) else f'{base}_{campaign}'
+    return f'{issuer}.{suffix}'
+
+
+def _google_logo_url(card):
+    base=_google_public_url()
+    code=str(card.get('campaign_code') or '').strip()
+    return f"{base}/api/wallet/logo/{urllib.parse.quote(code)}" if base and code and card.get('logo_image') else ''
+
+
+def _google_class_object(card):
+    class_id=_google_class_id(card)
+    logo=_google_logo_url(card)
+    klass={
+      'id':class_id,
+      'issuerName':card.get('campaign_name') or 'Clube Fidelidade',
+      'programName':'Clube de Fidelidade',
+      'reviewStatus':'UNDER_REVIEW',
+      'hexBackgroundColor':_theme_hex(card.get('card_theme')),
+      'accountNameLabel':'Cliente',
+      'accountIdLabel':'Código do cartão',
+      'classTemplateInfo':{
+        'cardTemplateOverride':{
+          'cardRowTemplateInfos':[
+            {'twoItems':{
+              'startItem':{'firstValue':{'fields':[{'fieldPath':'object.loyaltyPoints.balance'}]}},
+              'endItem':{'firstValue':{'fields':[{'fieldPath':"object.textModulesData['reward']"}]}}
+            }},
+            {'oneItem':{'item':{'firstValue':{'fields':[{'fieldPath':'object.accountName'}]}}}}
+          ]
+        },
+        'listTemplateOverride':{
+          'firstRowOption':{'fieldOption':{'fields':[{'fieldPath':'object.loyaltyPoints.balance'}]}},
+          'secondRowOption':{'fields':[{'fieldPath':"object.textModulesData['reward']"}]}
+        }
+      }
+    }
+    if logo:
+        klass['programLogo']={'sourceUri':{'uri':logo,'description':'Logo '+str(card.get('campaign_name') or 'Clube Fidelidade')}}
+    origin=_google_public_url()
+    if origin:
+        klass['homepageUri']={'uri':origin,'description':'Acessar cartão'}
+    return klass
+
+
+def _google_object(card):
+    issuer=os.environ['GOOGLE_WALLET_ISSUER_ID'].strip()
+    obj_suffix=re.sub(r'[^A-Za-z0-9_.-]','_',card['public_id'])
+    points=card.get('loyalty_type')=='points'
+    balance=str(card.get('points_balance',0)) if points else f"{card.get('progress',0)} de {card.get('goal',0)}"
+    reward='Consulte o catálogo de recompensas' if points else (card.get('reward_name') or 'Recompensa do programa')
+    body={
+      'id':f'{issuer}.{obj_suffix}',
+      'classId':_google_class_id(card),
+      'state':'ACTIVE',
+      'accountId':'CLUBE:'+card['public_id'],
+      'accountName':card.get('customer_name') or '',
+      'loyaltyPoints':{'label':'Pontos' if points else 'Selos','balance':{'string':balance}},
+      'barcode':{'type':'QR_CODE','value':'CLUBE:'+card['public_id'],'alternateText':'CLUBE:'+card['public_id']},
+      'textModulesData':[
+        {'id':'reward','header':'Próxima recompensa' if not points else 'Recompensas','body':reward},
+        {'id':'status','header':'Seu saldo','body':(str(card.get('points_balance',0))+' pontos') if points else (str(card.get('progress',0))+' de '+str(card.get('goal',0))+' selos')},
+        {'id':'member','header':'Cliente','body':card.get('customer_name') or ''}
+      ]
+    }
+    origin=_google_public_url()
+    if origin:
+        body['linksModuleData']={'uris':[{'uri':origin+'/card?id='+urllib.parse.quote(card['public_id']),'description':'Abrir cartão digital'}]}
+    return body
+
+
 def _icon_png(size, theme='green', logo_data=None):
     if logo_data and str(logo_data).startswith('data:image/'):
         try:
@@ -139,26 +227,14 @@ def build_apple_pkpass(card):
 
 def google_wallet_jwt(card):
     if not wallet_status()['google']['ready']: raise RuntimeError('google_wallet_not_configured')
-    issuer=os.environ['GOOGLE_WALLET_ISSUER_ID'].strip()
     email=os.environ['GOOGLE_SERVICE_ACCOUNT_EMAIL'].strip()
     private_key=os.environ['GOOGLE_PRIVATE_KEY'].replace('\\n','\n')
-    class_suffix=re.sub(r'[^A-Za-z0-9_.-]','_',str(card.get('campaign_code') or 'clube'))
-    obj_suffix=re.sub(r'[^A-Za-z0-9_.-]','_',card['public_id'])
-    class_id=(os.environ.get('GOOGLE_WALLET_CLASS_ID','').strip() or f'{issuer}.clube_{class_suffix}')
-    object_id=f'{issuer}.{obj_suffix}'
-    class_obj={'id':class_id,'issuerName':card.get('campaign_name') or 'Clube Fidelidade','programName':'Clube de Fidelidade','reviewStatus':'UNDER_REVIEW'}
-    object_obj={
-      'id':object_id,'classId':class_id,'state':'ACTIVE',
-      'accountId':'CLUBE:'+card['public_id'],'accountName':card.get('customer_name') or '',
-      'loyaltyPoints':{'label':'Pontos' if card.get('loyalty_type')=='points' else 'Selos','balance':{'string':str(card.get('points_balance',0)) if card.get('loyalty_type')=='points' else f"{card.get('progress',0)} de {card.get('goal',0)}"}},
-      'barcode':{'type':'QR_CODE','value':'CLUBE:'+card['public_id'],'alternateText':'CLUBE:'+card['public_id']},
-      'textModulesData':[{'id':'reward','header':'Recompensas' if card.get('loyalty_type')=='points' else 'Recompensa','body':'Consulte o catálogo no cartão' if card.get('loyalty_type')=='points' else (card.get('reward_name') or '')}]
-    }
+    class_obj=_google_class_object(card)
+    object_obj=_google_object(card)
     payload={'iss':email,'aud':'google','typ':'savetowallet','iat':int(time.time()),'payload':{'loyaltyClasses':[class_obj],'loyaltyObjects':[object_obj]}}
-    origin=os.environ.get('CLUBE_PUBLIC_URL','').strip()
+    origin=_google_public_url()
     if origin: payload['origins']=[origin]
-    return _sign_rs256({'alg':'RS256','typ':'JWT'},payload,private_key),object_id
-
+    return _sign_rs256({'alg':'RS256','typ':'JWT'},payload,private_key),object_obj['id']
 
 def google_save_url(card):
     token,_=google_wallet_jwt(card)
@@ -174,16 +250,36 @@ def _google_access_token():
     with urllib.request.urlopen(req,timeout=15) as r:return json.loads(r.read().decode())['access_token']
 
 
+def _google_patch(resource, resource_id, body):
+    req=urllib.request.Request(
+        'https://walletobjects.googleapis.com/walletobjects/v1/'+resource+'/'+urllib.parse.quote(resource_id,safe='.'),
+        data=json.dumps(body,ensure_ascii=False,separators=(',',':')).encode('utf-8'),method='PATCH',
+        headers={'Authorization':'Bearer '+_google_access_token(),'Content-Type':'application/json'}
+    )
+    with urllib.request.urlopen(req,timeout=15) as r:r.read()
+
+
+def google_update_class(card):
+    if not wallet_status()['google']['ready']: return False
+    klass=_google_class_object(card)
+    body={k:v for k,v in klass.items() if k not in ('id','reviewStatus')}
+    try:
+        _google_patch('loyaltyClass',klass['id'],body)
+        return True
+    except Exception:
+        return False
+
+
 def google_update_object(card):
     if not wallet_status()['google']['ready']: return False
-    _,object_id=google_wallet_jwt(card)
-    body={'accountName':card.get('customer_name') or '','accountId':'CLUBE:'+card['public_id'],'loyaltyPoints':{'label':'Pontos' if card.get('loyalty_type')=='points' else 'Selos','balance':{'string':str(card.get('points_balance',0)) if card.get('loyalty_type')=='points' else f"{card.get('progress',0)} de {card.get('goal',0)}"}},'textModulesData':[{'id':'reward','header':'Recompensas' if card.get('loyalty_type')=='points' else 'Recompensa','body':'Consulte o catálogo no cartão' if card.get('loyalty_type')=='points' else (card.get('reward_name') or '')}]}
-    req=urllib.request.Request('https://walletobjects.googleapis.com/walletobjects/v1/loyaltyObject/'+urllib.parse.quote(object_id,safe='.'),data=json.dumps(body).encode(),method='PATCH',headers={'Authorization':'Bearer '+_google_access_token(),'Content-Type':'application/json'})
+    obj=_google_object(card)
+    body={k:v for k,v in obj.items() if k not in ('id','classId','state')}
     try:
-        with urllib.request.urlopen(req,timeout=15) as r:r.read()
+        google_update_class(card)
+        _google_patch('loyaltyObject',obj['id'],body)
         return True
-    except Exception:return False
-
+    except Exception:
+        return False
 
 def apple_push_update(push_token):
     if not wallet_status()['apple']['ready'] or not push_token:return False

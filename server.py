@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v49'
+VERSION='v50'
 
 
 def jdump(obj):
@@ -841,6 +841,18 @@ class Handler(BaseHTTPRequestHandler):
                 if not conn.execute('SELECT id FROM memberships WHERE public_id=? AND status=?',(public_id,'active')).fetchone(): return self.send_json({'ok':False,'error':'membership_not_found'},404)
             token,exp=make_dynamic_qr(public_id,60)
             return self.send_json({'ok':True,'token':token,'expires_at':exp})
+        if path.startswith('/api/wallet/logo/'):
+            campaign_code=urllib.parse.unquote(path.split('/api/wallet/logo/',1)[1]).strip().upper()
+            if not campaign_code:return self.send_text('not found',404,'text/plain')
+            with connect(DB_PATH) as conn:
+                c=conn.execute('SELECT logo_image FROM campaigns WHERE code=? AND active=1',(campaign_code,)).fetchone()
+            if not c or not c['logo_image']:return self.send_text('not found',404,'text/plain')
+            try:
+                raw,subtype=decode_image_data(c['logo_image'])
+                ctype='image/jpeg' if subtype=='jpeg' else 'image/'+subtype
+                return self.send_bytes(raw,ctype,200,{'Cache-Control':'public, max-age=3600'})
+            except Exception:
+                return self.send_text('invalid image',422,'text/plain')
         if path.startswith('/api/wallet/apple/'):
             public_id=urllib.parse.unquote(path.split('/api/wallet/apple/',1)[1])
             with connect(DB_PATH) as conn: card=card_record(conn,public_id)
