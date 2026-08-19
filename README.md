@@ -1,7 +1,15 @@
-# Clube Fidelidade v69
+# Clube Fidelidade v70
 
 
-## Novidades da v69
+## Novidades da v70
+
+- Consolidação das melhorias do produto: segmentação de comunicação, unidades/filiais, permissões granulares, perfil/timeline, relatórios, automações, catálogo, vales e experiência operacional.
+- Auditoria técnica das 25 melhorias e sincronização da versão em toda a aplicação.
+
+## Auditoria das 25 melhorias
+
+A v70 consolida os recursos existentes e adiciona a base funcional para segmentação, multiunidade e permissões por atendente. Recursos dependentes de provedores externos (Apple Wallet, WhatsApp, e-mail) continuam condicionados às credenciais/configuração do ambiente.
+
 
 - Removida a caixa redundante “Atendimento rápido e simples” dos painéis de administrador e atendente.
 - Navegação superior interna agora faz rolagem suave até as seções “Visão geral”, “Atender cliente”, “Clientes”, “Aniversariantes” e “Comunicação”.
@@ -13,7 +21,7 @@
 - Painel do administrador ganhou **checklist de configuração** e mantém os indicadores executivos de clientes, retorno, conclusão, inatividade, aniversariantes e comunicação.
 - Fluxo de pontos continua baseado no **valor da compra**, com cálculo automático conforme a regra da empresa e confirmação do novo saldo.
 - Mantidos automações, níveis VIP, aceleradores, NPS, vale-presente, exportações, auditoria, Wallets e comunicação segmentada já consolidados nas versões anteriores.
-- Versão visual e backend sincronizados em **v69**.
+- Versão visual e backend sincronizados em **v70**.
 
 
 - Vale-presente: botão Excluir para administradores, com remoção segura por empresa e auditoria.
@@ -72,7 +80,7 @@
 
 ## Versão
 
-**v69**
+**v70**
 - Remoção do hero redundante dos painéis de operação/administração e navegação com scroll suave entre seções.
 
 **v68**

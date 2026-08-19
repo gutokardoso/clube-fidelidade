@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v69'
+VERSION='v70'
 
 
 def jdump(obj):
@@ -1050,8 +1050,17 @@ class Handler(BaseHTTPRequestHandler):
                 sess=self._require_auth(conn,'attendant')
                 if not sess:return
                 if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
-                rows=[rowdict(r) for r in conn.execute("SELECT id,name,email,active,is_client_admin,created_at FROM users WHERE campaign_id=? AND role='attendant' ORDER BY is_client_admin DESC,name",(sess['campaign_id'],)).fetchall()]
-                return self.send_json({'ok':True,'staff':rows})
+                rows=[rowdict(r) for r in conn.execute("SELECT id,name,email,active,is_client_admin,created_at,permissions_json,branch_id FROM users WHERE campaign_id=? AND role='attendant' ORDER BY is_client_admin DESC,name",(sess['campaign_id'],)).fetchall()]
+                branches=[rowdict(r) for r in conn.execute("SELECT id,name,code,active FROM branches WHERE campaign_id=? ORDER BY active DESC,name",(sess['campaign_id'],)).fetchall()]
+                return self.send_json({'ok':True,'staff':rows,'branches':branches})
+
+        if path == '/api/client-admin/branches':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                rows=[rowdict(r) for r in conn.execute("SELECT id,name,code,active,created_at FROM branches WHERE campaign_id=? ORDER BY active DESC,name",(sess['campaign_id'],)).fetchall()]
+                return self.send_json({'ok':True,'branches':rows})
 
         if path == '/api/attendant/loyalty360-summary':
             with connect(DB_PATH) as conn:
@@ -1176,7 +1185,7 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant')
                 if not s: return
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                customers=[rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,cu.created_at,m.public_id,m.progress,m.points_balance,m.rewards_available,c.loyalty_type
+                customers=[rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,cu.created_at,m.public_id,m.progress,m.points_balance,m.rewards_available,m.branch_id,c.loyalty_type,(SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id) last_activity
                     FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id
                     WHERE m.campaign_id=? ORDER BY cu.name''',(s['campaign_id'],)).fetchall()]
                 month=datetime.now(ZoneInfo('America/Sao_Paulo')).month
@@ -1207,6 +1216,18 @@ class Handler(BaseHTTPRequestHandler):
                 rewards=[rowdict(r) for r in conn.execute("SELECT id,name,description,points_cost,image_data,active,stock,starts_at,ends_at,created_at,updated_at FROM reward_catalog WHERE campaign_id=? ORDER BY active DESC,points_cost,name",(sess['campaign_id'],)).fetchall()]
                 c=conn.execute("SELECT loyalty_type,points_spend_cents FROM campaigns WHERE id=?",(sess['campaign_id'],)).fetchone()
                 return self.send_json({'ok':True,'campaign':rowdict(c) if c else {},'rewards':rewards})
+
+        if path == '/api/attendant/segments':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                cid=sess['campaign_id']; now=now_ts(); month=datetime.now(ZoneInfo('America/Sao_Paulo')).strftime('%m')
+                base="FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=?"
+                counts={'all':conn.execute('SELECT COUNT(*) n '+base,(cid,)).fetchone()['n'],
+                        'birthdays':conn.execute("SELECT COUNT(*) n "+base+" AND substr(cu.birth_date,6,2)=?",(cid,month)).fetchone()['n'],
+                        'inactive30':conn.execute("SELECT COUNT(*) n "+base+" AND COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at)<?",(cid,now-30*86400)).fetchone()['n'],
+                        'vip500':conn.execute("SELECT COUNT(*) n "+base+" AND m.points_balance>=500",(cid,)).fetchone()['n']}
+                return self.send_json({'ok':True,'segments':counts})
 
         if path == '/api/attendant/messages':
             with connect(DB_PATH) as conn:
@@ -1752,9 +1773,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({'ok':True})
             if path == '/api/client-admin/staff/create':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
-                name=str(payload.get('name','')).strip()[:80]; email=normalize_email(payload.get('email')); password=str(payload.get('password','')).strip()
+                name=str(payload.get('name','')).strip()[:80]; email=normalize_email(payload.get('email')); password=str(payload.get('password','')).strip(); permissions=json.dumps(payload.get('permissions') or {'add':True,'remove':False,'redeem':True,'gift':True,'reports':False}); branch_id=int(payload.get('branch_id') or 0) or None
                 if len(name)<2 or not email or len(password)<10:return self.send_json({'ok':False,'error':'invalid_staff'},400)
-                try:new_id=insert_id(conn,'INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,is_client_admin,created_at) VALUES(?,?,?,?,?,?,?,?)',(s['company_id'],name,email,hash_password(password),'attendant',s['campaign_id'],0,now_ts()))
+                try:new_id=insert_id(conn,'INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,is_client_admin,permissions_json,branch_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(s['company_id'],name,email,hash_password(password),'attendant',s['campaign_id'],0,permissions,branch_id,now_ts()))
                 except integrity_errors():return self.send_json({'ok':False,'error':'email_exists'},409)
                 c=conn.execute('SELECT name FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone(); q=None
                 if email_configured(global_email_config()):q=enqueue_message(conn,None,'attendant_welcome',email,{'name':name,'password':password,'client_name':c['name']})
@@ -1775,6 +1796,20 @@ class Handler(BaseHTTPRequestHandler):
                     conn.commit()
                 audit('client_admin_staff_update',s,{'user_id':uid,'name':name,'email':email})
                 return self.send_json({'ok':True})
+            if path == '/api/client-admin/branch/save':
+                if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                name=str(payload.get('name') or '').strip()[:80]; code=str(payload.get('code') or '').strip().upper()[:30]
+                if not name or not code:return self.send_json({'ok':False,'error':'invalid_branch'},400)
+                bid=int(payload.get('branch_id') or 0)
+                if bid: conn.execute('UPDATE branches SET name=?,code=?,active=? WHERE id=? AND campaign_id=?',(name,code,1 if payload.get('active',True) else 0,bid,s['campaign_id']))
+                else: bid=insert_id(conn,'INSERT INTO branches(campaign_id,name,code,active,created_at) VALUES(?,?,?,?,?)',(s['campaign_id'],name,code,1,now_ts()))
+                audit(conn,s['company_id'],s['user_id'],'branch_save','branch',bid,details=name,ip_address=self._ip()); return self.send_json({'ok':True,'branch_id':bid})
+            if path == '/api/client-admin/staff/access':
+                if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                uid=int(payload.get('user_id') or 0); branch_id=int(payload.get('branch_id') or 0) or None; permissions=json.dumps(payload.get('permissions') or {})
+                u=conn.execute("SELECT id FROM users WHERE id=? AND campaign_id=? AND role='attendant'",(uid,s['campaign_id'])).fetchone()
+                if not u:return self.send_json({'ok':False,'error':'staff_not_found'},404)
+                conn.execute('UPDATE users SET permissions_json=?,branch_id=? WHERE id=?',(permissions,branch_id,uid)); audit(conn,s['company_id'],s['user_id'],'staff_access_update','user',uid,details=permissions,ip_address=self._ip()); return self.send_json({'ok':True})
             if path == '/api/client-admin/staff/delete':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 try: uid=int(payload.get('user_id',0))
