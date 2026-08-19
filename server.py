@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v66'
+VERSION='v67'
 
 
 def jdump(obj):
@@ -1426,6 +1426,18 @@ class Handler(BaseHTTPRequestHandler):
                 if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 import secrets
                 value=max(100,int(payload.get('value_cents') or 0)); code='VALE-'+secrets.token_hex(4).upper(); insert_id(conn,"INSERT INTO gift_cards(campaign_id,code,value_cents,balance_cents,status,created_at) VALUES(?,?,?,?,?,?)",(s['campaign_id'],code,value,value,'active',now_ts())); return self.send_json({'ok':True,'code':code})
+
+            if path == '/api/admin/gift-card/delete':
+                s=self._require_auth(conn,'attendant');
+                if not s:return
+                if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                code=str(payload.get('code') or '').strip().upper()
+                if not code:return self.send_json({'ok':False,'error':'gift_code_required'},400)
+                gift=conn.execute("SELECT id,code FROM gift_cards WHERE campaign_id=? AND upper(code)=upper(?)",(s['campaign_id'],code)).fetchone()
+                if not gift:return self.send_json({'ok':False,'error':'gift_not_found'},404)
+                conn.execute("DELETE FROM gift_cards WHERE id=? AND campaign_id=?",(gift['id'],s['campaign_id']))
+                audit(conn,s['company_id'],s['user_id'],'gift_card_delete','gift_card',gift['id'],details=gift['code'],ip_address=self._ip())
+                return self.send_json({'ok':True,'code':gift['code']})
 
             if path == '/api/attendant/gift-card/redeem':
                 if s['role']!='attendant' or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)

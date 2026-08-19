@@ -1,7 +1,10 @@
-# Clube Fidelidade v66
+# Clube Fidelidade v67
 
 
-## Novidades da v66
+## Novidades da v67
+
+- Vale-presente: botão Excluir para administradores, com remoção segura por empresa e auditoria.
+- Vale-presente: avisos de consulta e utilização agora aparecem em modal (ex.: “Vale não encontrado!”).
 
 - Vale-presente: geração corrigida no painel do Programa de Fidelidade com token CSRF, validação do valor, estado de carregamento e mensagem de sucesso/erro.
 - Clientes cadastrados: coluna e saldo agora seguem automaticamente o tipo de fidelidade da empresa (Pontos ou Selos).
@@ -56,4 +59,4 @@
 
 ## Versão
 
-**v66**
+**v67**
