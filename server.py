@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v70'
+VERSION='v71'
 
 
 def jdump(obj):
@@ -1233,11 +1233,16 @@ class Handler(BaseHTTPRequestHandler):
                 sess=self._require_auth(conn,'attendant')
                 if not sess:return
                 if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
-                action=(qs.get('action') or [''])[0].strip(); user=(qs.get('user') or [''])[0].strip(); params=[sess['company_id']]; where=['a.company_id=?']
-                if action: where.append('a.action LIKE ?'); params.append('%'+action+'%')
-                if user: where.append('COALESCE(u.name,'') LIKE ?'); params.append('%'+user+'%')
+                action=(qs.get('action') or [''])[0].strip(); user_id=(qs.get('user_id') or [''])[0].strip(); params=[sess['company_id']]; where=['a.company_id=?']
+                if action: where.append('a.action=?'); params.append(action)
+                if user_id:
+                    try: uid=int(user_id)
+                    except (TypeError,ValueError): return self.send_json({'ok':False,'error':'invalid_user'},400)
+                    where.append('a.user_id=?'); params.append(uid)
                 rows=[rowdict(r) for r in conn.execute('SELECT a.*,u.name user_name FROM audit_log a LEFT JOIN users u ON u.id=a.user_id WHERE '+ ' AND '.join(where)+' ORDER BY a.id DESC LIMIT 250',tuple(params)).fetchall()]
-                return self.send_json({'ok':True,'audit':rows})
+                users=[rowdict(r) for r in conn.execute("SELECT id,name,email FROM users WHERE company_id=? AND active=1 AND (campaign_id=? OR id=?) ORDER BY name,email",(sess['company_id'],sess['campaign_id'],sess['user_id'])).fetchall()]
+                actions=[r['action'] for r in conn.execute('SELECT DISTINCT action FROM audit_log WHERE company_id=? ORDER BY action',(sess['company_id'],)).fetchall()]
+                return self.send_json({'ok':True,'audit':rows,'users':users,'actions':actions})
         if path == '/api/admin/commercial-report':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')

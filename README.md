@@ -1,7 +1,9 @@
-# Clube Fidelidade v70
+# Clube Fidelidade v71
 
 
-## Novidades da v70
+## Novidades da v71
+- Gestão avançada movida para modal acessível pelo menu superior do administrador.
+- Central de auditoria agora usa listas de usuários e operações cadastradas para seleção dos filtros.
 
 - Consolidação das melhorias de produto: segmentação de campanhas, multiunidade, permissões granulares, auditoria filtrável e relatórios comerciais.
 - Dashboard com série de atividade dos últimos 30 dias e gestão avançada no painel do administrador.
@@ -15,7 +17,7 @@
 - Painel do administrador ganhou **checklist de configuração** e mantém os indicadores executivos de clientes, retorno, conclusão, inatividade, aniversariantes e comunicação.
 - Fluxo de pontos continua baseado no **valor da compra**, com cálculo automático conforme a regra da empresa e confirmação do novo saldo.
 - Mantidos automações, níveis VIP, aceleradores, NPS, vale-presente, exportações, auditoria, Wallets e comunicação segmentada já consolidados nas versões anteriores.
-- Versão visual e backend sincronizados em **v70**.
+- Versão visual e backend sincronizados em **v71**.
 
 
 - Vale-presente: botão Excluir para administradores, com remoção segura por empresa e auditoria.
