@@ -1,7 +1,17 @@
-# Clube Fidelidade v67
+# Clube Fidelidade v68
 
 
-## Novidades da v67
+## Novidades da v68
+
+- Consolidação do **perfil 360 do cliente**: histórico em modal agora inclui contato, CPF, nascimento, consentimento de marketing, total de movimentações, resgates e última atividade, além da timeline operacional.
+- **Catálogo de recompensas avançado**: estoque ilimitado ou controlado, período de disponibilidade e baixa automática de estoque no resgate.
+- Resgates por pontos passam a ter registro dedicado para relatórios e auditoria comercial.
+- Estrutura de dados preparada para **multiunidade**, permissões granulares e observações internas de clientes, preservando compatibilidade com empresas existentes.
+- Painel do administrador ganhou **checklist de configuração** e mantém os indicadores executivos de clientes, retorno, conclusão, inatividade, aniversariantes e comunicação.
+- Fluxo de pontos continua baseado no **valor da compra**, com cálculo automático conforme a regra da empresa e confirmação do novo saldo.
+- Mantidos automações, níveis VIP, aceleradores, NPS, vale-presente, exportações, auditoria, Wallets e comunicação segmentada já consolidados nas versões anteriores.
+- Versão visual e backend sincronizados em **v68**.
+
 
 - Vale-presente: botão Excluir para administradores, com remoção segura por empresa e auditoria.
 - Vale-presente: avisos de consulta e utilização agora aparecem em modal (ex.: “Vale não encontrado!”).
@@ -59,4 +69,4 @@
 
 ## Versão
 
-**v67**
+**v68**

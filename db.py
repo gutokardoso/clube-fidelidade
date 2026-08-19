@@ -452,6 +452,28 @@ def init_db(db_path=None, seed=True):
         else:
             conn.executescript("CREATE TABLE IF NOT EXISTS loyalty_tiers (id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,name TEXT NOT NULL,min_points INTEGER NOT NULL DEFAULT 0,benefit TEXT,active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS point_multipliers (id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,name TEXT,factor REAL NOT NULL DEFAULT 1,weekday TEXT DEFAULT 'all',start_hour TEXT,end_hour TEXT,active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS referrals (id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,referrer_membership_id INTEGER REFERENCES memberships(id),referred_membership_id INTEGER REFERENCES memberships(id),code TEXT,status TEXT NOT NULL DEFAULT 'pending',created_at INTEGER NOT NULL,rewarded_at INTEGER); CREATE TABLE IF NOT EXISTS nps_responses (id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,membership_id INTEGER REFERENCES memberships(id),score INTEGER NOT NULL,comment TEXT,created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS gift_cards (id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,code TEXT NOT NULL UNIQUE,value_cents INTEGER NOT NULL,balance_cents INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'active',created_at INTEGER NOT NULL);")
 
+        # Migração v68: consolidação operacional/comercial.
+        # Recompensas: estoque e janela de disponibilidade; vales: validade; estrutura multiunidade e permissões.
+        if _is_postgres(target):
+            for col,typ in [('stock','INTEGER NOT NULL DEFAULT -1'),('starts_at','BIGINT'),('ends_at','BIGINT')]: conn.execute(f'ALTER TABLE reward_catalog ADD COLUMN IF NOT EXISTS {col} {typ}')
+            conn.execute('ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS expires_at BIGINT')
+            conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions_json TEXT NOT NULL DEFAULT '{}' ")
+            conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS branch_id BIGINT')
+            conn.execute('ALTER TABLE memberships ADD COLUMN IF NOT EXISTS branch_id BIGINT')
+            conn.executescript("CREATE TABLE IF NOT EXISTS branches (id BIGSERIAL PRIMARY KEY,campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,name TEXT NOT NULL,code TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,created_at BIGINT NOT NULL,UNIQUE(campaign_id,code)); CREATE TABLE IF NOT EXISTS customer_notes (id BIGSERIAL PRIMARY KEY,membership_id BIGINT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE,user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,note TEXT NOT NULL,created_at BIGINT NOT NULL); CREATE TABLE IF NOT EXISTS reward_redemptions (id BIGSERIAL PRIMARY KEY,membership_id BIGINT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE,reward_id BIGINT REFERENCES reward_catalog(id) ON DELETE SET NULL,user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,points_cost INTEGER NOT NULL,created_at BIGINT NOT NULL);")
+        else:
+            rcols={r['name'] for r in conn.execute('PRAGMA table_info(reward_catalog)').fetchall()}
+            for col,typ in [('stock','INTEGER NOT NULL DEFAULT -1'),('starts_at','INTEGER'),('ends_at','INTEGER')]:
+                if col not in rcols: conn.execute(f'ALTER TABLE reward_catalog ADD COLUMN {col} {typ}')
+            gcols={r['name'] for r in conn.execute('PRAGMA table_info(gift_cards)').fetchall()}
+            if 'expires_at' not in gcols: conn.execute('ALTER TABLE gift_cards ADD COLUMN expires_at INTEGER')
+            ucols={r['name'] for r in conn.execute('PRAGMA table_info(users)').fetchall()}
+            if 'permissions_json' not in ucols: conn.execute("ALTER TABLE users ADD COLUMN permissions_json TEXT NOT NULL DEFAULT '{}'")
+            if 'branch_id' not in ucols: conn.execute('ALTER TABLE users ADD COLUMN branch_id INTEGER')
+            mcols={r['name'] for r in conn.execute('PRAGMA table_info(memberships)').fetchall()}
+            if 'branch_id' not in mcols: conn.execute('ALTER TABLE memberships ADD COLUMN branch_id INTEGER')
+            conn.executescript("CREATE TABLE IF NOT EXISTS branches (id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,name TEXT NOT NULL,code TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,UNIQUE(campaign_id,code)); CREATE TABLE IF NOT EXISTS customer_notes (id INTEGER PRIMARY KEY AUTOINCREMENT,membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE,user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,note TEXT NOT NULL,created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS reward_redemptions (id INTEGER PRIMARY KEY AUTOINCREMENT,membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE,reward_id INTEGER REFERENCES reward_catalog(id) ON DELETE SET NULL,user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,points_cost INTEGER NOT NULL,created_at INTEGER NOT NULL);")
+
         # Migração v10: todo atendente pode ser vinculado a um cliente (campaign_id).
         if _is_postgres(target):
             conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS campaign_id BIGINT REFERENCES campaigns(id) ON DELETE SET NULL')

@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v67'
+VERSION='v68'
 
 
 def jdump(obj):
@@ -962,10 +962,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess:return
                 try: customer_id=int((qs.get('customer_id') or ['0'])[0])
                 except: customer_id=0
-                row=conn.execute("SELECT cu.id,cu.name,m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,c.name campaign_name,c.goal,c.reward_name,c.loyalty_type,c.points_spend_cents FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE cu.id=? AND m.campaign_id=?",(customer_id,sess['campaign_id'])).fetchone()
+                row=conn.execute("SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,cu.created_at,cu.marketing_email,cu.marketing_whatsapp,m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,c.name campaign_name,c.goal,c.reward_name,c.loyalty_type,c.points_spend_cents FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE cu.id=? AND m.campaign_id=?",(customer_id,sess['campaign_id'])).fetchone()
                 if not row:return self.send_json({'ok':False,'error':'customer_not_found'},404)
                 hist=[rowdict(x) for x in conn.execute("SELECT t.type,t.value,t.previous_progress,t.new_progress,t.rewards_delta,t.note,t.created_at,u.name user_name FROM transactions t LEFT JOIN users u ON u.id=t.user_id WHERE t.membership_id=? ORDER BY t.created_at DESC LIMIT 300",(row['membership_id'],)).fetchall()]
-                return self.send_json({'ok':True,'customer':rowdict(row),'history':hist})
+                stats=conn.execute("SELECT COUNT(*) visits,MAX(created_at) last_activity,MIN(created_at) first_activity,COALESCE(SUM(CASE WHEN value>0 THEN value ELSE 0 END),0) total_earned,COALESCE(SUM(CASE WHEN type='redeem' THEN 1 ELSE 0 END),0) total_redeems FROM transactions WHERE membership_id=?",(row['membership_id'],)).fetchone()
+                notes=[rowdict(x) for x in conn.execute("SELECT n.note,n.created_at,u.name user_name FROM customer_notes n LEFT JOIN users u ON u.id=n.user_id WHERE n.membership_id=? ORDER BY n.id DESC LIMIT 30",(row['membership_id'],)).fetchall()]
+                return self.send_json({'ok':True,'customer':rowdict(row),'stats':rowdict(stats),'notes':notes,'history':hist})
         if path == '/api/admin/report.csv':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')
@@ -1187,7 +1189,7 @@ class Handler(BaseHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 m=conn.execute("SELECT m.id,m.public_id,m.points_balance,c.id campaign_id,c.name campaign_name,c.loyalty_type FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=?",(public_id,)).fetchone()
                 if not m:return self.send_json({'ok':False,'error':'card_not_found'},404)
-                rewards=[rowdict(r) for r in conn.execute("SELECT id,name,description,points_cost,image_data,active FROM reward_catalog WHERE campaign_id=? AND active=1 ORDER BY points_cost,name",(m['campaign_id'],)).fetchall()]
+                rewards=[rowdict(r) for r in conn.execute("SELECT id,name,description,points_cost,image_data,active,stock,starts_at,ends_at FROM reward_catalog WHERE campaign_id=? AND active=1 ORDER BY points_cost,name",(m['campaign_id'],)).fetchall()]
                 return self.send_json({'ok':True,'loyalty_type':m['loyalty_type'],'points_balance':m['points_balance'],'campaign_name':m['campaign_name'],'rewards':rewards})
         if path == '/api/attendant/rewards':
             with connect(DB_PATH) as conn:
@@ -1195,14 +1197,14 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess:return
                 c=conn.execute("SELECT id,name,loyalty_type,points_spend_cents FROM campaigns WHERE id=? AND company_id=?",(sess['campaign_id'],sess['company_id'])).fetchone()
                 if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
-                rewards=[rowdict(r) for r in conn.execute("SELECT id,name,description,points_cost,image_data,active FROM reward_catalog WHERE campaign_id=? AND active=1 ORDER BY points_cost,name",(sess['campaign_id'],)).fetchall()]
+                rewards=[rowdict(r) for r in conn.execute("SELECT id,name,description,points_cost,image_data,active,stock,starts_at,ends_at FROM reward_catalog WHERE campaign_id=? AND active=1 ORDER BY points_cost,name",(sess['campaign_id'],)).fetchall()]
                 return self.send_json({'ok':True,'campaign':rowdict(c),'rewards':rewards})
         if path == '/api/admin/rewards':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')
                 if not sess:return
                 if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
-                rewards=[rowdict(r) for r in conn.execute("SELECT id,name,description,points_cost,image_data,active,created_at,updated_at FROM reward_catalog WHERE campaign_id=? ORDER BY active DESC,points_cost,name",(sess['campaign_id'],)).fetchall()]
+                rewards=[rowdict(r) for r in conn.execute("SELECT id,name,description,points_cost,image_data,active,stock,starts_at,ends_at,created_at,updated_at FROM reward_catalog WHERE campaign_id=? ORDER BY active DESC,points_cost,name",(sess['campaign_id'],)).fetchall()]
                 c=conn.execute("SELECT loyalty_type,points_spend_cents FROM campaigns WHERE id=?",(sess['campaign_id'],)).fetchone()
                 return self.send_json({'ok':True,'campaign':rowdict(c) if c else {},'rewards':rewards})
 
@@ -1573,12 +1575,15 @@ class Handler(BaseHTTPRequestHandler):
                 try: points_cost=int(payload.get('points_cost') or 0)
                 except: points_cost=0
                 image_data=str(payload.get('image_data','') or '')
+                try: stock=int(payload.get('stock',-1)); starts_at=int(payload.get('starts_at') or 0) or None; ends_at=int(payload.get('ends_at') or 0) or None
+                except: stock=-1; starts_at=None; ends_at=None
+                if stock < -1: stock=-1
                 if not name or points_cost<1:return self.send_json({'ok':False,'error':'invalid_reward'},400)
                 if image_data and (len(image_data)>900000 or not image_data.startswith(('data:image/png;base64,','data:image/jpeg;base64,','data:image/webp;base64,'))):return self.send_json({'ok':False,'error':'invalid_reward_image'},400)
                 with connect(DB_PATH) as conn:
                     c=conn.execute("SELECT loyalty_type FROM campaigns WHERE id=? AND company_id=?",(s['campaign_id'],s['company_id'])).fetchone()
                     if not c or c['loyalty_type']!='points':return self.send_json({'ok':False,'error':'points_program_required'},409)
-                    rid=insert_id(conn,"INSERT INTO reward_catalog(campaign_id,name,description,points_cost,image_data,active,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?)",(s['campaign_id'],name,description,points_cost,image_data or None,now_ts(),now_ts()))
+                    rid=insert_id(conn,"INSERT INTO reward_catalog(campaign_id,name,description,points_cost,image_data,active,stock,starts_at,ends_at,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?,?,?,?)",(s['campaign_id'],name,description,points_cost,image_data or None,stock,starts_at,ends_at,now_ts(),now_ts()))
                     audit(conn,s['company_id'],s['user_id'],'reward_catalog_create','reward',rid,details=f'{name};{points_cost} pontos',ip_address=self._ip())
                 return self.send_json({'ok':True,'reward_id':rid})
             if path == '/api/admin/reward/update':
@@ -1587,15 +1592,18 @@ class Handler(BaseHTTPRequestHandler):
                 try: rid=int(payload.get('reward_id') or 0); points_cost=int(payload.get('points_cost') or 0)
                 except: rid=0; points_cost=0
                 name=str(payload.get('name','')).strip()[:100]; description=str(payload.get('description','')).strip()[:300]; image_data=payload.get('image_data',None)
+                try: stock=int(payload.get('stock',-1)); starts_at=int(payload.get('starts_at') or 0) or None; ends_at=int(payload.get('ends_at') or 0) or None
+                except: stock=-1; starts_at=None; ends_at=None
+                if stock < -1: stock=-1
                 if rid<1 or not name or points_cost<1:return self.send_json({'ok':False,'error':'invalid_reward'},400)
                 with connect(DB_PATH) as conn:
                     r=conn.execute("SELECT id FROM reward_catalog WHERE id=? AND campaign_id=?",(rid,s['campaign_id'])).fetchone()
                     if not r:return self.send_json({'ok':False,'error':'reward_not_found'},404)
-                    if image_data is None: conn.execute("UPDATE reward_catalog SET name=?,description=?,points_cost=?,updated_at=? WHERE id=?",(name,description,points_cost,now_ts(),rid))
+                    if image_data is None: conn.execute("UPDATE reward_catalog SET name=?,description=?,points_cost=?,stock=?,starts_at=?,ends_at=?,updated_at=? WHERE id=?",(name,description,points_cost,stock,starts_at,ends_at,now_ts(),rid))
                     else:
                         image_data=str(image_data or '')
                         if image_data and (len(image_data)>900000 or not image_data.startswith(('data:image/png;base64,','data:image/jpeg;base64,','data:image/webp;base64,'))):return self.send_json({'ok':False,'error':'invalid_reward_image'},400)
-                        conn.execute("UPDATE reward_catalog SET name=?,description=?,points_cost=?,image_data=?,updated_at=? WHERE id=?",(name,description,points_cost,image_data or None,now_ts(),rid))
+                        conn.execute("UPDATE reward_catalog SET name=?,description=?,points_cost=?,image_data=?,stock=?,starts_at=?,ends_at=?,updated_at=? WHERE id=?",(name,description,points_cost,image_data or None,stock,starts_at,ends_at,now_ts(),rid))
                     audit(conn,s['company_id'],s['user_id'],'reward_catalog_update','reward',rid,details=f'{name};{points_cost} pontos',ip_address=self._ip())
                 return self.send_json({'ok':True})
             if path == '/api/admin/reward/toggle':
@@ -1647,7 +1655,7 @@ class Handler(BaseHTTPRequestHandler):
                     if prev<cost:return self.send_json({'ok':False,'error':'insufficient_points','message':'Saldo de pontos insuficiente para esta recompensa.'},409)
                     new=prev-cost
                     tx_id=insert_id(conn,"INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(m['id'],s['user_id'],'redeem',-cost,prev,new,0,idem,self._ip(),f'Resgate: {r["name"]} ({cost} pontos)',now_ts()))
-                    conn.execute("UPDATE memberships SET points_balance=? WHERE id=?",(new,m['id'])); audit(conn,s['company_id'],s['user_id'],'points_redeem','membership',m['public_id'],details=f'{r["name"]};-{cost} pontos',ip_address=self._ip()); notify_wallet_updates(conn,m['public_id'])
+                    conn.execute("UPDATE memberships SET points_balance=? WHERE id=?",(new,m['id'])); conn.execute("INSERT INTO reward_redemptions(membership_id,reward_id,user_id,points_cost,created_at) VALUES(?,?,?,?,?)",(m['id'],r['id'],s['user_id'],cost,now_ts())); conn.execute("UPDATE reward_catalog SET stock=CASE WHEN stock>0 THEN stock-1 ELSE stock END,updated_at=? WHERE id=?",(now_ts(),r['id'])); audit(conn,s['company_id'],s['user_id'],'points_redeem','membership',m['public_id'],details=f'{r["name"]};-{cost} pontos',ip_address=self._ip()); notify_wallet_updates(conn,m['public_id'])
                 return self.send_json({'ok':True,'transaction_id':tx_id,'customer_name':m['customer_name'],'reward_name':r['name'],'points_spent':cost,'points_balance':new})
 
             if path in ('/api/attendant/stamp','/api/attendant/stamp/remove','/api/attendant/redeem'):
