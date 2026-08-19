@@ -1,7 +1,10 @@
-# Clube Fidelidade v68
+# Clube Fidelidade v69
 
 
-## Novidades da v68
+## Novidades da v69
+
+- Removida a caixa redundante “Atendimento rápido e simples” dos painéis de administrador e atendente.
+- Navegação superior interna agora faz rolagem suave até as seções “Visão geral”, “Atender cliente”, “Clientes”, “Aniversariantes” e “Comunicação”.
 
 - Consolidação do **perfil 360 do cliente**: histórico em modal agora inclui contato, CPF, nascimento, consentimento de marketing, total de movimentações, resgates e última atividade, além da timeline operacional.
 - **Catálogo de recompensas avançado**: estoque ilimitado ou controlado, período de disponibilidade e baixa automática de estoque no resgate.
@@ -10,7 +13,7 @@
 - Painel do administrador ganhou **checklist de configuração** e mantém os indicadores executivos de clientes, retorno, conclusão, inatividade, aniversariantes e comunicação.
 - Fluxo de pontos continua baseado no **valor da compra**, com cálculo automático conforme a regra da empresa e confirmação do novo saldo.
 - Mantidos automações, níveis VIP, aceleradores, NPS, vale-presente, exportações, auditoria, Wallets e comunicação segmentada já consolidados nas versões anteriores.
-- Versão visual e backend sincronizados em **v68**.
+- Versão visual e backend sincronizados em **v69**.
 
 
 - Vale-presente: botão Excluir para administradores, com remoção segura por empresa e auditoria.
@@ -22,7 +25,7 @@
 - **Histórico do cliente em modal:** o botão “HISTÓRICO” da lista de clientes agora abre uma janela centralizada, sem deslocar ou substituir a área de atendimento no topo da página.
 - O modal exibe nome do cliente, saldo atual, movimentações em timeline, data/hora, atendente responsável, saldo anterior → novo saldo, observações e destaque visual para entradas e saídas.
 - Fechamento pelo botão ×, clique no fundo ou tecla `Esc`; em telas pequenas o modal se adapta ao formato mobile e mantém scroll somente no conteúdo do histórico.
-- Redesign premium dos painéis de administrador da empresa e atendente mantido: navegação rápida, hero contextual por perfil, atendimento em destaque, cards e tabelas mais limpos, indicadores reorganizados, busca e ações rápidas, responsividade para tablet/mobile e hierarquia visual unificada.
+- Redesign premium dos painéis de administrador da empresa e atendente mantido: navegação rápida, atendimento em destaque, cards e tabelas mais limpos, indicadores reorganizados, busca e ações rápidas, responsividade para tablet/mobile e hierarquia visual unificada.
 - Cartão web: instrução abaixo do QR permanece dinâmica conforme programa por selos ou pontos.
 
 ## Novidades da v62
@@ -68,5 +71,8 @@
 - Mantém a imagem da logo em endpoint PNG dedicado e com cache-busting.
 
 ## Versão
+
+**v69**
+- Remoção do hero redundante dos painéis de operação/administração e navegação com scroll suave entre seções.
 
 **v68**
