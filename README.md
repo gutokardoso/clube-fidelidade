@@ -1,7 +1,18 @@
-# Clube Fidelidade v72
+# Clube Fidelidade v73
 
 
-## Novidades da v72
+## Novidades da v73
+
+### Gestão de unidades funcional
+
+- Unidades agora podem ser vinculadas aos atendentes no cadastro e na edição da equipe.
+- Cada operação registra a unidade do atendente no momento em que acontece.
+- A Gestão avançada mostra atendentes e quantidade de operações por unidade.
+- O relatório comercial separa operações por unidade e por atendente.
+- A Central de auditoria ganhou filtro e coluna de unidade.
+- Corrigida a falha visual da auditoria causada pelo formatador de data não exposto no escopo da página.
+- O histórico de unidade fica preservado mesmo se o atendente for transferido para outra filial.
+
 
 - Nova página inicial comercial, responsiva e focada em apresentação e conversão.
 - Hero com demonstração visual do cartão digital e CTAs para empresas e participantes.
@@ -22,7 +33,7 @@
 - Painel do administrador ganhou **checklist de configuração** e mantém os indicadores executivos de clientes, retorno, conclusão, inatividade, aniversariantes e comunicação.
 - Fluxo de pontos continua baseado no **valor da compra**, com cálculo automático conforme a regra da empresa e confirmação do novo saldo.
 - Mantidos automações, níveis VIP, aceleradores, NPS, vale-presente, exportações, auditoria, Wallets e comunicação segmentada já consolidados nas versões anteriores.
-- Versão visual e backend sincronizados em **v72**.
+- Versão visual e backend sincronizados em **v73**.
 
 
 - Vale-presente: botão Excluir para administradores, com remoção segura por empresa e auditoria.

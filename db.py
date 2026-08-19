@@ -474,6 +474,22 @@ def init_db(db_path=None, seed=True):
             if 'branch_id' not in mcols: conn.execute('ALTER TABLE memberships ADD COLUMN branch_id INTEGER')
             conn.executescript("CREATE TABLE IF NOT EXISTS branches (id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,name TEXT NOT NULL,code TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,UNIQUE(campaign_id,code)); CREATE TABLE IF NOT EXISTS customer_notes (id INTEGER PRIMARY KEY AUTOINCREMENT,membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE,user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,note TEXT NOT NULL,created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS reward_redemptions (id INTEGER PRIMARY KEY AUTOINCREMENT,membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE,reward_id INTEGER REFERENCES reward_catalog(id) ON DELETE SET NULL,user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,points_cost INTEGER NOT NULL,created_at INTEGER NOT NULL);")
 
+        # Migração v73: multiunidade operacional.
+        # Guarda a unidade no momento da operação/auditoria para manter o histórico correto
+        # mesmo se um atendente for transferido de filial posteriormente.
+        if _is_postgres(target):
+            conn.execute('ALTER TABLE transactions ADD COLUMN IF NOT EXISTS branch_id BIGINT')
+            conn.execute('ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS branch_id BIGINT')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_transactions_branch_time ON transactions(branch_id,created_at DESC)')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_audit_branch_time ON audit_log(branch_id,created_at DESC)')
+        else:
+            txcols={r['name'] for r in conn.execute('PRAGMA table_info(transactions)').fetchall()}
+            if 'branch_id' not in txcols: conn.execute('ALTER TABLE transactions ADD COLUMN branch_id INTEGER')
+            acols={r['name'] for r in conn.execute('PRAGMA table_info(audit_log)').fetchall()}
+            if 'branch_id' not in acols: conn.execute('ALTER TABLE audit_log ADD COLUMN branch_id INTEGER')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_transactions_branch_time ON transactions(branch_id,created_at DESC)')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_audit_branch_time ON audit_log(branch_id,created_at DESC)')
+
         # Migração v10: todo atendente pode ser vinculado a um cliente (campaign_id).
         if _is_postgres(target):
             conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS campaign_id BIGINT REFERENCES campaigns(id) ON DELETE SET NULL')
@@ -623,7 +639,22 @@ def get_session(conn, token: str):
     return row
 
 
-def audit(conn, company_id, user_id, action, entity_type=None, entity_id=None, details=None, ip_address=None):
-    conn.execute('''INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,details,ip_address,created_at)
-                    VALUES(?,?,?,?,?,?,?,?)''',
-                 (company_id,user_id,action,entity_type,str(entity_id) if entity_id is not None else None,details,ip_address,now_ts()))
+def audit(conn, company_id, user_id, action, entity_type=None, entity_id=None, details=None, ip_address=None, branch_id=None):
+    # A unidade é registrada junto ao evento. Se o chamador não informar, usamos
+    # a unidade atualmente vinculada ao usuário. Isso preserva o contexto da filial
+    # no histórico mesmo que o usuário seja transferido depois.
+    if branch_id is None and user_id is not None:
+        try:
+            u=conn.execute('SELECT branch_id FROM users WHERE id=?',(user_id,)).fetchone()
+            branch_id=u['branch_id'] if u else None
+        except Exception:
+            branch_id=None
+    try:
+        conn.execute('''INSERT INTO audit_log(company_id,user_id,branch_id,action,entity_type,entity_id,details,ip_address,created_at)
+                        VALUES(?,?,?,?,?,?,?,?,?)''',
+                     (company_id,user_id,branch_id,action,entity_type,str(entity_id) if entity_id is not None else None,details,ip_address,now_ts()))
+    except Exception:
+        # Compatibilidade defensiva durante deploys em que a migração ainda não tenha sido aplicada.
+        conn.execute('''INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,details,ip_address,created_at)
+                        VALUES(?,?,?,?,?,?,?,?)''',
+                     (company_id,user_id,action,entity_type,str(entity_id) if entity_id is not None else None,details,ip_address,now_ts()))
