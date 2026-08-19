@@ -1,7 +1,12 @@
-# Clube Fidelidade v71
+# Clube Fidelidade v72
 
 
-## Novidades da v71
+## Novidades da v72
+
+- Nova página inicial comercial, responsiva e focada em apresentação e conversão.
+- Hero com demonstração visual do cartão digital e CTAs para empresas e participantes.
+- Novas seções: como funciona, recursos, experiência do cliente, segmentos, painel de gestão, FAQ e CTA final.
+- Navegação responsiva e identidade visual premium aplicada sem alterar as telas internas da plataforma.
 - Gestão avançada movida para modal acessível pelo menu superior do administrador.
 - Central de auditoria agora usa listas de usuários e operações cadastradas para seleção dos filtros.
 
@@ -17,7 +22,7 @@
 - Painel do administrador ganhou **checklist de configuração** e mantém os indicadores executivos de clientes, retorno, conclusão, inatividade, aniversariantes e comunicação.
 - Fluxo de pontos continua baseado no **valor da compra**, com cálculo automático conforme a regra da empresa e confirmação do novo saldo.
 - Mantidos automações, níveis VIP, aceleradores, NPS, vale-presente, exportações, auditoria, Wallets e comunicação segmentada já consolidados nas versões anteriores.
-- Versão visual e backend sincronizados em **v71**.
+- Versão visual e backend sincronizados em **v72**.
 
 
 - Vale-presente: botão Excluir para administradores, com remoção segura por empresa e auditoria.
