@@ -3,14 +3,8 @@
 
 ## Novidades da v70
 
-- Consolidação das melhorias do produto: segmentação de comunicação, unidades/filiais, permissões granulares, perfil/timeline, relatórios, automações, catálogo, vales e experiência operacional.
-- Auditoria técnica das 25 melhorias e sincronização da versão em toda a aplicação.
-
-## Auditoria das 25 melhorias
-
-A v70 consolida os recursos existentes e adiciona a base funcional para segmentação, multiunidade e permissões por atendente. Recursos dependentes de provedores externos (Apple Wallet, WhatsApp, e-mail) continuam condicionados às credenciais/configuração do ambiente.
-
-
+- Consolidação das melhorias de produto: segmentação de campanhas, multiunidade, permissões granulares, auditoria filtrável e relatórios comerciais.
+- Dashboard com série de atividade dos últimos 30 dias e gestão avançada no painel do administrador.
 - Removida a caixa redundante “Atendimento rápido e simples” dos painéis de administrador e atendente.
 - Navegação superior interna agora faz rolagem suave até as seções “Visão geral”, “Atender cliente”, “Clientes”, “Aniversariantes” e “Comunicação”.
 
@@ -80,7 +74,7 @@ A v70 consolida os recursos existentes e adiciona a base funcional para segmenta
 
 ## Versão
 
-**v70**
+**v69**
 - Remoção do hero redundante dos painéis de operação/administração e navegação com scroll suave entre seções.
 
 **v68**
