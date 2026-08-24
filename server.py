@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v82'
+VERSION='v83'
 
 
 def jdump(obj):
@@ -1082,7 +1082,10 @@ class Handler(BaseHTTPRequestHandler):
                 hist=[rowdict(x) for x in conn.execute("SELECT t.type,t.value,t.previous_progress,t.new_progress,t.rewards_delta,t.note,t.created_at,u.name user_name FROM transactions t LEFT JOIN users u ON u.id=t.user_id WHERE t.membership_id=? ORDER BY t.created_at DESC LIMIT 300",(row['membership_id'],)).fetchall()]
                 stats=conn.execute("SELECT COUNT(*) visits,MAX(created_at) last_activity,MIN(created_at) first_activity,COALESCE(SUM(CASE WHEN value>0 THEN value ELSE 0 END),0) total_earned,COALESCE(SUM(CASE WHEN type='redeem' THEN 1 ELSE 0 END),0) total_redeems FROM transactions WHERE membership_id=?",(row['membership_id'],)).fetchone()
                 notes=[rowdict(x) for x in conn.execute("SELECT n.note,n.created_at,u.name user_name FROM customer_notes n LEFT JOIN users u ON u.id=n.user_id WHERE n.membership_id=? ORDER BY n.id DESC LIMIT 30",(row['membership_id'],)).fetchall()]
-                return self.send_json({'ok':True,'customer':rowdict(row),'stats':rowdict(stats),'notes':notes,'history':hist})
+                communications=[rowdict(x) for x in conn.execute("SELECT kind,status,created_at,sent_at FROM message_queue WHERE campaign_id=? AND recipient IN (?,?) ORDER BY created_at DESC LIMIT 30",(sess['campaign_id'],row['email'] or '',row['phone'] or '')).fetchall()]
+                coupons=[rowdict(x) for x in conn.execute("SELECT cp.name,cp.code,cr.created_at FROM coupon_redemptions cr JOIN coupons cp ON cp.id=cr.coupon_id WHERE cr.membership_id=? ORDER BY cr.created_at DESC LIMIT 30",(row['membership_id'],)).fetchall()]
+                redemptions=[rowdict(x) for x in conn.execute("SELECT COALESCE(rc.name,'Recompensa') name,rr.points_cost,rr.created_at FROM reward_redemptions rr LEFT JOIN reward_catalog rc ON rc.id=rr.reward_id WHERE rr.membership_id=? ORDER BY rr.created_at DESC LIMIT 30",(row['membership_id'],)).fetchall()]
+                return self.send_json({'ok':True,'customer':rowdict(row),'stats':rowdict(stats),'notes':notes,'communications':communications,'coupons':coupons,'redemptions':redemptions,'history':hist})
         if path == '/api/admin/report.csv':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')
@@ -1125,13 +1128,24 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess:return
                 rows=[]
                 failed=conn.execute("SELECT c.id,c.name,COUNT(*) n FROM message_queue q JOIN campaigns c ON c.id=q.campaign_id WHERE c.company_id=? AND q.status='failed' GROUP BY c.id,c.name",(sess['company_id'],)).fetchall()
-                for r in failed: rows.append({'kind':'error','title':'Falhas de envio • '+r['name'],'message':str(r['n'])+' mensagem(ns) com falha.'})
-                camps=conn.execute('SELECT * FROM campaigns WHERE company_id=? AND active=1',(sess['company_id'],)).fetchall()
+                for r in failed: rows.append({'kind':'error','title':'Falhas de envio • '+r['name'],'message':str(r['n'])+' mensagem(ns) com falha. Verifique a integração e a fila de comunicação.'})
+                camps=conn.execute('SELECT * FROM campaigns WHERE company_id=? AND active=1',(sess['company_id'],)).fetchall(); now=now_ts()
                 for c in camps:
-                    ec=email_configured(email_config_for_client(conn,c['id'])); wc=whatsapp_cloud_configured(whatsapp_config_for_client(conn,c['id']))
-                    if not ec: rows.append({'kind':'integration','title':'E-mail não configurado • '+c['name'],'message':'Disparos por e-mail estão desativados.'})
-                    if not wc: rows.append({'kind':'integration','title':'WhatsApp não configurado • '+c['name'],'message':'Disparos por WhatsApp estão desativados.'})
-                return self.send_json({'ok':True,'notifications':rows[:30]})
+                    cid=c['id']; ec=email_configured(email_config_for_client(conn,cid)); wc=whatsapp_cloud_configured(whatsapp_config_for_client(conn,cid))
+                    if not ec: rows.append({'kind':'integration','title':'E-mail não configurado • '+c['name'],'message':'Configure o e-mail para ativar campanhas e automações.'})
+                    if not wc: rows.append({'kind':'integration','title':'WhatsApp não configurado • '+c['name'],'message':'Conecte o WhatsApp para ativar mensagens e recuperação de clientes.'})
+                    last=conn.execute("SELECT MAX(t.created_at) ts FROM transactions t JOIN memberships m ON m.id=t.membership_id WHERE m.campaign_id=?",(cid,)).fetchone()['ts']
+                    cards=conn.execute("SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND status='active'",(cid,)).fetchone()['n']
+                    if cards and (not last or last < now-7*86400): rows.append({'kind':'attention','title':'Sem movimentação recente • '+c['name'],'message':'Nenhum atendimento foi registrado nos últimos 7 dias. Confira se a equipe está utilizando o Fidelizaê!.'})
+                    risk=conn.execute("SELECT COUNT(*) n FROM memberships m WHERE m.campaign_id=? AND m.status='active' AND COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at)<? AND COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at)>=?",(cid,now-30*86400,now-60*86400)).fetchone()['n']
+                    if risk: rows.append({'kind':'opportunity','title':'Oportunidade de recuperação • '+c['name'],'message':str(risk)+' cliente(s) estão entre 30 e 60 dias sem atividade. Uma campanha de retorno pode ajudar.'})
+                    if c['loyalty_type']=='stamps':
+                        almost=conn.execute("SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND status='active' AND progress=?",(cid,max(int(c['goal'] or 1)-1,0))).fetchone()['n']
+                        if almost: rows.append({'kind':'opportunity','title':'Clientes quase lá • '+c['name'],'message':str(almost)+' cliente(s) estão a apenas 1 selo da recompensa.'})
+                    pending=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE campaign_id=? AND status IN ('pending','retry','processing')",(cid,)).fetchone()['n']
+                    if pending>=20: rows.append({'kind':'attention','title':'Fila de comunicação • '+c['name'],'message':str(pending)+' mensagens aguardam processamento.'})
+                order={'error':0,'attention':1,'opportunity':2,'integration':3}; rows.sort(key=lambda x:order.get(x.get('kind'),9))
+                return self.send_json({'ok':True,'notifications':rows[:40]})
         if path == '/api/attendant/dashboard':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')

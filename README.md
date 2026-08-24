@@ -1,6 +1,14 @@
-# Fidelizaê! v82
+# Fidelizaê! v83
 
-## Novidades da v82
+## Novidades da v83
+- Histórico do cliente evoluído para ficha 360º, preservando a linha do tempo e adicionando segmento, progresso, saldo, datas, resgates, cupons e comunicações.
+- Identidade visual Fidelizaê! padronizada nos painéis e componentes com #e27a00, #ffb347 e #f2f2f2.
+- Pré-visualização do cartão em tempo real nos formulários de cadastro e edição da empresa.
+- Central de alertas inteligente com falhas de envio, integrações pendentes, empresas sem movimentação, clientes em risco, clientes quase na recompensa e filas de comunicação.
+
+# Fidelizaê! v83
+
+## Novidades da v83
 - Corrigido o servidor de arquivos estáticos para servir PNG/JPEG/WebP/GIF/ICO/fontes como binário, fazendo a nova logo Fidelizaê! aparecer corretamente no header e rodapé.
 
 - Página inicial atualizada para a identidade visual oficial do **Fidelizaê!**, usando **#e27a00**, **#ffb347** e **#f2f2f2** como cores principais.
