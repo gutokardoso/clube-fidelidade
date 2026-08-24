@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v74'
+VERSION='v75'
 
 
 def jdump(obj):
@@ -567,6 +567,18 @@ def send_whatsapp_cloud(phone, message, config=None):
         except Exception: detail={'error':raw[:500]}
         raise RuntimeError(json.dumps(detail,ensure_ascii=False)) from exc
 
+def meta_public_base_url():
+    base=(os.environ.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
+    if not base:
+        domain=(os.environ.get('RAILWAY_PUBLIC_DOMAIN') or '').strip().strip('/')
+        if domain:
+            base='https://'+domain
+    return base
+
+def meta_callback_url():
+    base=meta_public_base_url()
+    return (base+'/auth/meta/callback') if base else ''
+
 def meta_embedded_signup_configured():
     return bool(os.environ.get('META_APP_ID','').strip() and os.environ.get('META_APP_SECRET','').strip() and os.environ.get('META_CONFIG_ID','').strip())
 
@@ -816,6 +828,12 @@ class Handler(BaseHTTPRequestHandler):
         path = p.path
         qs = urllib.parse.parse_qs(p.query)
         if path == '/': return self.send_text((STATIC/'index.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION))
+        if path == '/auth/meta/callback':
+            code=(qs.get('code') or [''])[0].strip()
+            error=(qs.get('error_description') or qs.get('error_message') or qs.get('error') or [''])[0].strip()
+            payload=json.dumps({'type':'CLUBE_META_OAUTH_CALLBACK','code':code,'error':error},ensure_ascii=False).replace('</','<\\/')
+            page=f'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Conexão Meta • Clube Fidelidade</title><style>body{{font-family:Arial,sans-serif;background:#f7f4ef;color:#1e1713;display:grid;place-items:center;min-height:100vh;margin:0}}main{{max-width:520px;background:#fff;padding:32px;border-radius:22px;box-shadow:0 16px 50px #0002;text-align:center}}h1{{font-size:24px}}p{{line-height:1.5;color:#655b54}}</style></head><body><main><h1>{'Autorização recebida' if code else 'Não foi possível concluir'}</h1><p>{'Você pode voltar ao Clube Fidelidade. Esta janela será fechada automaticamente.' if code else html.escape(error or 'A Meta não retornou uma autorização válida.')}</p></main><script>(function(){{const data={payload};try{{if(window.opener&&!window.opener.closed)window.opener.postMessage(data,window.location.origin)}}catch(e){{}}setTimeout(function(){{try{{window.close()}}catch(e){{}}}},900)}})();</script></body></html>'''
+            return self.send_text(page)
         if path.startswith('/empresa/'):
             code=path.split('/empresa/',1)[1].strip().upper()
             return self.send_redirect('/join?campaign='+urllib.parse.quote(code),302)
@@ -1182,6 +1200,15 @@ class Handler(BaseHTTPRequestHandler):
                 hist=[rowdict(x) for x in conn.execute("SELECT type,value,note,created_at FROM transactions WHERE membership_id=? ORDER BY id DESC LIMIT 100",(m['id'],)).fetchall()]
                 tier=conn.execute("SELECT name FROM loyalty_tiers WHERE campaign_id=? AND min_points<=? ORDER BY min_points DESC LIMIT 1",(m['campaign_id'],m['points_balance'])).fetchone()
                 return self.send_json({'ok':True,'card':rowdict(m),'history':hist,'tier':tier['name'] if tier else None})
+        if path == '/api/manager/meta-config':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'manager')
+                if not sess:return
+                app_id=os.environ.get('META_APP_ID','').strip()
+                config_id=os.environ.get('META_CONFIG_ID','').strip()
+                version=(os.environ.get('META_GRAPH_VERSION') or 'v24.0').strip() or 'v24.0'
+                callback=meta_callback_url()
+                return self.send_json({'ok':True,'configured':meta_embedded_signup_configured(),'app_id':app_id,'config_id':config_id,'graph_version':version,'redirect_uri':callback,'public_base_url':meta_public_base_url()})
         if path == '/api/manager/diagnostics':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'manager')

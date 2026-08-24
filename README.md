@@ -1,5 +1,14 @@
-# Clube Fidelidade v74
+# Clube Fidelidade v75
 
+
+## Novidades da v75
+
+- Corrigido o endpoint `/api/manager/meta-config`, usado pelo botão **Conectar WhatsApp** no Painel Taboo.
+- Criada a rota pública de callback da Meta em `/auth/meta/callback`.
+- O painel agora mostra a **URI exata de redirecionamento OAuth** para copiar e cadastrar no Meta for Developers.
+- O fluxo de Embedded Signup aceita tanto o retorno direto do SDK quanto o retorno pela URI de callback, preservando a empresa que está sendo configurada.
+- A conexão continua isolada por empresa e grava WABA ID, Phone Number ID e token criptografado somente após a autorização oficial.
+- Variáveis necessárias no Railway: `META_APP_ID`, `META_APP_SECRET`, `META_CONFIG_ID`, `PUBLIC_BASE_URL` e, opcionalmente, `META_GRAPH_VERSION`.
 
 ## Novidades da v74
 
@@ -40,7 +49,7 @@
 - Painel do administrador ganhou **checklist de configuração** e mantém os indicadores executivos de clientes, retorno, conclusão, inatividade, aniversariantes e comunicação.
 - Fluxo de pontos continua baseado no **valor da compra**, com cálculo automático conforme a regra da empresa e confirmação do novo saldo.
 - Mantidos automações, níveis VIP, aceleradores, NPS, vale-presente, exportações, auditoria, Wallets e comunicação segmentada já consolidados nas versões anteriores.
-- Versão visual e backend sincronizados em **v74**.
+- Versão visual e backend sincronizados em **v75**.
 
 
 - Vale-presente: botão Excluir para administradores, com remoção segura por empresa e auditoria.
@@ -98,6 +107,9 @@
 - Mantém a imagem da logo em endpoint PNG dedicado e com cache-busting.
 
 ## Versão
+
+**v75**
+- Callback OAuth oficial da Meta e fluxo Conectar WhatsApp corrigido e preparado para Embedded Signup.
 
 **v74**
 - Integração de e-commerce por empresa com webhook exclusivo, crédito automático de selos/pontos pela regra existente, idempotência e estorno de cancelamentos/reembolsos.
