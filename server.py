@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v75'
+VERSION='v76'
 
 
 def jdump(obj):
@@ -661,10 +661,42 @@ def process_message_queue_once(limit=15):
                 conn.execute("UPDATE message_queue SET status=?,last_error=?,available_at=? WHERE id=?",(status,result.get('reason','failed'),now_ts()+delay,item['id']))
             conn.commit()
 
+def customer_segment(last_activity,created_at,visits,reward_ready,almost_reward,now=None):
+    now=now or now_ts(); age=max(0,now-int(last_activity or created_at or now))
+    if reward_ready: return 'reward_ready'
+    if almost_reward: return 'almost_reward'
+    if age>=90*86400: return 'inactive90'
+    if age>=60*86400: return 'inactive60'
+    if age>=30*86400: return 'at_risk'
+    if int(visits or 0)>=12: return 'vip'
+    if int(visits or 0)<=1 and now-int(created_at or now)<=30*86400: return 'new'
+    return 'active'
+
+def segment_sql(segment,cid,loyalty_type='stamps'):
+    now=now_ts(); extra=''; params=[]
+    last="COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at)"
+    visits="(SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND ((c.loyalty_type='points' AND t.type='adjustment' AND t.value>0) OR (c.loyalty_type='stamps' AND t.type='stamp' AND t.value>0)))"
+    if segment=='birthdays': extra=" AND substr(cu.birth_date,6,2)=?"; params=[datetime.now(ZoneInfo('America/Sao_Paulo')).strftime('%m')]
+    elif segment=='at_risk': extra=f" AND {last}<? AND {last}>=?"; params=[now-30*86400,now-60*86400]
+    elif segment=='inactive60': extra=f" AND {last}<? AND {last}>=?"; params=[now-60*86400,now-90*86400]
+    elif segment=='inactive90': extra=f" AND {last}<?"; params=[now-90*86400]
+    elif segment=='vip': extra=f" AND {visits}>=12"
+    elif segment=='new': extra=" AND m.created_at>=?"; params=[now-30*86400]
+    elif segment=='reward_ready': extra=" AND (m.rewards_available>0 OR (c.loyalty_type='points' AND m.points_balance>=(SELECT COALESCE(MIN(points_cost),999999999) FROM reward_catalog WHERE campaign_id=m.campaign_id AND active=1)))"
+    elif segment=='almost_reward': extra=" AND ((c.loyalty_type='stamps' AND m.progress=c.goal-1) OR (c.loyalty_type='points' AND EXISTS(SELECT 1 FROM reward_catalog r WHERE r.campaign_id=m.campaign_id AND r.active=1 AND r.points_cost>m.points_balance AND r.points_cost-m.points_balance<=GREATEST(1,CAST(r.points_cost*0.15 AS INTEGER)))))" if str(DB_PATH).startswith(('postgres://','postgresql://')) else " AND ((c.loyalty_type='stamps' AND m.progress=c.goal-1) OR (c.loyalty_type='points' AND EXISTS(SELECT 1 FROM reward_catalog r WHERE r.campaign_id=m.campaign_id AND r.active=1 AND r.points_cost>m.points_balance AND r.points_cost-m.points_balance<=MAX(1,CAST(r.points_cost*0.15 AS INTEGER)))))"
+    return extra,params
+
+def campaign_recipient_rows(conn,cid,segment):
+    extra,params=segment_sql(segment,cid)
+    return conn.execute("""SELECT m.id membership_id,m.public_id,cu.id customer_id,cu.name,cu.email,cu.phone,cu.marketing_email,cu.marketing_whatsapp
+      FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id
+      WHERE m.campaign_id=? AND m.status='active' """+extra+' ORDER BY cu.name',(cid,*params)).fetchall()
+
 def ensure_automation_defaults(conn,campaign_id):
     defaults={
       'birthday':('both','Feliz aniversário, {nome}! O {cliente} deseja um dia especial para você.'),
-      'inactive30':('both','Sentimos sua falta, {nome}! Volte ao {cliente} e continue acumulando seus selos.'),
+      'inactive30':('both','Sentimos sua falta, {nome}! Volte ao {cliente} e continue acumulando no seu programa.'),
+      'inactive60':('both','Já faz um tempo, {nome}. Temos saudades de você no {cliente}. Volte e continue aproveitando seus benefícios.'),
       'one_to_reward':('both','Falta só 1 selo, {nome}! Sua recompensa no {cliente} está quase lá.'),
       'reward_available':('both','Parabéns, {nome}! Você já tem uma recompensa disponível no {cliente}.')}
     for rule,(channel,msg) in defaults.items():
@@ -684,7 +716,8 @@ def run_automations_once():
             for x in rows:
                 match=False; period=''
                 if rule['rule_type']=='birthday' and x['birth_date'] and x['birth_date'][5:10]==today.isoformat()[5:10]: match=True; period=str(today.year)
-                elif rule['rule_type']=='inactive30' and x['last_activity']<=now-30*86400: match=True; period=today.strftime('%Y-%m')
+                elif rule['rule_type']=='inactive30' and x['last_activity']<=now-30*86400 and x['last_activity']>now-60*86400: match=True; period=today.strftime('%Y-%m')
+                elif rule['rule_type']=='inactive60' and x['last_activity']<=now-60*86400: match=True; period=today.strftime('%Y-%m')
                 elif rule['rule_type']=='one_to_reward' and x['progress']==x['goal']-1: match=True; period=f"p{x['progress']}-{today.strftime('%Y-%m')}"
                 elif rule['rule_type']=='reward_available' and x['rewards_available']>0: match=True; period=f"r{x['rewards_available']}-{today.strftime('%Y-%m')}"
                 if not match: continue
@@ -693,7 +726,7 @@ def run_automations_once():
                 msg=rule['message'].format(nome=x['name'],cliente=rule['client_name'])
                 queued=False; channel=rule['channel']
                 if channel in ('email','both') and x['email'] and x['marketing_email'] and email_configured(email_config_for_client(conn,rule['campaign_id'])):
-                    enqueue_message(conn,rule['campaign_id'],'campaign_email',x['email'],{'name':x['name'],'message':msg,'subject':'Clube Fidelidade • '+rule['client_name']}); queued=True
+                    enqueue_message(conn,rule['campaign_id'],'campaign_email',x['email'],{'name':x['name'],'message':msg,'subject':'Fidelizaê! • '+rule['client_name']}); queued=True
                 if channel in ('whatsapp','both') and x['phone'] and x['marketing_whatsapp'] and whatsapp_cloud_configured(whatsapp_config_for_client(conn,rule['campaign_id'])):
                     enqueue_message(conn,rule['campaign_id'],'whatsapp',x['phone'],{'message':msg}); queued=True
                 if queued:
@@ -727,7 +760,7 @@ def notify_wallet_updates(conn,public_id):
         except Exception: pass
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'ClubeFidelidade/18.0'
+    server_version = 'Fidelizae/19.0'
 
     def log_message(self, fmt, *args):
         print(f'[{self.log_date_time_string()}] {self.address_string()} - {fmt % args}')
@@ -1119,6 +1152,42 @@ class Handler(BaseHTTPRequestHandler):
                 pending=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE campaign_id=? AND status IN ('pending','retry','processing')",(cid,)).fetchone()['n']; metrics['messages_pending']=pending
                 metrics['birthdays_month']=conn.execute("SELECT COUNT(*) n FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND substr(cu.birth_date,6,2)=?",(cid,datetime.now(ZoneInfo('America/Sao_Paulo')).strftime('%m'))).fetchone()['n']
                 returned=conn.execute("SELECT COUNT(*) n FROM memberships m WHERE m.campaign_id=? AND (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND ((?='points' AND t.type='adjustment' AND t.value>0) OR (?='stamps' AND t.type='stamp')))>=2",(cid,loyalty_type,loyalty_type)).fetchone()['n']; metrics['return_rate']=round(returned*100/total,1)
+                # Retenção e resumo semanal/mensal.
+                visit_expr="((c.loyalty_type='points' AND t.type='adjustment' AND t.value>0) OR (c.loyalty_type='stamps' AND t.type='stamp' AND t.value>0))"
+                metrics['visits_month']=conn.execute("SELECT COUNT(*) n FROM transactions t JOIN memberships m ON m.id=t.membership_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.campaign_id=? AND t.created_at>=? AND "+visit_expr,(cid,month_start)).fetchone()['n']
+                metrics['returning_month']=conn.execute("SELECT COUNT(DISTINCT m.id) n FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.campaign_id=? AND EXISTS(SELECT 1 FROM transactions t WHERE t.membership_id=m.id AND t.created_at>=? AND "+visit_expr+") AND EXISTS(SELECT 1 FROM transactions t WHERE t.membership_id=m.id AND t.created_at<? AND "+visit_expr+")",(cid,month_start,month_start)).fetchone()['n']
+                metrics['reactivated_month']=conn.execute("SELECT COUNT(DISTINCT m.id) n FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.campaign_id=? AND EXISTS(SELECT 1 FROM transactions t WHERE t.membership_id=m.id AND t.created_at>=? AND "+visit_expr+") AND COALESCE((SELECT MAX(t2.created_at) FROM transactions t2 WHERE t2.membership_id=m.id AND t2.created_at<?),m.created_at)<?",(cid,month_start,month_start,month_start-30*86400)).fetchone()['n']
+                week_start=now-7*86400; prev_week=now-14*86400
+                week_visits=conn.execute("SELECT COUNT(*) n FROM transactions t JOIN memberships m ON m.id=t.membership_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.campaign_id=? AND t.created_at>=? AND "+visit_expr,(cid,week_start)).fetchone()['n']
+                prev_visits=conn.execute("SELECT COUNT(*) n FROM transactions t JOIN memberships m ON m.id=t.membership_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.campaign_id=? AND t.created_at>=? AND t.created_at<? AND "+visit_expr,(cid,prev_week,week_start)).fetchone()['n']
+                metrics['weekly']={'visits':week_visits,'new':conn.execute('SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND created_at>=?',(cid,week_start)).fetchone()['n'],'redeems':conn.execute("SELECT COUNT(*) n FROM transactions t JOIN memberships m ON m.id=t.membership_id WHERE m.campaign_id=? AND t.type='redeem' AND t.created_at>=?",(cid,week_start)).fetchone()['n'],'change_pct':round((week_visits-prev_visits)*100/max(prev_visits,1),1)}
+                seg_counts={}
+                for seg in ('new','active','vip','at_risk','inactive60','inactive90','almost_reward','reward_ready'):
+                    try:
+                        rows=campaign_recipient_rows(conn,cid,seg) if seg!='active' else []
+                        if seg=='active':
+                            raw=conn.execute("""SELECT m.id,m.created_at,COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at) last_activity,
+                              (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND t.value>0) visits,m.rewards_available,m.progress,c.goal,c.loyalty_type,m.points_balance
+                              FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.campaign_id=? AND m.status='active' """,(cid,)).fetchall()
+                            n=0
+                            for x in raw:
+                                rr=bool(x['rewards_available']); ar=(x['loyalty_type']=='stamps' and x['progress']==x['goal']-1)
+                                if customer_segment(x['last_activity'],x['created_at'],x['visits'],rr,ar,now)=='active': n+=1
+                            seg_counts[seg]=n
+                        else: seg_counts[seg]=len(rows)
+                    except Exception: seg_counts[seg]=0
+                metrics['segments']=seg_counts
+                retention=[]
+                local_now=datetime.now(ZoneInfo('America/Sao_Paulo'))
+                for back in range(5,-1,-1):
+                    y=local_now.year; mo=local_now.month-back
+                    while mo<=0: mo+=12; y-=1
+                    start=datetime(y,mo,1,tzinfo=ZoneInfo('America/Sao_Paulo')); nxt=datetime(y+1,1,1,tzinfo=start.tzinfo) if mo==12 else datetime(y,mo+1,1,tzinfo=start.tzinfo)
+                    st,en=int(start.timestamp()),int(nxt.timestamp())
+                    active_n=conn.execute("SELECT COUNT(DISTINCT m.id) n FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.campaign_id=? AND EXISTS(SELECT 1 FROM transactions t WHERE t.membership_id=m.id AND t.created_at>=? AND t.created_at<? AND "+visit_expr+")",(cid,st,en)).fetchone()['n']
+                    ret_n=conn.execute("SELECT COUNT(DISTINCT m.id) n FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.campaign_id=? AND EXISTS(SELECT 1 FROM transactions t WHERE t.membership_id=m.id AND t.created_at>=? AND t.created_at<? AND "+visit_expr+") AND EXISTS(SELECT 1 FROM transactions t2 WHERE t2.membership_id=m.id AND t2.created_at<? AND "+visit_expr.replace('t.','t2.')+")",(cid,st,en,st)).fetchone()['n']
+                    retention.append({'month':f'{mo:02d}/{str(y)[2:]}','rate':round(ret_n*100/max(active_n,1),1)})
+                metrics['retention_trend']=retention
                 activity=[]
                 for d in range(29,-1,-1):
                     day=(datetime.now(ZoneInfo('America/Sao_Paulo'))-timedelta(days=d)).date(); start=int(datetime.combine(day,datetime.min.time(),ZoneInfo('America/Sao_Paulo')).timestamp()); end=start+86400
@@ -1126,6 +1195,27 @@ class Handler(BaseHTTPRequestHandler):
                     activity.append({'date':day.isoformat(),'count':n})
                 metrics['activity_30d']=activity
                 return self.send_json({'ok':True,'metrics':metrics})
+        if path == '/api/admin/engagement':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                cid=sess['campaign_id']; now=now_ts()
+                # Atualiza conversões: uma nova movimentação depois do envio conta como retorno.
+                recs=conn.execute("SELECT r.id,r.membership_id,r.sent_at FROM marketing_campaign_recipients r JOIN marketing_campaigns mc ON mc.id=r.marketing_campaign_id WHERE mc.campaign_id=? AND r.returned_at IS NULL",(cid,)).fetchall()
+                for r in recs:
+                    hit=conn.execute('SELECT MIN(created_at) ts FROM transactions WHERE membership_id=? AND created_at>?',(r['membership_id'],r['sent_at'])).fetchone()['ts']
+                    if hit: conn.execute('UPDATE marketing_campaign_recipients SET returned_at=? WHERE id=?',(hit,r['id']))
+                campaigns=[]
+                for r in conn.execute('SELECT * FROM marketing_campaigns WHERE campaign_id=? ORDER BY id DESC LIMIT 40',(cid,)).fetchall():
+                    d=rowdict(r); stats=conn.execute('SELECT COUNT(*) sent,SUM(CASE WHEN returned_at IS NOT NULL THEN 1 ELSE 0 END) returned FROM marketing_campaign_recipients WHERE marketing_campaign_id=?',(d['id'],)).fetchone(); d['sent_count']=stats['sent'] or 0; d['returned_count']=stats['returned'] or 0; d['conversion_rate']=round((d['returned_count'] or 0)*100/max(d['sent_count'] or 0,1),1); campaigns.append(d)
+                coupons=[]
+                for r in conn.execute('SELECT * FROM coupons WHERE campaign_id=? ORDER BY active DESC,id DESC',(cid,)).fetchall():
+                    d=rowdict(r); d['uses']=conn.execute('SELECT COUNT(*) n FROM coupon_redemptions WHERE coupon_id=?',(d['id'],)).fetchone()['n']; coupons.append(d)
+                camp=conn.execute('SELECT name,code,logo_image,card_theme,loyalty_type,goal FROM campaigns WHERE id=?',(cid,)).fetchone()
+                base=(os.environ.get('PUBLIC_BASE_URL') or '').rstrip('/'); join_url=(base+'/join?campaign='+urllib.parse.quote(camp['code'])) if base else ('/join?campaign='+urllib.parse.quote(camp['code']))
+                return self.send_json({'ok':True,'campaigns':campaigns,'coupons':coupons,'promo':{'join_url':join_url,'qr_url':'/api/admin/client-qr','client_name':camp['name'],'theme':camp['card_theme'],'has_logo':bool(camp['logo_image'])}})
+
         if path == '/api/attendant/automations':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')
@@ -1280,9 +1370,23 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant')
                 if not s: return
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                customers=[rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,cu.created_at,m.public_id,m.progress,m.points_balance,m.rewards_available,c.loyalty_type
+                customers=[rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,cu.created_at,m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,c.loyalty_type,c.goal,
+                    COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at) last_activity,
+                    (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND ((c.loyalty_type='points' AND t.type='adjustment' AND t.value>0) OR (c.loyalty_type='stamps' AND t.type='stamp' AND t.value>0))) visits,
+                    (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND t.type='redeem') redeems
                     FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id
                     WHERE m.campaign_id=? ORDER BY cu.name''',(s['campaign_id'],)).fetchall()]
+                cheapest=conn.execute("SELECT MIN(points_cost) n FROM reward_catalog WHERE campaign_id=? AND active=1",(s['campaign_id'],)).fetchone()['n']
+                tiers=[rowdict(r) for r in conn.execute("SELECT name,min_points,benefit FROM loyalty_tiers WHERE campaign_id=? AND active=1 ORDER BY min_points",(s['campaign_id'],)).fetchall()]
+                for c in customers:
+                    reward_ready=bool(c.get('rewards_available')) or bool(c['loyalty_type']=='points' and cheapest and int(c.get('points_balance') or 0)>=int(cheapest))
+                    almost=bool(c['loyalty_type']=='stamps' and int(c.get('progress') or 0)==max(0,int(c.get('goal') or 0)-1)) or bool(c['loyalty_type']=='points' and cheapest and 0<int(cheapest)-int(c.get('points_balance') or 0)<=max(1,int(int(cheapest)*.15)))
+                    c['segment']=customer_segment(c.get('last_activity'),c.get('created_at'),c.get('visits'),reward_ready,almost)
+                    if tiers and c['loyalty_type']=='points':
+                        eligible=[t for t in tiers if int(c.get('points_balance') or 0)>=int(t.get('min_points') or 0)]; c['level']=(eligible[-1]['name'] if eligible else 'Inicial')
+                    else: c['level']='VIP' if int(c.get('visits') or 0)>=12 else ('Frequente' if int(c.get('visits') or 0)>=5 else 'Inicial')
+                    if c['loyalty_type']=='points': c['to_reward']=max(0,int(cheapest or 0)-int(c.get('points_balance') or 0)) if cheapest else None
+                    else: c['to_reward']=max(0,int(c.get('goal') or 0)-int(c.get('progress') or 0))
                 month=datetime.now(ZoneInfo('America/Sao_Paulo')).month
                 birthdays=[c for c in customers if c.get('birth_date') and len(c['birth_date'])>=10 and int(c['birth_date'][5:7])==month]
                 birthdays.sort(key=lambda c: (int(c['birth_date'][8:10]), c['name'].lower()))
@@ -1667,6 +1771,58 @@ class Handler(BaseHTTPRequestHandler):
                     conn2.execute("UPDATE gift_cards SET balance_cents=?,status=? WHERE id=?",(new_balance,new_status,gift['id']))
                     audit(conn2,s['company_id'],s['user_id'],'gift_card_redeem','gift_card',gift['id'],details=f'{code};R${amount/100:.2f};saldo=R${new_balance/100:.2f}',ip_address=self._ip())
                 return self.send_json({'ok':True,'code':code,'amount_cents':amount,'balance_cents':new_balance,'status':new_status})
+
+            if path == '/api/admin/marketing-campaign/save':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                name=str(payload.get('name','')).strip()[:100]; segment=str(payload.get('segment','all')); channel=str(payload.get('channel','both')); message=str(payload.get('message','')).strip()[:4096]
+                if len(name)<2 or not message or segment not in ('all','new','active','vip','at_risk','inactive60','inactive90','almost_reward','reward_ready','birthdays') or channel not in ('email','whatsapp','both'):return self.send_json({'ok':False,'error':'invalid_campaign'},400)
+                mid=insert_id(conn,'INSERT INTO marketing_campaigns(campaign_id,name,segment,channel,message,status,created_at) VALUES(?,?,?,?,?,?,?)',(s['campaign_id'],name,segment,channel,message,'draft',now_ts()))
+                audit(conn,s['company_id'],s['user_id'],'marketing_campaign_create','marketing_campaign',mid,details=name,ip_address=self._ip())
+                return self.send_json({'ok':True,'id':mid})
+            if path == '/api/admin/marketing-campaign/send':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                mid=int(payload.get('id') or 0); mc=conn.execute('SELECT * FROM marketing_campaigns WHERE id=? AND campaign_id=?',(mid,s['campaign_id'])).fetchone()
+                if not mc:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                if mc['status']=='sent':return self.send_json({'ok':False,'error':'already_sent'},409)
+                rows=campaign_recipient_rows(conn,s['campaign_id'],mc['segment']); queued=0; sent_at=now_ts()
+                for r in rows:
+                    q=False
+                    if mc['channel'] in ('email','both') and r['email'] and r['marketing_email'] and email_configured(email_config_for_client(conn,s['campaign_id'])):
+                        enqueue_message(conn,s['campaign_id'],'campaign_email',r['email'],{'name':r['name'],'message':mc['message'],'subject':'Fidelizaê! • '+mc['name']}); q=True
+                    if mc['channel'] in ('whatsapp','both') and r['phone'] and r['marketing_whatsapp'] and whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])):
+                        enqueue_message(conn,s['campaign_id'],'whatsapp',r['phone'],{'message':mc['message']}); q=True
+                    if q:
+                        try: conn.execute('INSERT INTO marketing_campaign_recipients(marketing_campaign_id,membership_id,sent_at) VALUES(?,?,?)',(mid,r['membership_id'],sent_at)); queued+=1
+                        except integrity_errors(): pass
+                conn.execute("UPDATE marketing_campaigns SET status='sent',sent_at=? WHERE id=?",(sent_at,mid)); audit(conn,s['company_id'],s['user_id'],'marketing_campaign_send','marketing_campaign',mid,details=f'queued={queued}',ip_address=self._ip())
+                return self.send_json({'ok':True,'queued':queued})
+            if path == '/api/admin/coupon/save':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                name=str(payload.get('name','')).strip()[:100]; code=re.sub(r'[^A-Z0-9_-]','',str(payload.get('code','')).upper())[:30]; typ=str(payload.get('benefit_type','percent')); segment=str(payload.get('segment','all'))
+                try: val=int(payload.get('benefit_value') or 0); limit=int(payload.get('usage_limit') or 0); starts=int(payload.get('starts_at') or 0) or None; ends=int(payload.get('ends_at') or 0) or None
+                except: return self.send_json({'ok':False,'error':'invalid_coupon'},400)
+                if len(name)<2 or len(code)<3 or typ not in ('percent','fixed','bonus_points','bonus_stamps') or val<=0:return self.send_json({'ok':False,'error':'invalid_coupon'},400)
+                try: cid=insert_id(conn,'INSERT INTO coupons(campaign_id,name,code,benefit_type,benefit_value,segment,starts_at,ends_at,usage_limit,active,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(s['campaign_id'],name,code,typ,val,segment,starts,ends,limit,1,now_ts()))
+                except integrity_errors():return self.send_json({'ok':False,'error':'coupon_code_exists'},409)
+                audit(conn,s['company_id'],s['user_id'],'coupon_create','coupon',cid,details=code,ip_address=self._ip());return self.send_json({'ok':True,'id':cid})
+            if path == '/api/admin/coupon/toggle':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                conn.execute('UPDATE coupons SET active=? WHERE id=? AND campaign_id=?',(1 if payload.get('active') else 0,int(payload.get('id') or 0),s['campaign_id']));return self.send_json({'ok':True})
+            if path == '/api/attendant/coupon/apply':
+                if s['role']!='attendant' or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                code=str(payload.get('code','')).strip().upper(); public_id=str(payload.get('public_id','')).strip(); now=now_ts()
+                m=conn.execute('SELECT m.*,c.loyalty_type,c.goal FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=? AND m.campaign_id=?',(public_id,s['campaign_id'])).fetchone(); cup=conn.execute('SELECT * FROM coupons WHERE campaign_id=? AND upper(code)=upper(?) AND active=1',(s['campaign_id'],code)).fetchone()
+                if not m or not cup:return self.send_json({'ok':False,'error':'coupon_not_found'},404)
+                if (cup['starts_at'] and now<cup['starts_at']) or (cup['ends_at'] and now>cup['ends_at']):return self.send_json({'ok':False,'error':'coupon_not_available'},409)
+                if conn.execute('SELECT 1 FROM coupon_redemptions WHERE coupon_id=? AND membership_id=?',(cup['id'],m['id'])).fetchone():return self.send_json({'ok':False,'error':'coupon_already_used'},409)
+                if cup['usage_limit'] and conn.execute('SELECT COUNT(*) n FROM coupon_redemptions WHERE coupon_id=?',(cup['id'],)).fetchone()['n']>=cup['usage_limit']:return self.send_json({'ok':False,'error':'coupon_limit_reached'},409)
+                benefit={'type':cup['benefit_type'],'value':cup['benefit_value']}
+                if cup['benefit_type']=='bonus_points':
+                    prev=int(m['points_balance'] or 0); new=prev+int(cup['benefit_value']); conn.execute('UPDATE memberships SET points_balance=? WHERE id=?',(new,m['id'])); conn.execute('INSERT INTO transactions(membership_id,user_id,branch_id,type,value,previous_progress,new_progress,rewards_delta,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(m['id'],s['user_id'],current_branch_id(conn,s['user_id']),'adjustment',cup['benefit_value'],prev,new,0,self._ip(),'Cupom '+cup['code'],now))
+                elif cup['benefit_type']=='bonus_stamps':
+                    prev=int(m['progress'] or 0); total=prev+int(cup['benefit_value']); rewards=total//int(m['goal']); new=total%int(m['goal']); conn.execute('UPDATE memberships SET progress=?,rewards_available=rewards_available+? WHERE id=?',(new,rewards,m['id'])); conn.execute('INSERT INTO transactions(membership_id,user_id,branch_id,type,value,previous_progress,new_progress,rewards_delta,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(m['id'],s['user_id'],current_branch_id(conn,s['user_id']),'stamp',cup['benefit_value'],prev,new,rewards,self._ip(),'Cupom '+cup['code'],now))
+                conn.execute('INSERT INTO coupon_redemptions(coupon_id,membership_id,user_id,created_at) VALUES(?,?,?,?)',(cup['id'],m['id'],s['user_id'],now)); audit(conn,s['company_id'],s['user_id'],'coupon_redeem','coupon',cup['id'],details=f"{cup['code']};membership={m['public_id']}",ip_address=self._ip()); notify_wallet_updates(conn,m['public_id'])
+                return self.send_json({'ok':True,'coupon':cup['name'],'benefit':benefit})
 
             if path == '/api/attendant/password':
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
@@ -2311,7 +2467,7 @@ def main():
         print(f'Database initialized: {DB_PATH}'); return
     threading.Thread(target=background_loop,daemon=True,name='clube-worker').start()
     srv=ThreadingHTTPServer((args.host,args.port),Handler)
-    print(f'Clube Fidelidade {VERSION} em http://{args.host}:{args.port}')
+    print(f'Fidelizaê! {VERSION} em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: srv.server_close()

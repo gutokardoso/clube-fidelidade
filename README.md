@@ -1,4 +1,18 @@
-# Clube Fidelidade v75
+# Fidelizaê! v76
+
+## Novidades da v76
+
+- Marca da plataforma atualizada para **Fidelizaê!** com o slogan **“Fidelidade que marca pontos.”**
+- Dashboard de retenção com visitas, clientes que retornaram, clientes recuperados, taxa de retorno, resumo semanal e evolução mensal.
+- Segmentação automática: novos, ativos, VIP, em risco, inativos 60/90 dias, quase na recompensa e recompensa disponível.
+- Lista de clientes exibe segmento, nível, última atividade e quanto falta para a próxima recompensa.
+- Central de campanhas com público segmentado, WhatsApp/E-mail, fila de envio e medição de conversão por retorno após campanha.
+- Automações ampliadas com recuperação em 60 dias, além de aniversário, risco de inatividade, quase recompensa e recompensa liberada.
+- Cupons com percentual, valor fixo, pontos bônus ou selos bônus, controle de uso e aplicação no atendimento.
+- Kit de divulgação com QR Code, link do programa e geração de cartaz PNG personalizado.
+- Onboarding e resumo operacional aproveitam os dados reais do programa.
+- Recursos existentes de níveis, Wallets, recompensas, multiunidade, e-commerce, auditoria e integrações foram preservados.
+- **Sistema de indicação não foi exposto nem implementado na experiência**, conforme decisão de produto.
 
 
 ## Novidades da v75
@@ -49,7 +63,7 @@
 - Painel do administrador ganhou **checklist de configuração** e mantém os indicadores executivos de clientes, retorno, conclusão, inatividade, aniversariantes e comunicação.
 - Fluxo de pontos continua baseado no **valor da compra**, com cálculo automático conforme a regra da empresa e confirmação do novo saldo.
 - Mantidos automações, níveis VIP, aceleradores, NPS, vale-presente, exportações, auditoria, Wallets e comunicação segmentada já consolidados nas versões anteriores.
-- Versão visual e backend sincronizados em **v75**.
+- Versão visual e backend sincronizados em **v76**.
 
 
 - Vale-presente: botão Excluir para administradores, com remoção segura por empresa e auditoria.
@@ -107,6 +121,9 @@
 - Mantém a imagem da logo em endpoint PNG dedicado e com cache-busting.
 
 ## Versão
+
+**v76**
+- Retenção, segmentos, campanhas, cupons, resumo semanal, kit de divulgação e marca Fidelizaê!.
 
 **v75**
 - Callback OAuth oficial da Meta e fluxo Conectar WhatsApp corrigido e preparado para Embedded Signup.

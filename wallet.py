@@ -127,7 +127,7 @@ def _google_class_object(card):
     logo=_google_logo_url(card)
     klass={
       'id':class_id,
-      'issuerName':card.get('campaign_name') or 'Clube Fidelidade',
+      'issuerName':card.get('campaign_name') or 'Fidelizaê!',
       'programName':'Clube de Fidelidade',
       'reviewStatus':'UNDER_REVIEW',
       'hexBackgroundColor':_theme_hex(card.get('card_theme')),
@@ -156,7 +156,7 @@ def _google_class_object(card):
       }
     }
     if logo:
-        klass['programLogo']={'sourceUri':{'uri':logo,'description':'Logo '+str(card.get('campaign_name') or 'Clube Fidelidade')}}
+        klass['programLogo']={'sourceUri':{'uri':logo,'description':'Logo '+str(card.get('campaign_name') or 'Fidelizaê!')}}
     origin=_google_public_url()
     if origin:
         klass['homepageUri']={'uri':origin,'description':'Acessar cartão'}
@@ -174,7 +174,7 @@ def _google_object(card):
       'classId':_google_class_id(card),
       'state':'ACTIVE',
       'accountId':'CLUBE:'+card['public_id'],
-      'accountName':card.get('campaign_name') or 'Clube Fidelidade',
+      'accountName':card.get('campaign_name') or 'Fidelizaê!',
       'loyaltyPoints':{'label':'Pontos' if points else 'Selos','balance':{'string':balance}},
       'barcode':{'type':'QR_CODE','value':'CLUBE:'+card['public_id'],'alternateText':'CLUBE:'+card['public_id']},
       'textModulesData':(
@@ -225,9 +225,9 @@ def build_apple_pkpass(card):
       'passTypeIdentifier':os.environ['APPLE_PASS_TYPE_ID'],
       'serialNumber':card['public_id'],
       'teamIdentifier':os.environ['APPLE_TEAM_ID'],
-      'organizationName':card.get('campaign_name') or 'Clube Fidelidade',
+      'organizationName':card.get('campaign_name') or 'Fidelizaê!',
       'description':'Cartão de fidelidade',
-      'logoText':card.get('campaign_name') or 'Clube Fidelidade',
+      'logoText':card.get('campaign_name') or 'Fidelizaê!',
       'foregroundColor':'rgb(255,255,255)',
       'backgroundColor':'rgb(%d,%d,%d)'%_theme_rgb(card.get('card_theme')),
       'labelColor':'rgb(235,235,235)',

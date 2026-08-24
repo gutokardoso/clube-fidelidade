@@ -517,6 +517,58 @@ def init_db(db_path=None, seed=True):
             conn.execute('CREATE INDEX IF NOT EXISTS idx_transactions_branch_time ON transactions(branch_id,created_at DESC)')
             conn.execute('CREATE INDEX IF NOT EXISTS idx_audit_branch_time ON audit_log(branch_id,created_at DESC)')
 
+        # Migração v76: retenção, campanhas, cupons e acompanhamento de conversão.
+        if _is_postgres(target):
+            conn.executescript("""CREATE TABLE IF NOT EXISTS marketing_campaigns (
+              id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+              name TEXT NOT NULL, segment TEXT NOT NULL DEFAULT 'all', channel TEXT NOT NULL DEFAULT 'both',
+              message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'draft', created_at BIGINT NOT NULL, sent_at BIGINT
+            );
+            CREATE TABLE IF NOT EXISTS marketing_campaign_recipients (
+              id BIGSERIAL PRIMARY KEY, marketing_campaign_id BIGINT NOT NULL REFERENCES marketing_campaigns(id) ON DELETE CASCADE,
+              membership_id BIGINT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, sent_at BIGINT NOT NULL, returned_at BIGINT,
+              UNIQUE(marketing_campaign_id,membership_id)
+            );
+            CREATE TABLE IF NOT EXISTS coupons (
+              id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+              name TEXT NOT NULL, code TEXT NOT NULL, benefit_type TEXT NOT NULL DEFAULT 'percent', benefit_value INTEGER NOT NULL DEFAULT 0,
+              segment TEXT NOT NULL DEFAULT 'all', starts_at BIGINT, ends_at BIGINT, usage_limit INTEGER NOT NULL DEFAULT 0,
+              active INTEGER NOT NULL DEFAULT 1, created_at BIGINT NOT NULL, UNIQUE(campaign_id,code)
+            );
+            CREATE TABLE IF NOT EXISTS coupon_redemptions (
+              id BIGSERIAL PRIMARY KEY, coupon_id BIGINT NOT NULL REFERENCES coupons(id) ON DELETE CASCADE,
+              membership_id BIGINT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+              created_at BIGINT NOT NULL, UNIQUE(coupon_id,membership_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_marketing_campaigns_client ON marketing_campaigns(campaign_id,created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_coupon_client ON coupons(campaign_id,active);
+            """)
+        else:
+            conn.executescript("""CREATE TABLE IF NOT EXISTS marketing_campaigns (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+              name TEXT NOT NULL, segment TEXT NOT NULL DEFAULT 'all', channel TEXT NOT NULL DEFAULT 'both',
+              message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'draft', created_at INTEGER NOT NULL, sent_at INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS marketing_campaign_recipients (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, marketing_campaign_id INTEGER NOT NULL REFERENCES marketing_campaigns(id) ON DELETE CASCADE,
+              membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, sent_at INTEGER NOT NULL, returned_at INTEGER,
+              UNIQUE(marketing_campaign_id,membership_id)
+            );
+            CREATE TABLE IF NOT EXISTS coupons (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+              name TEXT NOT NULL, code TEXT NOT NULL, benefit_type TEXT NOT NULL DEFAULT 'percent', benefit_value INTEGER NOT NULL DEFAULT 0,
+              segment TEXT NOT NULL DEFAULT 'all', starts_at INTEGER, ends_at INTEGER, usage_limit INTEGER NOT NULL DEFAULT 0,
+              active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, UNIQUE(campaign_id,code)
+            );
+            CREATE TABLE IF NOT EXISTS coupon_redemptions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, coupon_id INTEGER NOT NULL REFERENCES coupons(id) ON DELETE CASCADE,
+              membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+              created_at INTEGER NOT NULL, UNIQUE(coupon_id,membership_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_marketing_campaigns_client ON marketing_campaigns(campaign_id,created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_coupon_client ON coupons(campaign_id,active);
+            """)
+
         # Migração v10: todo atendente pode ser vinculado a um cliente (campaign_id).
         if _is_postgres(target):
             conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS campaign_id BIGINT REFERENCES campaigns(id) ON DELETE SET NULL')
