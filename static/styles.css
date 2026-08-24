@@ -168,3 +168,10 @@ html{scroll-behavior:smooth}
 .branch-create-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:12px;align-items:center;margin:12px 0}
 .branch-create-row .btn{height:100%;min-height:46px}
 @media(max-width:700px){.branch-create-row{grid-template-columns:1fr}.branch-create-row .btn{width:100%}.top-submenu{left:0;right:auto}}
+
+/* v78: painel da empresa, visão geral unificada e auditoria legível */
+.customer-filter-row{display:grid;grid-template-columns:minmax(280px,2fr) minmax(210px,1fr) 110px;gap:12px;align-items:center}
+.overview-segment-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+.segment-card.metric-only{cursor:default}
+.segment-card.metric-only:hover{transform:none;box-shadow:none}
+@media(max-width:900px){.customer-filter-row{grid-template-columns:1fr}.overview-segment-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}

@@ -1,6 +1,12 @@
-# Fidelizaê! v77
+# Fidelizaê! v78
 
-## Novidades da v77
+## Novidades da v78
+
+- Menu interno do painel da empresa reorganizado para: **Escanear QR, Clientes cadastrados, Aniversariantes, Visão Geral e Comunicação**.
+- Filtros de **Clientes cadastrados** ficam em uma única linha em telas amplas.
+- **Segmentos de clientes** e **Visão Geral** foram unificados em uma só área, com os indicadores na ordem solicitada e o mesmo design de cartões.
+- **Central de auditoria** agora traduz operações e detalhes para português, ocultando códigos internos.
+- Link **Recompensas** aparece no painel administrativo somente quando o programa da empresa é por pontos.
 
 - Gestão avançada ganhou submenu com acesso separado a **Unidades e desempenho** e **Central de auditoria**.
 - Cadastro de unidade (nome, código e botão Adicionar) fica na mesma linha em telas amplas e responsivo em telas menores.
@@ -70,7 +76,7 @@
 - Painel do administrador ganhou **checklist de configuração** e mantém os indicadores executivos de clientes, retorno, conclusão, inatividade, aniversariantes e comunicação.
 - Fluxo de pontos continua baseado no **valor da compra**, com cálculo automático conforme a regra da empresa e confirmação do novo saldo.
 - Mantidos automações, níveis VIP, aceleradores, NPS, vale-presente, exportações, auditoria, Wallets e comunicação segmentada já consolidados nas versões anteriores.
-- Versão visual e backend sincronizados em **v77**.
+- Versão visual e backend sincronizados em **v78**.
 
 
 - Vale-presente: botão Excluir para administradores, com remoção segura por empresa e auditoria.
@@ -129,7 +135,7 @@
 
 ## Versão
 
-**v77**
+**v78**
 - Gestão avançada reorganizada, auditoria em modal separado e fechamento externo dos modais.
 
 **v76**
