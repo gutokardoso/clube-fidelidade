@@ -1,7 +1,14 @@
-# Clube Fidelidade v73
+# Clube Fidelidade v74
 
 
-## Novidades da v73
+## Novidades da v74
+
+- Cadastro e edição da empresa agora incluem **plataforma de e-commerce** (WooCommerce, Nuvemshop, Shopify, Tray, VTEX, Loja Integrada ou API personalizada).
+- A compra online usa **a mesma regra de fidelidade já cadastrada**: em pontos, a mesma conversão por valor; em selos, 1 compra paga = 1 selo, respeitando a meta/recompensa existente.
+- Cada empresa com e-commerce recebe um **webhook exclusivo e secreto** para eventos de pedidos.
+- Pedidos pagos creditam automaticamente; cancelamentos/reembolsos estornam a recompensa; eventos repetidos são idempotentes e não duplicam pontos/selos.
+- O cliente é localizado no mesmo programa por CPF, e-mail ou celular. Se ainda não possuir cartão, o pedido fica registrado sem crédito e retorna `customer_not_found`.
+- A auditoria registra crédito e estorno de e-commerce, e o painel mostra o status da integração.
 
 ### Gestão de unidades funcional
 
@@ -33,7 +40,7 @@
 - Painel do administrador ganhou **checklist de configuração** e mantém os indicadores executivos de clientes, retorno, conclusão, inatividade, aniversariantes e comunicação.
 - Fluxo de pontos continua baseado no **valor da compra**, com cálculo automático conforme a regra da empresa e confirmação do novo saldo.
 - Mantidos automações, níveis VIP, aceleradores, NPS, vale-presente, exportações, auditoria, Wallets e comunicação segmentada já consolidados nas versões anteriores.
-- Versão visual e backend sincronizados em **v73**.
+- Versão visual e backend sincronizados em **v74**.
 
 
 - Vale-presente: botão Excluir para administradores, com remoção segura por empresa e auditoria.
@@ -91,6 +98,9 @@
 - Mantém a imagem da logo em endpoint PNG dedicado e com cache-busting.
 
 ## Versão
+
+**v74**
+- Integração de e-commerce por empresa com webhook exclusivo, crédito automático de selos/pontos pela regra existente, idempotência e estorno de cancelamentos/reembolsos.
 
 **v69**
 - Remoção do hero redundante dos painéis de operação/administração e navegação com scroll suave entre seções.

@@ -424,6 +424,33 @@ def init_db(db_path=None, seed=True):
                 if col not in campaign_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
 
 
+        # Migração v74: integração de e-commerce por empresa e histórico idempotente de pedidos.
+        ecommerce_cols=[
+            ('ecommerce_platform',"TEXT NOT NULL DEFAULT 'none'"),('ecommerce_store_url','TEXT'),
+            ('ecommerce_webhook_secret','TEXT'),('ecommerce_status',"TEXT NOT NULL DEFAULT 'not_connected'"),
+            ('ecommerce_connected_at','TEXT')
+        ]
+        if _is_postgres(target):
+            for col,typ in ecommerce_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS {col} {typ}')
+            conn.executescript("""CREATE TABLE IF NOT EXISTS ecommerce_orders (
+              id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+              platform TEXT NOT NULL, order_id TEXT NOT NULL, order_status TEXT NOT NULL, customer_ref TEXT,
+              total_cents INTEGER NOT NULL DEFAULT 0, reward_value INTEGER NOT NULL DEFAULT 0, transaction_id BIGINT,
+              reversal_transaction_id BIGINT, processed_at BIGINT, reversed_at BIGINT, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL,
+              UNIQUE(campaign_id,platform,order_id)
+            ); CREATE INDEX IF NOT EXISTS idx_ecommerce_orders_campaign ON ecommerce_orders(campaign_id,created_at DESC);""")
+        else:
+            ccols={r['name'] for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()}
+            for col,typ in ecommerce_cols:
+                if col not in ccols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
+            conn.executescript("""CREATE TABLE IF NOT EXISTS ecommerce_orders (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+              platform TEXT NOT NULL, order_id TEXT NOT NULL, order_status TEXT NOT NULL, customer_ref TEXT,
+              total_cents INTEGER NOT NULL DEFAULT 0, reward_value INTEGER NOT NULL DEFAULT 0, transaction_id INTEGER,
+              reversal_transaction_id INTEGER, processed_at INTEGER, reversed_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+              UNIQUE(campaign_id,platform,order_id)
+            ); CREATE INDEX IF NOT EXISTS idx_ecommerce_orders_campaign ON ecommerce_orders(campaign_id,created_at DESC);""")
+
         # Migração v42: programas por selos ou pontos + catálogo de recompensas.
         loyalty_cols=[('loyalty_type',"TEXT NOT NULL DEFAULT 'stamps'"),('points_spend_cents',"INTEGER NOT NULL DEFAULT 200")]
         if _is_postgres(target):

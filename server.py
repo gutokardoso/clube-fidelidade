@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v73'
+VERSION='v74'
 
 
 def jdump(obj):
@@ -46,6 +46,9 @@ def jdump(obj):
 
 def rowdict(row):
     return dict(row) if row else None
+
+def now_iso():
+    return datetime.now(ZoneInfo('America/Sao_Paulo')).isoformat(timespec='seconds')
 
 
 def current_branch_id(conn, user_id, campaign_id=None):
@@ -57,6 +60,50 @@ def current_branch_id(conn, user_id, campaign_id=None):
         row=conn.execute('SELECT branch_id FROM users WHERE id=?',(user_id,)).fetchone()
     return row['branch_id'] if row and row['branch_id'] else None
 
+
+ECOMMERCE_PLATFORMS={'none','woocommerce','nuvemshop','shopify','tray','vtex','loja_integrada','custom'}
+
+def normalize_ecommerce_platform(value):
+    value=str(value or 'none').strip().lower()
+    return value if value in ECOMMERCE_PLATFORMS else 'none'
+
+def ecommerce_extract(payload, platform):
+    data=payload if isinstance(payload,dict) else {}
+    order_id=data.get('order_id') or data.get('id') or data.get('number') or data.get('order_number')
+    status=str(data.get('payment_status') or data.get('financial_status') or data.get('status') or '').strip().lower()
+    total=data.get('total_cents')
+    if total is None:
+        total=data.get('total_price', data.get('total', data.get('amount',0)))
+        try: total=int(round(float(str(total).replace(',','.'))*100))
+        except: total=0
+    else:
+        try: total=int(total)
+        except: total=0
+    customer=data.get('customer') if isinstance(data.get('customer'),dict) else {}
+    billing=data.get('billing') if isinstance(data.get('billing'),dict) else {}
+    billing_address=data.get('billing_address') if isinstance(data.get('billing_address'),dict) else {}
+    email=data.get('email') or customer.get('email') or billing.get('email')
+    phone=data.get('phone') or customer.get('phone') or billing.get('phone') or billing_address.get('phone')
+    cpf=data.get('cpf') or data.get('document') or customer.get('cpf') or customer.get('document')
+    if not cpf and isinstance(data.get('meta_data'),list):
+        for item in data['meta_data']:
+            if isinstance(item,dict) and str(item.get('key','')).lower() in ('cpf','billing_cpf','_billing_cpf'):
+                cpf=item.get('value'); break
+    return {'order_id':str(order_id or '').strip()[:120],'status':status[:40],'total_cents':max(0,total),
+            'email':normalize_email(email),'phone':normalize_phone(phone),'cpf':normalize_cpf(cpf)}
+
+def ecommerce_find_membership(conn,campaign_id,info):
+    cpf=info.get('cpf'); email=info.get('email'); phone=info.get('phone')
+    if cpf:
+        row=conn.execute('SELECT m.*,cu.name customer_name FROM memberships m JOIN customers cu ON cu.id=m.customer_id WHERE m.campaign_id=? AND cu.cpf=? LIMIT 1',(campaign_id,cpf)).fetchone()
+        if row:return row
+    if email:
+        row=conn.execute('SELECT m.*,cu.name customer_name FROM memberships m JOIN customers cu ON cu.id=m.customer_id WHERE m.campaign_id=? AND lower(cu.email)=lower(?) LIMIT 1',(campaign_id,email)).fetchone()
+        if row:return row
+    if phone:
+        row=conn.execute('SELECT m.*,cu.name customer_name FROM memberships m JOIN customers cu ON cu.id=m.customer_id WHERE m.campaign_id=? AND cu.phone=? LIMIT 1',(campaign_id,phone)).fetchone()
+        if row:return row
+    return None
 
 EMAIL_RE = re.compile(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
 
@@ -1181,6 +1228,11 @@ class Handler(BaseHTTPRequestHandler):
                     c['whatsapp_configured']=bool(c.get('whatsapp_phone_number_id') and c.get('whatsapp_access_token_enc') and c.get('whatsapp_api_version'))
                     c['whatsapp_signup_status']=c.get('whatsapp_signup_status') or ('connected' if c['whatsapp_configured'] else 'not_connected')
                     c['whatsapp_integration_mode']=c.get('whatsapp_integration_mode') or 'manual'
+                    c['ecommerce_platform']=normalize_ecommerce_platform(c.get('ecommerce_platform'))
+                    c['ecommerce_status']=c.get('ecommerce_status') or ('awaiting_connection' if c['ecommerce_platform']!='none' else 'not_connected')
+                    c['ecommerce_configured']=bool(c['ecommerce_platform']!='none' and c.get('ecommerce_webhook_secret'))
+                    public_base=os.environ.get('PUBLIC_BASE_URL','').rstrip('/')
+                    c['ecommerce_webhook_url']=(public_base+f"/api/integrations/ecommerce/{c['id']}/{c.get('ecommerce_webhook_secret')}") if (public_base and c.get('ecommerce_webhook_secret')) else ''
                     c['email_configured']=bool(c['brevo_configured'] if c['email_provider']=='brevo' else c['smtp_configured']); c['reward_catalog_count']=conn.execute("SELECT COUNT(*) n FROM reward_catalog WHERE campaign_id=? AND active=1",(c['id'],)).fetchone()['n']; c['wallet_google']=wallet_status()['google']['ready']; c['wallet_apple']=wallet_status()['apple']['ready']
                     c['smtp_password_enc']=None
                     c['brevo_api_key_enc']=None
@@ -1320,6 +1372,65 @@ class Handler(BaseHTTPRequestHandler):
             if path in ['/login','/join']:
                 return self.send_redirect('/login?error=1' if path == '/login' else '/join?error=1')
             return self.send_json({'ok':False,'error':'invalid_json'},400)
+        mweb=re.fullmatch(r'/api/integrations/ecommerce/(\d+)/([^/]+)',path)
+        if mweb:
+            campaign_id=int(mweb.group(1)); supplied_secret=mweb.group(2)
+            with connect(DB_PATH) as conn:
+                c=rowdict(conn.execute('SELECT * FROM campaigns WHERE id=? AND active=1',(campaign_id,)).fetchone())
+                if not c or normalize_ecommerce_platform(c.get('ecommerce_platform'))=='none':return self.send_json({'ok':False,'error':'ecommerce_not_configured'},404)
+                expected=str(c.get('ecommerce_webhook_secret') or '')
+                if not expected or not hmac.compare_digest(expected,supplied_secret):return self.send_json({'ok':False,'error':'invalid_webhook_secret'},403)
+                platform=normalize_ecommerce_platform(c.get('ecommerce_platform')); info=ecommerce_extract(payload,platform)
+                if not info['order_id']:return self.send_json({'ok':False,'error':'order_id_required'},400)
+                paid_states={'paid','approved','completed','processing','authorized'}
+                reversed_states={'refunded','cancelled','canceled','voided','reversed','chargeback'}
+                if info['status'] not in paid_states|reversed_states:return self.send_json({'ok':True,'ignored':True,'reason':'status_not_final','status':info['status']})
+                existing=rowdict(conn.execute('SELECT * FROM ecommerce_orders WHERE campaign_id=? AND platform=? AND order_id=?',(campaign_id,platform,info['order_id'])).fetchone())
+                if info['status'] in paid_states:
+                    if existing and existing.get('processed_at') and not existing.get('reversed_at'):
+                        return self.send_json({'ok':True,'duplicate':True,'order_id':info['order_id']})
+                    member=ecommerce_find_membership(conn,campaign_id,info)
+                    customer_ref=info.get('cpf') or info.get('email') or info.get('phone') or ''
+                    if not member:
+                        if existing: conn.execute('UPDATE ecommerce_orders SET order_status=?,customer_ref=?,total_cents=?,updated_at=? WHERE id=?',(info['status'],customer_ref,info['total_cents'],now_ts(),existing['id']))
+                        else: conn.execute('INSERT INTO ecommerce_orders(campaign_id,platform,order_id,order_status,customer_ref,total_cents,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',(campaign_id,platform,info['order_id'],info['status'],customer_ref,info['total_cents'],now_ts(),now_ts()))
+                        audit(conn,c['company_id'],None,'ecommerce_customer_not_found','campaign',campaign_id,details=f'{platform};pedido={info["order_id"]};cliente={customer_ref}',ip_address=self._ip())
+                        return self.send_json({'ok':False,'error':'customer_not_found','message':'O pedido foi recebido, mas o cliente ainda não possui cartão neste programa.'},409)
+                    if c['loyalty_type']=='points':
+                        rate=max(1,int(c['points_spend_cents'] or 200)); reward=info['total_cents']//rate
+                        if reward<1:return self.send_json({'ok':True,'ignored':True,'reason':'purchase_below_point_rule'})
+                        prev=int(member['points_balance'] or 0); new=prev+reward
+                        tx_id=insert_id(conn,"INSERT INTO transactions(membership_id,user_id,branch_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(member['id'],None,None,'adjustment',reward,prev,new,0,f'ecom:{campaign_id}:{platform}:{info["order_id"]}',self._ip(),f'{platform} • Pedido {info["order_id"]} • R$ {info["total_cents"]/100:.2f}',now_ts()))
+                        conn.execute('UPDATE memberships SET points_balance=? WHERE id=?',(new,member['id']))
+                    else:
+                        reward=1; prev=int(member['progress'] or 0); goal=max(1,int(c['goal'] or 5)); new=prev+1; rewards_delta=0
+                        if new>=goal:new=0;rewards_delta=1
+                        tx_id=insert_id(conn,"INSERT INTO transactions(membership_id,user_id,branch_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(member['id'],None,None,'stamp',1,prev,new,rewards_delta,f'ecom:{campaign_id}:{platform}:{info["order_id"]}',self._ip(),f'{platform} • Pedido {info["order_id"]}',now_ts()))
+                        conn.execute('UPDATE memberships SET progress=?,rewards_available=rewards_available+? WHERE id=?',(new,rewards_delta,member['id']))
+                    if existing: conn.execute('UPDATE ecommerce_orders SET order_status=?,customer_ref=?,total_cents=?,reward_value=?,transaction_id=?,processed_at=?,reversed_at=NULL,reversal_transaction_id=NULL,updated_at=? WHERE id=?',(info['status'],customer_ref,info['total_cents'],reward,tx_id,now_ts(),now_ts(),existing['id']))
+                    else: conn.execute('INSERT INTO ecommerce_orders(campaign_id,platform,order_id,order_status,customer_ref,total_cents,reward_value,transaction_id,processed_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(campaign_id,platform,info['order_id'],info['status'],customer_ref,info['total_cents'],reward,tx_id,now_ts(),now_ts(),now_ts()))
+                    conn.execute("UPDATE campaigns SET ecommerce_status='connected',ecommerce_connected_at=COALESCE(ecommerce_connected_at,?) WHERE id=?",(now_iso(),campaign_id))
+                    audit(conn,c['company_id'],None,'ecommerce_reward','membership',member['public_id'],details=f'{platform};pedido={info["order_id"]};valor={info["total_cents"]};recompensa={reward}',ip_address=self._ip()); notify_wallet_updates(conn,member['public_id'])
+                    return self.send_json({'ok':True,'order_id':info['order_id'],'customer_name':member['customer_name'],'reward':reward,'loyalty_type':c['loyalty_type']})
+                if not existing or not existing.get('processed_at') or existing.get('reversed_at'): return self.send_json({'ok':True,'ignored':True,'reason':'nothing_to_reverse'})
+                tx=conn.execute('SELECT * FROM transactions WHERE id=?',(existing['transaction_id'],)).fetchone()
+                if not tx:return self.send_json({'ok':False,'error':'original_transaction_not_found'},409)
+                member=fetchone_for_update(conn,'SELECT * FROM memberships WHERE id=?',(tx['membership_id'],)); reward=max(0,int(existing['reward_value'] or 0))
+                if c['loyalty_type']=='points':
+                    prev=int(member['points_balance'] or 0); new=prev-reward
+                    rtx=insert_id(conn,"INSERT INTO transactions(membership_id,user_id,branch_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(member['id'],None,None,'adjustment',-reward,prev,new,0,f'ecom-refund:{campaign_id}:{platform}:{info["order_id"]}',self._ip(),f'Estorno {platform} • Pedido {info["order_id"]}',now_ts()))
+                    conn.execute('UPDATE memberships SET points_balance=? WHERE id=?',(new,member['id']))
+                else:
+                    prev=int(member['progress'] or 0); goal=max(1,int(c['goal'] or 5)); rewards_available=int(member['rewards_available'] or 0); new=prev-1; rd=0
+                    if new<0:
+                        new=goal-1
+                        if rewards_available>0: rd=-1
+                    rtx=insert_id(conn,"INSERT INTO transactions(membership_id,user_id,branch_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(member['id'],None,None,'adjustment',-1,prev,new,rd,f'ecom-refund:{campaign_id}:{platform}:{info["order_id"]}',self._ip(),f'Estorno {platform} • Pedido {info["order_id"]}',now_ts()))
+                    new_rewards=max(0,rewards_available+rd); conn.execute('UPDATE memberships SET progress=?,rewards_available=? WHERE id=?',(new,new_rewards,member['id']))
+                conn.execute('UPDATE ecommerce_orders SET order_status=?,reversal_transaction_id=?,reversed_at=?,updated_at=? WHERE id=?',(info['status'],rtx,now_ts(),now_ts(),existing['id']))
+                audit(conn,c['company_id'],None,'ecommerce_reward_reversed','membership',member['public_id'],details=f'{platform};pedido={info["order_id"]};recompensa=-{reward}',ip_address=self._ip()); notify_wallet_updates(conn,member['public_id'])
+                return self.send_json({'ok':True,'reversed':True,'order_id':info['order_id'],'reward_reversed':reward,'loyalty_type':c['loyalty_type']})
+
         if path in ['/api/login','/login']:
             email=str(payload.get('email','')).lower().strip(); password=str(payload.get('password','')).strip()
             with connect(DB_PATH) as conn:
@@ -1499,7 +1610,6 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant');
                 if not s:return
                 if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
-                import secrets
                 value=max(100,int(payload.get('value_cents') or 0)); code='VALE-'+secrets.token_hex(4).upper(); insert_id(conn,"INSERT INTO gift_cards(campaign_id,code,value_cents,balance_cents,status,created_at) VALUES(?,?,?,?,?,?)",(s['campaign_id'],code,value,value,'active',now_ts())); return self.send_json({'ok':True,'code':code})
 
             if path == '/api/admin/gift-card/delete':
@@ -1924,6 +2034,10 @@ class Handler(BaseHTTPRequestHandler):
                 wa_version=str(payload.get('whatsapp_api_version','v24.0')).strip()[:20] or 'v24.0'
                 wa_mode=str(payload.get('whatsapp_integration_mode','none')).strip().lower()
                 if wa_mode not in ('embedded','manual','none'): wa_mode='none'
+                ecommerce_platform=normalize_ecommerce_platform(payload.get('ecommerce_platform'))
+                ecommerce_store_url=str(payload.get('ecommerce_store_url','')).strip()[:300]
+                ecommerce_secret=secrets.token_urlsafe(24) if ecommerce_platform!='none' else None
+                ecommerce_status='awaiting_connection' if ecommerce_platform!='none' else 'not_connected'
                 try:
                     smtp_password_enc=encrypt_secret(payload.get('smtp_password')) if payload.get('smtp_password') else None
                     brevo_api_key_enc=encrypt_secret(payload.get('brevo_api_key')) if payload.get('brevo_api_key') else None
@@ -1934,11 +2048,13 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     new_id=insert_id(conn,'''INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,logo_image,card_theme,loyalty_type,points_spend_cents,min_stamp_interval_sec,max_stamps_per_hour,max_stamps_per_attendant_day,
                         smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,email_provider,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,
-                        whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_access_token_enc,whatsapp_api_version,whatsapp_integration_mode,whatsapp_signup_status,created_at)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
+                        whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_access_token_enc,whatsapp_api_version,whatsapp_integration_mode,whatsapp_signup_status,
+                        ecommerce_platform,ecommerce_store_url,ecommerce_webhook_secret,ecommerce_status,created_at)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
                         s['company_id'],code,name,reward,goal,icon,logo_image,card_theme,loyalty_type,points_spend_cents,int(payload.get('min_interval',0)),int(payload.get('max_hour',0)),int(payload.get('max_day',500)),
                         smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,email_provider,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,
-                        wa_phone_id,wa_waba_id,wa_token_enc,wa_version,wa_mode,wa_status,now_ts()))
+                        wa_phone_id,wa_waba_id,wa_token_enc,wa_version,wa_mode,wa_status,
+                        ecommerce_platform,ecommerce_store_url,ecommerce_secret,ecommerce_status,now_ts()))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'campaign_create','campaign',new_id,details=code,ip_address=self._ip())
                 return self.send_json({'ok':True,'campaign_id':new_id})
@@ -1955,7 +2071,7 @@ class Handler(BaseHTTPRequestHandler):
                 except (TypeError,ValueError): return self.send_json({'ok':False,'error':'invalid_campaign'},400)
                 if campaign_id<1 or not name or not code or loyalty_type not in ('stamps','points') or (loyalty_type=='stamps' and (not reward or goal not in (3,5,8,10,15))) or (loyalty_type=='points' and points_spend_cents not in (200,300,500,1000)) or min_interval<0 or max_hour<0 or max_day<1:
                     return self.send_json({'ok':False,'error':'invalid_campaign'},400)
-                c=conn.execute('SELECT * FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id'])).fetchone()
+                c=rowdict(conn.execute('SELECT * FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id'])).fetchone())
                 card_theme=str(payload.get('card_theme',c.get('card_theme') or 'green')).strip().lower()
                 if card_theme not in CARD_THEMES: card_theme='green'
                 if not c: return self.send_json({'ok':False,'error':'campaign_not_found'},404)
@@ -1980,6 +2096,13 @@ class Handler(BaseHTTPRequestHandler):
                 wa_version=str(payload.get('whatsapp_api_version','v24.0')).strip()[:20]
                 wa_mode=str(payload.get('whatsapp_integration_mode',c.get('whatsapp_integration_mode') or 'manual')).strip().lower()
                 if wa_mode not in ('embedded','manual','none'): wa_mode='manual'
+                ecommerce_platform=normalize_ecommerce_platform(payload.get('ecommerce_platform',c.get('ecommerce_platform') or 'none'))
+                ecommerce_store_url=str(payload.get('ecommerce_store_url',c.get('ecommerce_store_url') or '')).strip()[:300]
+                old_platform=normalize_ecommerce_platform(c.get('ecommerce_platform'))
+                ecommerce_secret=c.get('ecommerce_webhook_secret')
+                if ecommerce_platform!='none' and not ecommerce_secret: ecommerce_secret=secrets.token_urlsafe(24)
+                if ecommerce_platform=='none': ecommerce_secret=None
+                ecommerce_status=('awaiting_connection' if ecommerce_platform!='none' else 'not_connected') if ecommerce_platform!=old_platform else (c.get('ecommerce_status') or ('awaiting_connection' if ecommerce_platform!='none' else 'not_connected'))
                 smtp_password_enc=c['smtp_password_enc']
                 brevo_api_key_enc=c.get('brevo_api_key_enc')
                 wa_token_enc=c['whatsapp_access_token_enc']
@@ -1992,13 +2115,29 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     conn.execute('''UPDATE campaigns SET code=?,name=?,reward_name=?,goal=?,icon=?,logo_image=?,card_theme=?,loyalty_type=?,points_spend_cents=?,min_stamp_interval_sec=?,max_stamps_per_hour=?,max_stamps_per_attendant_day=?,
                         smtp_host=?,smtp_port=?,smtp_user=?,smtp_password_enc=?,smtp_from=?,smtp_from_name=?,smtp_security=?,email_provider=?,brevo_api_key_enc=?,brevo_sender_email=?,brevo_sender_name=?,brevo_reply_to=?,
-                        whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_integration_mode=?,whatsapp_signup_status=?
+                        whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_integration_mode=?,whatsapp_signup_status=?,
+                        ecommerce_platform=?,ecommerce_store_url=?,ecommerce_webhook_secret=?,ecommerce_status=?
                         WHERE id=? AND company_id=?''',(code,name,reward,goal,icon,logo_image,card_theme,loyalty_type,points_spend_cents,min_interval,max_hour,max_day,
                         smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,email_provider,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,
-                        wa_phone_id,wa_waba_id,wa_token_enc,wa_version,wa_mode,'connected' if (wa_phone_id and wa_token_enc) else ('awaiting_connection' if wa_mode=='embedded' else 'not_connected'),campaign_id,s['company_id']))
+                        wa_phone_id,wa_waba_id,wa_token_enc,wa_version,wa_mode,'connected' if (wa_phone_id and wa_token_enc) else ('awaiting_connection' if wa_mode=='embedded' else 'not_connected'),
+                        ecommerce_platform,ecommerce_store_url,ecommerce_secret,ecommerce_status,campaign_id,s['company_id']))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'campaign_update','campaign',campaign_id,details=code,ip_address=self._ip())
                 return self.send_json({'ok':True,'campaign_id':campaign_id})
+            if path == '/api/manager/integration/ecommerce/rotate-secret':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                try: campaign_id=int(payload.get('campaign_id',0))
+                except: campaign_id=0
+                c=rowdict(conn.execute('SELECT ecommerce_platform FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id'])).fetchone())
+                if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                platform=normalize_ecommerce_platform(c.get('ecommerce_platform'))
+                if platform=='none':return self.send_json({'ok':False,'error':'ecommerce_not_configured'},409)
+                secret=secrets.token_urlsafe(24)
+                conn.execute("UPDATE campaigns SET ecommerce_webhook_secret=?,ecommerce_status='awaiting_connection' WHERE id=?",(secret,campaign_id))
+                audit(conn,s['company_id'],s['user_id'],'ecommerce_secret_rotated','campaign',campaign_id,ip_address=self._ip())
+                public_base=os.environ.get('PUBLIC_BASE_URL','').rstrip('/')
+                return self.send_json({'ok':True,'webhook_url':(public_base+f'/api/integrations/ecommerce/{campaign_id}/{secret}') if public_base else '', 'secret':secret})
+
             if path == '/api/manager/integration/test-email':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 try: campaign_id=int(payload.get('campaign_id',0))
