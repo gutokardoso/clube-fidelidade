@@ -1,6 +1,11 @@
-# Fidelizaê! v84
+# Fidelizaê! v85
 
-## Novidades da v84
+## Novidades da v85
+
+- Corrigida a pré-visualização do cartão para atualizar nome da empresa, tipo de programa, meta, recompensa, cor e logo imediatamente durante o preenchimento.
+- Removido do cartão do usuário o aviso de modo demo da área de Wallet.
+- CPF, Baixar meus dados e Excluir meus dados ficam na mesma linha em telas amplas e continuam responsivos no mobile.
+- Preferências de comunicação por e-mail e WhatsApp aparecem marcadas por padrão no cartão.
 
 - Removida a linha duplicada de segmento/progresso abaixo do nome no Histórico do cliente.
 - Botões dos menus superiores padronizados em todos os painéis, com bordas arredondadas e altura uniforme.

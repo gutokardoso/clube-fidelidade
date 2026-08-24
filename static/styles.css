@@ -259,3 +259,9 @@ body{font-family:"Nunito",Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSy
 .topbar .actions>.advanced-menu-wrap>.top-link-btn:focus-visible{outline:3px solid rgba(255,179,71,.55);outline-offset:2px}
 .advanced-menu-wrap{display:flex;align-items:center}
 @media(max-width:900px){.topbar .actions>.btn,.topbar .actions>.top-link-btn,.topbar .actions>.manager-nav-link,.topbar .actions>.notification-button,.topbar .actions>.advanced-menu-wrap>.top-link-btn{min-height:44px;height:auto;padding:12px 14px}}
+
+/* v85 — privacidade do cartão */
+.privacy-actions-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;align-items:stretch}
+.privacy-actions-row input,.privacy-actions-row .btn{min-height:50px;height:50px;margin:0}
+.privacy-actions-row .btn{display:inline-flex;align-items:center;justify-content:center;white-space:nowrap}
+@media(max-width:680px){.privacy-actions-row{grid-template-columns:1fr}.privacy-actions-row input,.privacy-actions-row .btn{width:100%}}
