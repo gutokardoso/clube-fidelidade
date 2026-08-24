@@ -1,17 +1,13 @@
-# Fidelizaê! v78
+# Fidelizaê! v79
 
-## Novidades da v78
+## Novidades da v79
 
-- Menu interno do painel da empresa reorganizado para: **Escanear QR, Clientes cadastrados, Aniversariantes, Visão Geral e Comunicação**.
-- Filtros de **Clientes cadastrados** ficam em uma única linha em telas amplas.
-- **Segmentos de clientes** e **Visão Geral** foram unificados em uma só área, com os indicadores na ordem solicitada e o mesmo design de cartões.
-- **Central de auditoria** agora traduz operações e detalhes para português, ocultando códigos internos.
-- Link **Recompensas** aparece no painel administrativo somente quando o programa da empresa é por pontos.
-
-- Gestão avançada ganhou submenu com acesso separado a **Unidades e desempenho** e **Central de auditoria**.
-- Cadastro de unidade (nome, código e botão Adicionar) fica na mesma linha em telas amplas e responsivo em telas menores.
-- Central de auditoria foi removida do modal principal e agora abre em um modal próprio.
-- Modais da área do cliente também podem ser fechados clicando no fundo externo da janela; tecla Esc preservada/adicionada como atalho.
+- Painel geral renomeado para **Painel Fidelizaê!**.
+- **Cadastrar nova empresa** e **Cadastrar novo usuário** agora ficam no menu superior, ao lado de **Alertas**, e abrem seus formulários em modais.
+- Os novos modais fecham pelo botão **Fechar**, pela tecla **Esc** e ao clicar fora da janela.
+- A **Central de notificações** é carregada automaticamente ao entrar no painel, sem exigir o clique em **Atualizar**.
+- Identificação do acesso geral simplificada para **Administrador Geral**.
+- Todos os recursos e dados da v78 foram preservados.
 
 ## Novidades da v76
 
@@ -76,7 +72,7 @@
 - Painel do administrador ganhou **checklist de configuração** e mantém os indicadores executivos de clientes, retorno, conclusão, inatividade, aniversariantes e comunicação.
 - Fluxo de pontos continua baseado no **valor da compra**, com cálculo automático conforme a regra da empresa e confirmação do novo saldo.
 - Mantidos automações, níveis VIP, aceleradores, NPS, vale-presente, exportações, auditoria, Wallets e comunicação segmentada já consolidados nas versões anteriores.
-- Versão visual e backend sincronizados em **v78**.
+- Versão visual e backend sincronizados em **v79**.
 
 
 - Vale-presente: botão Excluir para administradores, com remoção segura por empresa e auditoria.
@@ -135,7 +131,7 @@
 
 ## Versão
 
-**v78**
+**v79**
 - Gestão avançada reorganizada, auditoria em modal separado e fechamento externo dos modais.
 
 **v76**
