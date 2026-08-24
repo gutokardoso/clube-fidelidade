@@ -265,3 +265,10 @@ body{font-family:"Nunito",Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSy
 .privacy-actions-row input,.privacy-actions-row .btn{min-height:50px;height:50px;margin:0}
 .privacy-actions-row .btn{display:inline-flex;align-items:center;justify-content:center;white-space:nowrap}
 @media(max-width:680px){.privacy-actions-row{grid-template-columns:1fr}.privacy-actions-row input,.privacy-actions-row .btn{width:100%}}
+
+/* v86 - badges oficiais das carteiras */
+.wallet-store-link{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;background:transparent!important;border:0!important;padding:0!important;box-shadow:none!important;cursor:pointer;border-radius:12px;overflow:hidden}
+.wallet-store-link.hidden{display:none!important}
+.wallet-store-badge{display:block;width:auto;height:48px;max-width:220px;object-fit:contain}
+.wallet-store-link:hover .wallet-store-badge{filter:brightness(.92)}
+@media(max-width:480px){.wallet-store-badge{height:44px;max-width:200px}}

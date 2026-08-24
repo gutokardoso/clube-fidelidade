@@ -1,6 +1,9 @@
-# Fidelizaê! v85
+# Fidelizaê! v86
 
-## Novidades da v85
+## Novidades da v86
+- Corrigida de forma estrutural a pré-visualização do cartão em tempo real no Painel Fidelizaê!: o JavaScript da prévia agora é realmente executado e reage imediatamente a nome, tipo de fidelidade, meta, recompensa, cor e logo.
+- Botões de Google Wallet e Apple Wallet no cartão do usuário substituídos pelas imagens fornecidas.
+- Mantidas todas as funcionalidades da v85.
 
 - Corrigida a pré-visualização do cartão para atualizar nome da empresa, tipo de programa, meta, recompensa, cor e logo imediatamente durante o preenchimento.
 - Removido do cartão do usuário o aviso de modo demo da área de Wallet.
