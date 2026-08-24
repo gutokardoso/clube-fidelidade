@@ -1,4 +1,11 @@
-# Fidelizaê! v76
+# Fidelizaê! v77
+
+## Novidades da v77
+
+- Gestão avançada ganhou submenu com acesso separado a **Unidades e desempenho** e **Central de auditoria**.
+- Cadastro de unidade (nome, código e botão Adicionar) fica na mesma linha em telas amplas e responsivo em telas menores.
+- Central de auditoria foi removida do modal principal e agora abre em um modal próprio.
+- Modais da área do cliente também podem ser fechados clicando no fundo externo da janela; tecla Esc preservada/adicionada como atalho.
 
 ## Novidades da v76
 
@@ -63,7 +70,7 @@
 - Painel do administrador ganhou **checklist de configuração** e mantém os indicadores executivos de clientes, retorno, conclusão, inatividade, aniversariantes e comunicação.
 - Fluxo de pontos continua baseado no **valor da compra**, com cálculo automático conforme a regra da empresa e confirmação do novo saldo.
 - Mantidos automações, níveis VIP, aceleradores, NPS, vale-presente, exportações, auditoria, Wallets e comunicação segmentada já consolidados nas versões anteriores.
-- Versão visual e backend sincronizados em **v76**.
+- Versão visual e backend sincronizados em **v77**.
 
 
 - Vale-presente: botão Excluir para administradores, com remoção segura por empresa e auditoria.
@@ -121,6 +128,9 @@
 - Mantém a imagem da logo em endpoint PNG dedicado e com cache-busting.
 
 ## Versão
+
+**v77**
+- Gestão avançada reorganizada, auditoria em modal separado e fechamento externo dos modais.
 
 **v76**
 - Retenção, segmentos, campanhas, cupons, resumo semanal, kit de divulgação e marca Fidelizaê!.
