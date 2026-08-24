@@ -1,6 +1,6 @@
-# Fidelizaê! v81
+# Fidelizaê! v82
 
-## Novidades da v81
+## Novidades da v82
 - Corrigido o servidor de arquivos estáticos para servir PNG/JPEG/WebP/GIF/ICO/fontes como binário, fazendo a nova logo Fidelizaê! aparecer corretamente no header e rodapé.
 
 - Página inicial atualizada para a identidade visual oficial do **Fidelizaê!**, usando **#e27a00**, **#ffb347** e **#f2f2f2** como cores principais.

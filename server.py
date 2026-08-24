@@ -37,7 +37,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v81'
+VERSION='v82'
 
 
 def jdump(obj):
@@ -907,13 +907,14 @@ class Handler(BaseHTTPRequestHandler):
                 template=template.replace('<div id="msg"></div>','<div id="msg"><div class="notice error">E-mail ou senha inválidos.</div></div>')
             return self.send_text(template)
         if path.startswith('/static/'):
-            target = STATIC / path[len('/static/'):]
-            if not target.exists() or not target.is_file(): return self.send_text('Not found',404,'text/plain')
-            ctype='text/plain; charset=utf-8'
-            if target.suffix=='.css': ctype='text/css; charset=utf-8'
-            elif target.suffix=='.js': ctype='application/javascript; charset=utf-8'
-            elif target.suffix=='.svg': ctype='image/svg+xml'
-            return self.send_text(target.read_text(encoding='utf-8'),200,ctype)
+            target = (STATIC / path[len('/static/'):]).resolve()
+            if STATIC.resolve() not in target.parents or not target.exists() or not target.is_file():
+                return self.send_text('Not found',404,'text/plain')
+            import mimetypes
+            ctype = mimetypes.guess_type(str(target))[0] or 'application/octet-stream'
+            if ctype.startswith('text/') or ctype in ('application/javascript','application/json','image/svg+xml'):
+                return self.send_text(target.read_text(encoding='utf-8'),200,ctype + ('; charset=utf-8' if ctype.startswith('text/') or ctype in ('application/javascript','application/json') else ''))
+            return self.send_bytes(target.read_bytes(),ctype,200,{'Cache-Control':'public, max-age=3600'})
         if path == '/api/health': return self.send_json({'ok':True,'version':VERSION,'database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
         if path == '/api/session':
             with connect(DB_PATH) as conn:
