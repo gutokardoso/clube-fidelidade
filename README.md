@@ -1,21 +1,26 @@
-# Fidelizaê! v83
+# Fidelizaê! v84
+
+## Novidades da v84
+
+- Removida a linha duplicada de segmento/progresso abaixo do nome no Histórico do cliente.
+- Botões dos menus superiores padronizados em todos os painéis, com bordas arredondadas e altura uniforme.
+- Hover dos botões do menu superior alterado para laranja escuro, preservando contraste e legibilidade.
 
 ## Novidades da v83
+
 - Histórico do cliente evoluído para ficha 360º, preservando a linha do tempo e adicionando segmento, progresso, saldo, datas, resgates, cupons e comunicações.
 - Identidade visual Fidelizaê! padronizada nos painéis e componentes com #e27a00, #ffb347 e #f2f2f2.
 - Pré-visualização do cartão em tempo real nos formulários de cadastro e edição da empresa.
 - Central de alertas inteligente com falhas de envio, integrações pendentes, empresas sem movimentação, clientes em risco, clientes quase na recompensa e filas de comunicação.
 
-# Fidelizaê! v83
+## Novidades da v82
 
-## Novidades da v83
-- Corrigido o servidor de arquivos estáticos para servir PNG/JPEG/WebP/GIF/ICO/fontes como binário, fazendo a nova logo Fidelizaê! aparecer corretamente no header e rodapé.
+- Corrigido definitivamente o servidor de arquivos estáticos para servir PNG/JPEG/WebP/GIF/ICO/fontes como binário, permitindo o carregamento correto da logo Fidelizaê!.
 
-- Página inicial atualizada para a identidade visual oficial do **Fidelizaê!**, usando **#e27a00**, **#ffb347** e **#f2f2f2** como cores principais.
-- Tipografia e componentes da landing page receberam estilo mais arredondado, leve e descontraído, inspirado na identidade enviada.
-- Header e rodapé agora utilizam a imagem oficial `logo-fidelizae.png`.
-- Botões, destaques, cards, mockups, fundos e elementos decorativos da página inicial foram harmonizados com a nova paleta.
-- A alteração foi limitada à página inicial, preservando a identidade e o funcionamento dos painéis internos.
+## Novidades da v80
+
+- Página inicial atualizada para a identidade visual oficial do Fidelizaê!, usando #e27a00, #ffb347 e #f2f2f2.
+- Header e rodapé passaram a utilizar a imagem oficial `logo-fidelizae.png`.
 
 ## Novidades da v79
 
