@@ -1,4 +1,12 @@
-# Fidelizaê! v79
+# Fidelizaê! v80
+
+## Novidades da v80
+
+- Página inicial atualizada para a identidade visual oficial do **Fidelizaê!**, usando **#e27a00**, **#ffb347** e **#f2f2f2** como cores principais.
+- Tipografia e componentes da landing page receberam estilo mais arredondado, leve e descontraído, inspirado na identidade enviada.
+- Header e rodapé agora utilizam a imagem oficial `logo-fidelizae.png`.
+- Botões, destaques, cards, mockups, fundos e elementos decorativos da página inicial foram harmonizados com a nova paleta.
+- A alteração foi limitada à página inicial, preservando a identidade e o funcionamento dos painéis internos.
 
 ## Novidades da v79
 
@@ -72,7 +80,7 @@
 - Painel do administrador ganhou **checklist de configuração** e mantém os indicadores executivos de clientes, retorno, conclusão, inatividade, aniversariantes e comunicação.
 - Fluxo de pontos continua baseado no **valor da compra**, com cálculo automático conforme a regra da empresa e confirmação do novo saldo.
 - Mantidos automações, níveis VIP, aceleradores, NPS, vale-presente, exportações, auditoria, Wallets e comunicação segmentada já consolidados nas versões anteriores.
-- Versão visual e backend sincronizados em **v79**.
+- Versão visual e backend sincronizados em **v80**.
 
 
 - Vale-presente: botão Excluir para administradores, com remoção segura por empresa e auditoria.
