@@ -40,4 +40,14 @@ class MigrationTests(unittest.TestCase):
             cols={r['name'] for r in c.execute('PRAGMA table_info(password_reset_tokens)').fetchall()}
             self.assertTrue({'token_hash','user_id','expires_at','used_at','created_at'}<=cols)
 
+    def test_init_db_is_idempotent_twice(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path=os.path.join(td, 'twice.sqlite3')
+            init_db(db_path, seed=True)
+            init_db(db_path, seed=True)
+            with connect(db_path) as c:
+                rows=c.execute("SELECT version,COUNT(*) AS n FROM schema_migrations WHERE version='v87' GROUP BY version").fetchall()
+                self.assertEqual(len(rows),1)
+                self.assertEqual(rows[0]['n'],1)
+
 if __name__=='__main__':unittest.main()

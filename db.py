@@ -603,8 +603,13 @@ def init_db(db_path=None, seed=True):
             _addcol('gift_cards','beneficiary_name','TEXT')
             conn.execute("UPDATE campaigns SET points_expiry_days=180 WHERE loyalty_type='points' AND COALESCE(points_expiry_days,0)=0")
             conn.execute('DROP TABLE IF EXISTS referrals')
-        try: conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v87',?)",(now_ts(),))
-        except integrity_errors(): pass
+        # Registra a migração de forma idempotente sem abortar a transação no PostgreSQL.
+        # Capturar IntegrityError e apenas dar pass não é suficiente no psycopg: a transação
+        # permanece em estado abortado até um ROLLBACK, fazendo as consultas seguintes falharem.
+        if _is_postgres(target):
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v87',?) ON CONFLICT (version) DO NOTHING", (now_ts(),))
+        else:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v87',?)", (now_ts(),))
         # Saldo legado de pontos ganha lote inicial sem expirar imediatamente: validade conta a partir desta migração.
         point_members=conn.execute("SELECT m.id,m.points_balance,c.points_expiry_days FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE c.loyalty_type='points' AND m.points_balance>0").fetchall()
         for pm in point_members:

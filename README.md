@@ -1,6 +1,12 @@
-# Fidelizaê! v88
+# Fidelizaê! v89
 
-**Versão atual:** v88
+**Versão atual:** v89
+
+## Novidades da v89
+
+- Corrigida a inicialização no PostgreSQL/Railway quando a migração v87 já estava registrada.
+- O registro de `schema_migrations` agora é idempotente com `ON CONFLICT DO NOTHING` no PostgreSQL e `INSERT OR IGNORE` no SQLite, evitando deixar a transação abortada.
+- Mantidas integralmente as funcionalidades e ajustes da v88.
 
 ## Novidades da v88
 
