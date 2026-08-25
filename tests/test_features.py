@@ -174,3 +174,19 @@ class FeatureTests(unittest.TestCase):
         self.assertIn("email_test_send",code); self.assertIn("whatsapp_test_send",code)
 
 if __name__=='__main__': unittest.main()
+
+
+class MetaWhatsAppTestModeTests(unittest.TestCase):
+    def test_meta_test_mode_is_isolated_and_allowlisted(self):
+        code=Path('server.py').read_text()
+        self.assertIn('META_TEST_WHATSAPP_PHONE_NUMBER_ID',code)
+        self.assertIn('META_TEST_WHATSAPP_ACCESS_TOKEN',code)
+        self.assertIn('META_TEST_WHATSAPP_RECIPIENTS',code)
+        self.assertIn("return test_cfg,'meta_test'",code)
+        self.assertIn('meta_test_recipient_not_allowed',code)
+
+    def test_meta_test_mode_ui_is_explicit(self):
+        html=Path('static/attendant.html').read_text()
+        self.assertIn('Modo de teste Meta',html)
+        self.assertIn('waTestModeNotice',html)
+        self.assertIn('whatsapp_test_mode_not_configured',html)

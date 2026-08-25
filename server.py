@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v96'
+VERSION='v97'
 
 
 def jdump(obj):
@@ -746,12 +746,22 @@ def campaign_recipient_rows(conn,cid,segment):
       WHERE m.campaign_id=? AND m.status='active' """+extra+' ORDER BY cu.name',(cid,*params)).fetchall()
 
 def ensure_automation_defaults(conn,campaign_id):
+    try:
+        campaign=conn.execute('SELECT loyalty_type FROM campaigns WHERE id=?',(campaign_id,)).fetchone()
+        loyalty_type=(campaign['loyalty_type'] if campaign else 'stamps') or 'stamps'
+    except Exception:
+        # Mantém compatibilidade com testes/bancos legados onde apenas
+        # automation_rules existe neste contexto isolado.
+        loyalty_type='stamps'
     defaults={
       'birthday':('both','Feliz aniversário, {nome}! O {cliente} deseja um dia especial para você.'),
       'inactive30':('both','Sentimos sua falta, {nome}! Volte ao {cliente} e continue acumulando no seu programa.'),
       'inactive60':('both','Já faz um tempo, {nome}. Temos saudades de você no {cliente}. Volte e continue aproveitando seus benefícios.'),
       'one_to_reward':('both','Falta só 1 selo, {nome}! Sua recompensa no {cliente} está quase lá.'),
       'reward_available':('both','Parabéns, {nome}! Você já tem uma recompensa disponível no {cliente}.')}
+    if loyalty_type!='stamps':
+        defaults.pop('one_to_reward',None)
+        conn.execute("UPDATE automation_rules SET enabled=0 WHERE campaign_id=? AND rule_type='one_to_reward'",(campaign_id,))
     for rule,(channel,msg) in defaults.items():
         # Compatibilidade com bancos de produção antigos: algumas instalações
         # podem ter automation_rules sem a constraint UNIQUE adicionada depois.
@@ -777,9 +787,9 @@ def render_test_template(body, campaign, customer_name='Cliente Teste'):
 def run_automations_once():
     today=datetime.now(ZoneInfo('America/Sao_Paulo')).date(); now=now_ts()
     with connect(DB_PATH) as conn:
-        campaigns=conn.execute('SELECT id,name FROM campaigns WHERE active=1').fetchall()
+        campaigns=conn.execute('SELECT id,name,loyalty_type FROM campaigns WHERE active=1').fetchall()
         for c in campaigns: ensure_automation_defaults(conn,c['id'])
-        rules=conn.execute('SELECT r.*,c.name client_name FROM automation_rules r JOIN campaigns c ON c.id=r.campaign_id WHERE r.enabled=1 AND c.active=1').fetchall()
+        rules=conn.execute('SELECT r.*,c.name client_name,c.loyalty_type FROM automation_rules r JOIN campaigns c ON c.id=r.campaign_id WHERE r.enabled=1 AND c.active=1').fetchall()
         for rule in rules:
             rows=conn.execute('''SELECT m.id membership_id,m.progress,m.rewards_available,m.public_id,m.created_at membership_created,c.goal,cu.id customer_id,cu.name,cu.email,cu.phone,cu.birth_date,cu.marketing_email,cu.marketing_whatsapp,
               COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at) last_activity
@@ -789,7 +799,7 @@ def run_automations_once():
                 if rule['rule_type']=='birthday' and x['birth_date'] and x['birth_date'][5:10]==today.isoformat()[5:10]: match=True; period=str(today.year)
                 elif rule['rule_type']=='inactive30' and x['last_activity']<=now-30*86400 and x['last_activity']>now-60*86400: match=True; period=today.strftime('%Y-%m')
                 elif rule['rule_type']=='inactive60' and x['last_activity']<=now-60*86400: match=True; period=today.strftime('%Y-%m')
-                elif rule['rule_type']=='one_to_reward' and x['progress']==x['goal']-1: match=True; period=f"p{x['progress']}-{today.strftime('%Y-%m')}"
+                elif rule['rule_type']=='one_to_reward' and rule['loyalty_type']=='stamps' and x['progress']==x['goal']-1: match=True; period=f"p{x['progress']}-{today.strftime('%Y-%m')}"
                 elif rule['rule_type']=='reward_available' and x['rewards_available']>0: match=True; period=f"r{x['rewards_available']}-{today.strftime('%Y-%m')}"
                 if not match: continue
                 exists=conn.execute('SELECT id FROM automation_runs WHERE rule_id=? AND membership_id=? AND period_key=?',(rule['id'],x['membership_id'],period)).fetchone()
@@ -1370,7 +1380,7 @@ class Handler(BaseHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')
                 if not sess:return
-                ensure_automation_defaults(conn,sess['campaign_id']); rows=[rowdict(r) for r in conn.execute('SELECT * FROM automation_rules WHERE campaign_id=? ORDER BY id',(sess['campaign_id'],)).fetchall()]
+                ensure_automation_defaults(conn,sess['campaign_id']); campaign=conn.execute('SELECT loyalty_type FROM campaigns WHERE id=?',(sess['campaign_id'],)).fetchone(); loyalty_type=(campaign['loyalty_type'] if campaign else 'stamps') or 'stamps'; rows=[rowdict(r) for r in conn.execute("SELECT * FROM automation_rules WHERE campaign_id=? AND (?='stamps' OR rule_type<>'one_to_reward') ORDER BY id",(sess['campaign_id'],loyalty_type)).fetchall()]
                 return self.send_json({'ok':True,'rules':rows,'can_edit':bool(sess['is_client_admin'])})
         if path == '/api/client-admin/staff':
             with connect(DB_PATH) as conn:
@@ -2429,8 +2439,11 @@ class Handler(BaseHTTPRequestHandler):
                 except: rule_id=0
                 channel=str(payload.get('channel','email')); enabled=1 if payload.get('enabled') else 0; message=str(payload.get('message','')).strip()[:1000]
                 if channel not in ('email','whatsapp','both') or not message:return self.send_json({'ok':False,'error':'invalid_rule'},400)
-                r=conn.execute('SELECT id FROM automation_rules WHERE id=? AND campaign_id=?',(rule_id,s['campaign_id'])).fetchone()
+                r=conn.execute('SELECT id,rule_type FROM automation_rules WHERE id=? AND campaign_id=?',(rule_id,s['campaign_id'])).fetchone()
                 if not r:return self.send_json({'ok':False,'error':'rule_not_found'},404)
+                if r['rule_type']=='one_to_reward':
+                    campaign=conn.execute('SELECT loyalty_type FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone()
+                    if not campaign or campaign['loyalty_type']!='stamps':return self.send_json({'ok':False,'error':'rule_not_available'},409)
                 conn.execute('UPDATE automation_rules SET channel=?,enabled=?,message=? WHERE id=?',(channel,enabled,message,rule_id)); audit(conn,s['company_id'],s['user_id'],'automation_update','automation',rule_id,details=f'{channel}:{enabled}',ip_address=self._ip())
                 return self.send_json({'ok':True})
             if path == '/api/admin/branch/update':

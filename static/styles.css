@@ -298,3 +298,14 @@ body{font-family:"Nunito",Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSy
 .template-row>div:first-child{display:flex;flex-direction:column;gap:3px}.template-row small{color:var(--muted)}
 .whatsapp-test-card{width:min(620px,calc(100vw - 28px));max-height:90vh;overflow:auto}
 @media(max-width:640px){.template-row{align-items:flex-start;flex-direction:column}.template-row .row-actions{width:100%;display:flex;flex-wrap:wrap}.template-row .row-actions .btn{flex:1}.whatsapp-test-card .section-head{align-items:flex-start}}
+
+/* v97 - estabilidade do atendimento e diagramação do Programa de Fidelidade */
+.service-zone>.scanner{align-content:start;align-self:start}
+.service-zone>.scanner>.actions{align-items:flex-start;align-self:start;margin-top:0;min-height:46px}
+.service-zone>.scanner>.actions .btn{flex:0 0 auto;align-self:flex-start}
+.program-tools-grid{grid-template-columns:repeat(3,minmax(0,1fr));align-items:start}
+.program-secondary-grid{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+.program-secondary-grid>#pointsAdvanced.hidden+section{grid-column:1/-1}
+#vipToolCard.hidden~#multiplierToolCard.hidden~.card{grid-column:1/-1}
+@media(max-width:1000px){.program-tools-grid{grid-template-columns:1fr 1fr}.program-tools-grid>.card:last-child{grid-column:1/-1}}
+@media(max-width:800px){.program-tools-grid,.program-secondary-grid{grid-template-columns:1fr}.program-tools-grid>.card:last-child{grid-column:auto}}

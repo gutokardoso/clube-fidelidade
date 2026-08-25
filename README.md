@@ -1,6 +1,15 @@
-# Fidelizaê! v96
+# Fidelizaê! v97
 
-**Versão atual:** v96
+**Versão atual:** v97
+
+## Novidades da v97
+
+- Botões **Escanear QR** e **Parar câmera** mantêm a altura padrão mesmo quando o painel lateral cresce.
+- Central de auditoria traduz detalhes do teste de WhatsApp e oculta `message_id`/códigos técnicos da interface.
+- Nomes das automações padronizados em português.
+- **Falta 1 selo** (`one_to_reward`) aparece e executa somente em programas por selos.
+- Programa de Fidelidade reorganizado: **Níveis VIP**, **Acelerador de pontos** e **Vale-presente** lado a lado; **Configurações avançadas de pontos** ao lado de **NPS / Satisfação**.
+- Preferências de marketing de e-mail e WhatsApp vêm pré-selecionadas no cadastro do cartão, permanecendo opcionais e podendo ser desmarcadas pelo cliente.
 
 ## Novidades da v96
 
