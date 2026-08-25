@@ -1,6 +1,8 @@
-# Fidelizaê! v86
+# Fidelizaê! v87
 
-## Novidades da v86
+**Versão atual:** v87
+
+## Novidades da v87
 - Corrigida de forma estrutural a pré-visualização do cartão em tempo real no Painel Fidelizaê!: o JavaScript da prévia agora é realmente executado e reage imediatamente a nome, tipo de fidelidade, meta, recompensa, cor e logo.
 - Botões de Google Wallet e Apple Wallet no cartão do usuário substituídos pelas imagens fornecidas.
 - Mantidas todas as funcionalidades da v85.
@@ -159,7 +161,10 @@
 - Corrige o erro `LoyaltyClass cannot be created without a program logo` quando a URL pública não estava configurada manualmente.
 - Mantém a imagem da logo em endpoint PNG dedicado e com cache-busting.
 
-## Versão
+## Histórico de versões
+
+**v87**
+- Implementação das 23 melhorias aprovadas, com cashback reservado para evolução futura e sem alteração do consentimento de comunicação.
 
 **v79**
 - Gestão avançada reorganizada, auditoria em modal separado e fechamento externo dos modais.
@@ -177,3 +182,6 @@
 - Remoção do hero redundante dos painéis de operação/administração e navegação com scroll suave entre seções.
 
 **v68**
+
+## v87
+Permissões efetivas, validade real de pontos (1–12 meses; padrão 6), aceleradores aplicados, NPS no cartão, observações internas, alertas acionáveis, ciclo de unidades, atribuição financeira de campanhas, compras em selos/pontos, dashboard financeiro, adaptadores de e-commerce, área pessoal do cartão, cupons com desconto calculado, vale-presente enriquecido, remoção do recurso de indicação, modularização inicial, testes/migrações formais, recuperação de senha por token e rate limiting. Cashback permanece reservado para evolução futura.
