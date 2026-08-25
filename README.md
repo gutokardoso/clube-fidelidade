@@ -1,10 +1,16 @@
-# Fidelizaê! v93
+# Fidelizaê! v95
 
-**Versão atual:** v93
+**Versão atual:** v95
 
-## Novidades da v93
+## Novidades da v95
 
-- Adicionado botão **Enviar teste** nos templates que usam WhatsApp, com número de teste, prévia da mensagem e envio real pela WhatsApp Cloud API configurada para a empresa.
+- Teste de templates unificado por canal: E-mail, WhatsApp ou ambos.
+- A seleção de clientes respeita o consentimento específico de cada canal.
+- Em templates E-mail + WhatsApp, o modo “Ambos” lista somente clientes que autorizaram os dois canais.
+- O backend revalida consentimento antes de cada envio de teste.
+- Envio de teste por e-mail utiliza a integração de e-mail configurada para a empresa; WhatsApp continua usando a Cloud API oficial.
+
+- O **Enviar teste** dos templates WhatsApp agora permite selecionar somente clientes cadastrados que deram consentimento para comunicação pelo WhatsApp; o backend revalida o consentimento antes de cada envio.
 - Corrigida a criação/carregamento das automações para bancos PostgreSQL antigos que não possuam a constraint UNIQUE esperada em `automation_rules`.
 - Logs e mensagens de erro do teste de WhatsApp aprimorados para facilitar a validação exigida pela Meta.
 

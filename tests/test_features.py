@@ -156,10 +156,21 @@ class FeatureTests(unittest.TestCase):
         rows=c.execute("SELECT rule_type,COUNT(*) n FROM automation_rules WHERE campaign_id=7 GROUP BY rule_type").fetchall()
         self.assertEqual(len(rows),5); self.assertTrue(all(r['n']==1 for r in rows)); c.close()
 
-    def test_whatsapp_template_test_ui_and_rendering(self):
+    def test_template_test_ui_respects_channel_consent(self):
         html=(ROOT/'static/attendant.html').read_text(encoding='utf-8')
         self.assertIn('ENVIAR TESTE',html); self.assertIn('/api/admin/template/test',html); self.assertIn('whatsappTestModal',html)
+        self.assertIn('/api/admin/template/consented-customers?channel=',html); self.assertIn('waTestCustomer',html); self.assertIn('waTestChannel',html)
+        self.assertIn("['email','E-mail']",html); self.assertIn("['whatsapp','WhatsApp']",html); self.assertIn("['both','Ambos']",html)
+        self.assertIn('A lista mostra apenas clientes que autorizaram E-mail e WhatsApp.',html); self.assertNotIn('waTestPhone',html)
         msg=render_test_template('Oi {nome}! {empresa} • {selos}/{meta} • {recompensa}',{'name':'Padaria','goal':10,'reward_name':'Café grátis'})
         self.assertEqual(msg,'Oi Cliente Teste! Padaria • 3/10 • Café grátis')
+
+    def test_template_test_backend_has_email_and_whatsapp_consent_guards(self):
+        code=(ROOT/'server.py').read_text(encoding='utf-8')
+        self.assertIn("channel not in ('email','whatsapp','both')",code)
+        self.assertIn("email_consent_required",code); self.assertIn("whatsapp_consent_required",code); self.assertIn("both_consent_required",code)
+        self.assertIn("send_campaign_email(email,customer['name'],message",code)
+        self.assertIn("send_whatsapp_cloud(phone,message,cfg)",code)
+        self.assertIn("email_test_send",code); self.assertIn("whatsapp_test_send",code)
 
 if __name__=='__main__': unittest.main()

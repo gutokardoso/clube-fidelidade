@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v93'
+VERSION='v95'
 
 
 def jdump(obj):
@@ -1180,6 +1180,24 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess:return
                 if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 return self.send_json({'ok':True,'templates':[rowdict(r) for r in conn.execute('SELECT * FROM message_templates WHERE campaign_id=? ORDER BY name',(sess['campaign_id'],)).fetchall()]})
+        if path in ('/api/admin/template/whatsapp-consented-customers','/api/admin/template/consented-customers'):
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                channel='whatsapp' if path.endswith('whatsapp-consented-customers') else str((qs.get('channel') or [''])[0]).strip().lower()
+                if channel not in ('email','whatsapp','both'):return self.send_json({'ok':False,'error':'invalid_test_channel'},400)
+                if channel=='email':
+                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email,cu.phone FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                        WHERE m.campaign_id=? AND cu.marketing_email=1 AND cu.email IS NOT NULL AND cu.email<>? ORDER BY cu.name''',(sess['campaign_id'],'')).fetchall()
+                elif channel=='whatsapp':
+                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email,cu.phone FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                        WHERE m.campaign_id=? AND cu.marketing_whatsapp=1 AND cu.phone IS NOT NULL AND cu.phone<>? ORDER BY cu.name''',(sess['campaign_id'],'')).fetchall()
+                else:
+                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email,cu.phone FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                        WHERE m.campaign_id=? AND cu.marketing_email=1 AND cu.marketing_whatsapp=1
+                        AND cu.email IS NOT NULL AND cu.email<>? AND cu.phone IS NOT NULL AND cu.phone<>? ORDER BY cu.name''',(sess['campaign_id'],'','')).fetchall()
+                return self.send_json({'ok':True,'channel':channel,'customers':[rowdict(r) for r in rows]})
         if path == '/api/manager/notifications':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'manager')
@@ -2130,25 +2148,52 @@ class Handler(BaseHTTPRequestHandler):
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 try: template_id=int(payload.get('template_id') or 0)
                 except (TypeError,ValueError): template_id=0
-                phone=re.sub(r'\D','',str(payload.get('phone') or ''))[:20]
-                if not template_id or len(phone)<8 or len(phone)>15:return self.send_json({'ok':False,'error':'invalid_test_recipient'},400)
-                tpl=conn.execute('SELECT id,name,channel,body FROM message_templates WHERE id=? AND campaign_id=?',(template_id,s['campaign_id'])).fetchone()
+                try: customer_id=int(payload.get('customer_id') or 0)
+                except (TypeError,ValueError): customer_id=0
+                channel=str(payload.get('channel') or '').strip().lower()
+                if not template_id or not customer_id:return self.send_json({'ok':False,'error':'invalid_test_recipient'},400)
+                if channel not in ('email','whatsapp','both'):return self.send_json({'ok':False,'error':'invalid_test_channel'},400)
+                customer=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email,cu.phone,cu.marketing_email,cu.marketing_whatsapp FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                    WHERE cu.id=? AND m.campaign_id=?''',(customer_id,s['campaign_id'])).fetchone()
+                if not customer:return self.send_json({'ok':False,'error':'customer_not_found'},404)
+                tpl=conn.execute('SELECT id,name,channel,subject,body FROM message_templates WHERE id=? AND campaign_id=?',(template_id,s['campaign_id'])).fetchone()
                 if not tpl:return self.send_json({'ok':False,'error':'template_not_found'},404)
-                if tpl['channel'] not in ('whatsapp','both'):return self.send_json({'ok':False,'error':'template_without_whatsapp'},409)
+                allowed={'email':('email',),'whatsapp':('whatsapp',),'both':('email','whatsapp','both')}
+                if channel not in allowed.get(tpl['channel'],()):return self.send_json({'ok':False,'error':'template_channel_mismatch'},409)
+                if channel in ('email','both') and not customer['marketing_email']:return self.send_json({'ok':False,'error':'email_consent_required' if channel=='email' else 'both_consent_required'},403)
+                if channel in ('whatsapp','both') and not customer['marketing_whatsapp']:return self.send_json({'ok':False,'error':'whatsapp_consent_required' if channel=='whatsapp' else 'both_consent_required'},403)
+                email=str(customer['email'] or '').strip()
+                phone=re.sub(r'\D','',str(customer['phone'] or ''))[:20]
+                if channel in ('email','both') and ('@' not in email or len(email)>254):return self.send_json({'ok':False,'error':'invalid_test_recipient'},400)
+                if channel in ('whatsapp','both') and (len(phone)<8 or len(phone)>15):return self.send_json({'ok':False,'error':'invalid_test_recipient'},400)
                 camp=conn.execute('SELECT name,reward_name,goal FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
                 if not camp:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
-                cfg=whatsapp_config_for_client(conn,s['campaign_id'])
-                if not whatsapp_cloud_configured(cfg):return self.send_json({'ok':False,'error':'whatsapp_not_configured'},503)
-                message=render_test_template(tpl['body'],rowdict(camp))
-                try:
-                    response=send_whatsapp_cloud(phone,message,cfg)
-                except Exception as exc:
-                    reason=str(exc)[:700]
-                    print(f'[WHATSAPP_TEST] SEND_FAILED campaign_id={s["campaign_id"]} template_id={template_id} reason={reason}')
-                    return self.send_json({'ok':False,'error':'whatsapp_test_failed','detail':reason},502)
-                message_id=((response.get('messages') or [{}])[0]).get('id') if isinstance(response,dict) else None
-                audit(conn,s['company_id'],s['user_id'],'whatsapp_test_send','message_template',template_id,details=f'phone=***{phone[-4:]};message_id={message_id or ""}',ip_address=self._ip())
-                return self.send_json({'ok':True,'message':'Mensagem de teste enviada com sucesso.','message_id':message_id,'preview':message})
+                message=render_test_template(tpl['body'],rowdict(camp),customer['name'])
+                sent=[]
+                if channel in ('email','both'):
+                    email_cfg=email_config_for_client(conn,s['campaign_id'])
+                    if not email_configured(email_cfg):return self.send_json({'ok':False,'error':'email_not_configured'},503)
+                    subject=(str(tpl['subject'] or '').strip() or f'Teste • {camp["name"]}')[:150]
+                    result=send_campaign_email(email,customer['name'],message,None,subject,email_cfg)
+                    if not result.get('sent'):
+                        reason=str(result.get('reason') or 'email_test_failed')[:300]
+                        print(f'[EMAIL_TEST] SEND_FAILED campaign_id={s["campaign_id"]} template_id={template_id} reason={reason}')
+                        return self.send_json({'ok':False,'error':'email_test_failed','detail':reason},502)
+                    audit(conn,s['company_id'],s['user_id'],'email_test_send','message_template',template_id,details=f'email=***{email[-8:]}',ip_address=self._ip())
+                    sent.append('E-mail')
+                if channel in ('whatsapp','both'):
+                    cfg=whatsapp_config_for_client(conn,s['campaign_id'])
+                    if not whatsapp_cloud_configured(cfg):return self.send_json({'ok':False,'error':'whatsapp_not_configured'},503)
+                    try:
+                        response=send_whatsapp_cloud(phone,message,cfg)
+                    except Exception as exc:
+                        reason=str(exc)[:700]
+                        print(f'[WHATSAPP_TEST] SEND_FAILED campaign_id={s["campaign_id"]} template_id={template_id} reason={reason}')
+                        return self.send_json({'ok':False,'error':'whatsapp_test_failed','detail':reason},502)
+                    message_id=((response.get('messages') or [{}])[0]).get('id') if isinstance(response,dict) else None
+                    audit(conn,s['company_id'],s['user_id'],'whatsapp_test_send','message_template',template_id,details=f'phone=***{phone[-4:]};message_id={message_id or ""}',ip_address=self._ip())
+                    sent.append('WhatsApp')
+                return self.send_json({'ok':True,'message':'Teste enviado com sucesso por '+(' e '.join(sent))+'.','preview':message,'channels':sent})
             if path == '/api/admin/template/delete':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 conn.execute('DELETE FROM message_templates WHERE id=? AND campaign_id=?',(int(payload.get('template_id') or 0),s['campaign_id']));return self.send_json({'ok':True})
