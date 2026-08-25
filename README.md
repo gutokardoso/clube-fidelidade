@@ -1,20 +1,13 @@
-# Fidelizaê! v87
+# Fidelizaê! v88
 
-**Versão atual:** v87
+**Versão atual:** v88
 
-## Novidades da v87
-- Corrigida de forma estrutural a pré-visualização do cartão em tempo real no Painel Fidelizaê!: o JavaScript da prévia agora é realmente executado e reage imediatamente a nome, tipo de fidelidade, meta, recompensa, cor e logo.
-- Botões de Google Wallet e Apple Wallet no cartão do usuário substituídos pelas imagens fornecidas.
-- Mantidas todas as funcionalidades da v85.
+## Novidades da v88
 
-- Corrigida a pré-visualização do cartão para atualizar nome da empresa, tipo de programa, meta, recompensa, cor e logo imediatamente durante o preenchimento.
-- Removido do cartão do usuário o aviso de modo demo da área de Wallet.
-- CPF, Baixar meus dados e Excluir meus dados ficam na mesma linha em telas amplas e continuam responsivos no mobile.
-- Preferências de comunicação por e-mail e WhatsApp aparecem marcadas por padrão no cartão.
-
-- Removida a linha duplicada de segmento/progresso abaixo do nome no Histórico do cliente.
-- Botões dos menus superiores padronizados em todos os painéis, com bordas arredondadas e altura uniforme.
-- Hover dos botões do menu superior alterado para laranja escuro, preservando contraste e legibilidade.
+- Página inicial refinada conforme a nova redação e organização visual.
+- Central de auditoria com operações em português e botão **Exportar CSV**.
+- Menu operacional do painel da empresa corrigido para navegação horizontal responsiva no mobile.
+- Cartão do cliente com **CLUBE DE FIDELIDADE** em branco e últimas movimentações apresentadas em português.
 
 ## Novidades da v83
 
@@ -163,7 +156,7 @@
 
 ## Histórico de versões
 
-**v87**
+**v88**
 - Implementação das 23 melhorias aprovadas, com cashback reservado para evolução futura e sem alteração do consentimento de comunicação.
 
 **v79**
@@ -183,5 +176,5 @@
 
 **v68**
 
-## v87
+## v88
 Permissões efetivas, validade real de pontos (1–12 meses; padrão 6), aceleradores aplicados, NPS no cartão, observações internas, alertas acionáveis, ciclo de unidades, atribuição financeira de campanhas, compras em selos/pontos, dashboard financeiro, adaptadores de e-commerce, área pessoal do cartão, cupons com desconto calculado, vale-presente enriquecido, remoção do recurso de indicação, modularização inicial, testes/migrações formais, recuperação de senha por token e rate limiting. Cashback permanece reservado para evolução futura.
