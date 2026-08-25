@@ -1,6 +1,12 @@
-# Fidelizaê! v89
+# Fidelizaê! v90
 
-**Versão atual:** v89
+**Versão atual:** v90
+
+## Novidades da v90
+
+- Landing page: todos os antigos links de e-mail agora levam ao formulário comercial após o FAQ.
+- Formulário envia nome, empresa, e-mail, WhatsApp/celular, segmento, interesse e mensagem para `gustavo@agenciataboo.com.br`, usando a configuração global de e-mail da plataforma.
+- Consentimento obrigatório, validação de e-mail e honeypot anti-spam.
 
 ## Novidades da v89
 

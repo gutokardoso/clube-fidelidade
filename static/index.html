@@ -24,7 +24,7 @@
       </nav>
       <div class="landing-nav-actions">
         <a class="landing-login" href="/login">Acesso da equipe</a>
-        <a class="landing-btn landing-btn-small" href="mailto:contato@agenciataboo.com.br?subject=Quero%20conhecer%20o%20Fideliza%C3%AA">Quero para minha empresa</a>
+        <a class="landing-btn landing-btn-small" href="#contato">Quero para minha empresa</a>
       </div>
     </div>
   </header>
@@ -37,7 +37,7 @@
           <h1>Faça seus clientes<br><em>voltarem mais.</em></h1>
           <p class="landing-lead">Programa de fidelidade digital com <strong>pontos ou selos</strong>, recompensas, cartão no celular e relacionamento com seus clientes — tudo em um só lugar e sem depender de aplicativo.</p>
           <div class="landing-hero-actions">
-            <a class="landing-btn" href="mailto:contato@agenciataboo.com.br?subject=Quero%20conhecer%20o%20Fideliza%C3%AA">Quero fidelizar meus clientes <span>→</span></a>
+            <a class="landing-btn" href="#contato">Quero fidelizar meus clientes <span>→</span></a>
             <a class="landing-text-link" href="#como-funciona">Ver como funciona <span>↓</span></a>
           </div>
           <div class="landing-trust-row">
@@ -149,7 +149,7 @@
           <span class="landing-kicker">PARA SUA EMPRESA</span>
           <h2>Veja mais do que um cartão fidelidade.</h2>
           <p>Centralize a operação do programa em um painel: clientes, equipe, movimentações, recompensas, aniversariantes, histórico e configurações.</p>
-          <a class="landing-btn landing-btn-light" href="mailto:contato@agenciataboo.com.br?subject=Quero%20uma%20demonstra%C3%A7%C3%A3o%20do%20Fideliza%C3%AA">Quero uma demonstração <span>→</span></a>
+          <a class="landing-btn landing-btn-light" href="#contato">Quero uma demonstração <span>→</span></a>
         </div>
         <div class="landing-dashboard-mock">
           <div class="landing-dash-top"><span><i></i><i></i><i></i></span><b>Visão geral</b><small>Esta semana⌄</small></div>
@@ -172,17 +172,61 @@
       </div>
     </section>
 
+    <section class="landing-section landing-contact-section" id="contato">
+      <div class="landing-container landing-contact-wrap">
+        <div class="landing-contact-copy">
+          <span class="landing-kicker">FALE COM A GENTE</span>
+          <h2>Quer levar o Fidelizaê! para sua empresa?</h2>
+          <p>Preencha os dados abaixo. Assim conseguimos entender seu negócio e entrar em contato com uma proposta mais adequada.</p>
+        </div>
+        <form class="landing-contact-form" id="landingContactForm">
+          <div class="landing-contact-grid">
+            <label>Seu nome <input name="name" autocomplete="name" required></label>
+            <label>Empresa <input name="company" autocomplete="organization" required></label>
+            <label>E-mail <input name="email" type="email" autocomplete="email" required></label>
+            <label>WhatsApp / Celular <input name="phone" type="tel" autocomplete="tel" required></label>
+            <label>Segmento da empresa <select name="segment" required><option value="">Selecione</option><option>Alimentação / Restaurantes</option><option>Cafeteria / Padaria</option><option>Beleza / Bem-estar</option><option>Pet shop</option><option>Varejo</option><option>Serviços</option><option>Outro</option></select></label>
+            <label>Tenho interesse em <select name="interest" required><option value="">Selecione</option><option>Programa por pontos</option><option>Programa por selos</option><option>Quero entender qual é o melhor modelo</option><option>Quero uma demonstração</option></select></label>
+            <label class="landing-contact-full">Conte um pouco sobre o que procura <textarea name="message" rows="5" placeholder="Ex.: quantidade de unidades, objetivo do programa ou alguma necessidade específica."></textarea></label>
+          </div>
+          <input class="landing-honeypot" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+          <label class="landing-contact-consent"><input name="consent" type="checkbox" required> Autorizo o contato da equipe Fidelizaê! sobre esta solicitação e concordo com o tratamento destes dados para este atendimento.</label>
+          <div class="landing-contact-actions"><button class="landing-btn" type="submit">Enviar solicitação <span>→</span></button><span id="landingContactStatus" role="status" aria-live="polite"></span></div>
+        </form>
+      </div>
+    </section>
+
 
   </main>
 
   <footer class="landing-footer">
     <div class="landing-container landing-footer-grid">
       <div><a class="landing-logo landing-logo-image landing-footer-logo" href="/" aria-label="Fidelizaê! — início"><img src="/static/logo-fidelizae.png" alt="Fidelizaê! — Fidelidade que marca ponto."></a><p>Uma solução digital desenvolvida e operada pela Agência Taboo.</p></div>
-      <div class="landing-footer-links"><a href="#como-funciona">Como funciona</a><a href="#recursos">Recursos</a><a href="/privacy">Política de Privacidade</a><a href="mailto:contato@agenciataboo.com.br">Contato e suporte</a></div>
+      <div class="landing-footer-links"><a href="#como-funciona">Como funciona</a><a href="#recursos">Recursos</a><a href="/privacy">Política de Privacidade</a><a href="#contato">Contato e suporte</a></div>
       <div class="landing-footer-access"><span>Já faz parte da equipe?</span><a href="/login">Acessar plataforma →</a></div>
     </div>
     <div class="landing-container landing-footer-bottom"><span>© Agência Taboo. Fidelizaê!.</span><span>Fidelidade digital, sem aplicativo.</span></div>
   </footer>
   <div class="build-marker">{{VERSION}}</div>
+<script>
+(function(){
+  const form=document.getElementById('landingContactForm'), status=document.getElementById('landingContactStatus');
+  if(!form) return;
+  form.addEventListener('submit',async function(e){
+    e.preventDefault();
+    const button=form.querySelector('button[type="submit"]');
+    const fd=new FormData(form);
+    const data=Object.fromEntries(fd.entries()); data.consent=fd.has('consent');
+    button.disabled=true; status.className=''; status.textContent='Enviando...';
+    try{
+      const r=await fetch('/api/public/contact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      const out=await r.json().catch(()=>({}));
+      if(!r.ok||!out.ok) throw new Error(out.error||'send_failed');
+      form.reset(); status.className='success'; status.textContent='Solicitação enviada! Entraremos em contato em breve.';
+    }catch(err){ status.className='error'; status.textContent='Não foi possível enviar agora. Tente novamente em instantes.'; }
+    finally{button.disabled=false;}
+  });
+})();
+</script>
 </body>
 </html>

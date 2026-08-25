@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v89'
+VERSION='v90'
 
 
 def jdump(obj):
@@ -1543,6 +1543,41 @@ class Handler(BaseHTTPRequestHandler):
             if path in ['/login','/join']:
                 return self.send_redirect('/login?error=1' if path == '/login' else '/join?error=1')
             return self.send_json({'ok':False,'error':'invalid_json'},400)
+        if path=='/api/public/contact':
+            # Formulário comercial público da landing page. O campo `website` é
+            # um honeypot simples para bots; para visitantes reais fica vazio.
+            if str(payload.get('website') or '').strip():
+                return self.send_json({'ok':True})
+            name=str(payload.get('name') or '').strip()[:120]
+            company=str(payload.get('company') or '').strip()[:160]
+            email=str(payload.get('email') or '').strip().lower()[:180]
+            phone=str(payload.get('phone') or '').strip()[:40]
+            segment=str(payload.get('segment') or '').strip()[:100]
+            interest=str(payload.get('interest') or '').strip()[:80]
+            message=str(payload.get('message') or '').strip()[:3000]
+            consent=bool(payload.get('consent'))
+            if not name or not company or not email or not phone or not segment or not interest or not consent:
+                return self.send_json({'ok':False,'error':'required_fields'},400)
+            if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',email):
+                return self.send_json({'ok':False,'error':'invalid_email'},400)
+            cfg=global_email_config()
+            if not email_configured(cfg):
+                return self.send_json({'ok':False,'error':'email_not_configured'},503)
+            msg=EmailMessage()
+            msg['Subject']=f'Novo contato Fidelizaê! • {company}'
+            msg['To']='gustavo@agenciataboo.com.br'
+            msg['Reply-To']=email
+            msg.set_content(
+                'Novo contato recebido pelo site do Fidelizaê!\n\n'
+                f'Nome: {name}\nEmpresa: {company}\nE-mail: {email}\nWhatsApp/Celular: {phone}\n'
+                f'Segmento: {segment}\nInteresse: {interest}\n\nMensagem:\n{message or "Não informada."}\n'
+            )
+            result=send_email_message(msg,cfg)
+            if not result.get('sent'):
+                print(f'[CONTACT] SEND_FAILED email={email} reason={result.get("reason")}')
+                return self.send_json({'ok':False,'error':'send_failed'},502)
+            print(f'[CONTACT] SENT company={company!r} email={email}')
+            return self.send_json({'ok':True})
         mweb=re.fullmatch(r'/api/integrations/ecommerce/(\d+)/([^/]+)',path)
         if mweb:
             campaign_id=int(mweb.group(1)); supplied_secret=mweb.group(2)
