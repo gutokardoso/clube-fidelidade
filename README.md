@@ -1,8 +1,25 @@
-# Fidelizaê! v95
+# Fidelizaê! v96
 
-**Versão atual:** v95
+**Versão atual:** v96
 
-## Novidades da v95
+## Novidades da v96
+
+- **Modo de teste Meta para WhatsApp:** quando a empresa ainda não conectou sua própria conta, o botão **Enviar teste** pode usar exclusivamente o número de teste da Meta configurado no Railway.
+- O modo de teste aceita somente clientes com consentimento de WhatsApp **e** cujo telefone esteja na allowlist `META_TEST_WHATSAPP_RECIPIENTS`.
+- As credenciais de teste nunca são usadas por campanhas ou automações de produção; servem somente ao endpoint de teste de templates.
+- Se não houver integração de produção nem modo de teste configurado, o envio fica indisponível com explicação clara na interface.
+
+### Variáveis opcionais para o Modo de teste Meta
+
+```
+META_TEST_WHATSAPP_PHONE_NUMBER_ID=<Phone Number ID do número de teste da Meta>
+META_TEST_WHATSAPP_ACCESS_TOKEN=<token de desenvolvimento da Meta>
+META_TEST_WHATSAPP_WABA_ID=<WABA ID de teste, opcional>
+META_TEST_WHATSAPP_RECIPIENTS=5521999999999,5511999999999
+META_GRAPH_VERSION=v24.0
+```
+
+`META_TEST_WHATSAPP_RECIPIENTS` deve conter somente números previamente adicionados/validados como destinatários de teste na Meta, com DDI e DDD, separados por vírgula.
 
 - Teste de templates unificado por canal: E-mail, WhatsApp ou ambos.
 - A seleção de clientes respeita o consentimento específico de cada canal.

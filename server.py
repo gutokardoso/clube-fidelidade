@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v95'
+VERSION='v96'
 
 
 def jdump(obj):
@@ -577,6 +577,36 @@ def whatsapp_config_for_client(conn=None,campaign_id=None):
 def whatsapp_cloud_configured(config=None):
     c=config or whatsapp_config_for_client()
     return all(c.get(k,'') for k in ('token','phone_number_id','version'))
+
+def _normalize_phone(value):
+    return re.sub(r'\D','',str(value or ''))[:20]
+
+def whatsapp_meta_test_config():
+    # Credenciais exclusivas do numero de teste fornecido pela Meta.
+    # Nunca sao usadas por automacoes/campanhas de producao; apenas pelo endpoint ENVIAR TESTE.
+    return {
+        'phone_number_id':(os.environ.get('META_TEST_WHATSAPP_PHONE_NUMBER_ID') or '').strip(),
+        'waba_id':(os.environ.get('META_TEST_WHATSAPP_WABA_ID') or '').strip(),
+        'token':(os.environ.get('META_TEST_WHATSAPP_ACCESS_TOKEN') or '').strip(),
+        'version':(os.environ.get('META_GRAPH_VERSION') or 'v24.0').strip() or 'v24.0',
+        'source':'meta_test'
+    }
+
+def whatsapp_meta_test_recipients():
+    raw=(os.environ.get('META_TEST_WHATSAPP_RECIPIENTS') or '').strip()
+    return {_normalize_phone(x) for x in re.split(r'[,;\n]+',raw) if _normalize_phone(x)}
+
+def whatsapp_meta_test_configured():
+    return whatsapp_cloud_configured(whatsapp_meta_test_config()) and bool(whatsapp_meta_test_recipients())
+
+def whatsapp_test_delivery_config(conn,campaign_id,phone):
+    client_cfg=whatsapp_config_for_client(conn,campaign_id)
+    if whatsapp_cloud_configured(client_cfg):
+        return client_cfg,'production'
+    test_cfg=whatsapp_meta_test_config()
+    if whatsapp_cloud_configured(test_cfg) and _normalize_phone(phone) in whatsapp_meta_test_recipients():
+        return test_cfg,'meta_test'
+    return None,'unavailable'
 
 def send_whatsapp_cloud(phone, message, config=None):
     c=config or whatsapp_config_for_client()
@@ -1197,7 +1227,20 @@ class Handler(BaseHTTPRequestHandler):
                     rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email,cu.phone FROM customers cu JOIN memberships m ON m.customer_id=cu.id
                         WHERE m.campaign_id=? AND cu.marketing_email=1 AND cu.marketing_whatsapp=1
                         AND cu.email IS NOT NULL AND cu.email<>? AND cu.phone IS NOT NULL AND cu.phone<>? ORDER BY cu.name''',(sess['campaign_id'],'','')).fetchall()
-                return self.send_json({'ok':True,'channel':channel,'customers':[rowdict(r) for r in rows]})
+                wa_mode='not_applicable'
+                wa_available=True
+                if channel in ('whatsapp','both'):
+                    client_cfg=whatsapp_config_for_client(conn,sess['campaign_id'])
+                    if whatsapp_cloud_configured(client_cfg):
+                        wa_mode='production'
+                    elif whatsapp_meta_test_configured():
+                        wa_mode='meta_test'
+                        allowed=whatsapp_meta_test_recipients()
+                        rows=[r for r in rows if _normalize_phone(r['phone']) in allowed]
+                    else:
+                        wa_mode='unavailable'; wa_available=False; rows=[]
+                return self.send_json({'ok':True,'channel':channel,'customers':[rowdict(r) for r in rows],
+                    'whatsapp_mode':wa_mode,'whatsapp_available':wa_available})
         if path == '/api/manager/notifications':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'manager')
@@ -2182,17 +2225,20 @@ class Handler(BaseHTTPRequestHandler):
                     audit(conn,s['company_id'],s['user_id'],'email_test_send','message_template',template_id,details=f'email=***{email[-8:]}',ip_address=self._ip())
                     sent.append('E-mail')
                 if channel in ('whatsapp','both'):
-                    cfg=whatsapp_config_for_client(conn,s['campaign_id'])
-                    if not whatsapp_cloud_configured(cfg):return self.send_json({'ok':False,'error':'whatsapp_not_configured'},503)
+                    cfg,wa_mode=whatsapp_test_delivery_config(conn,s['campaign_id'],phone)
+                    if not cfg:
+                        if whatsapp_cloud_configured(whatsapp_meta_test_config()):
+                            return self.send_json({'ok':False,'error':'meta_test_recipient_not_allowed'},403)
+                        return self.send_json({'ok':False,'error':'whatsapp_test_mode_not_configured'},503)
                     try:
                         response=send_whatsapp_cloud(phone,message,cfg)
                     except Exception as exc:
                         reason=str(exc)[:700]
-                        print(f'[WHATSAPP_TEST] SEND_FAILED campaign_id={s["campaign_id"]} template_id={template_id} reason={reason}')
-                        return self.send_json({'ok':False,'error':'whatsapp_test_failed','detail':reason},502)
+                        print(f'[WHATSAPP_TEST] SEND_FAILED campaign_id={s["campaign_id"]} template_id={template_id} mode={wa_mode} reason={reason}')
+                        return self.send_json({'ok':False,'error':'whatsapp_test_failed','detail':reason,'mode':wa_mode},502)
                     message_id=((response.get('messages') or [{}])[0]).get('id') if isinstance(response,dict) else None
-                    audit(conn,s['company_id'],s['user_id'],'whatsapp_test_send','message_template',template_id,details=f'phone=***{phone[-4:]};message_id={message_id or ""}',ip_address=self._ip())
-                    sent.append('WhatsApp')
+                    audit(conn,s['company_id'],s['user_id'],'whatsapp_test_send','message_template',template_id,details=f'mode={wa_mode};phone=***{phone[-4:]};message_id={message_id or ""}',ip_address=self._ip())
+                    sent.append('WhatsApp' + (' (Modo de teste Meta)' if wa_mode=='meta_test' else ''))
                 return self.send_json({'ok':True,'message':'Teste enviado com sucesso por '+(' e '.join(sent))+'.','preview':message,'channels':sent})
             if path == '/api/admin/template/delete':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
