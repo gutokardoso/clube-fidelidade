@@ -1,6 +1,12 @@
-# Fidelizaê! v92
+# Fidelizaê! v93
 
-**Versão atual:** v92
+**Versão atual:** v93
+
+## Novidades da v93
+
+- Adicionado botão **Enviar teste** nos templates que usam WhatsApp, com número de teste, prévia da mensagem e envio real pela WhatsApp Cloud API configurada para a empresa.
+- Corrigida a criação/carregamento das automações para bancos PostgreSQL antigos que não possuam a constraint UNIQUE esperada em `automation_rules`.
+- Logs e mensagens de erro do teste de WhatsApp aprimorados para facilitar a validação exigida pela Meta.
 
 ## Novidades da v92
 

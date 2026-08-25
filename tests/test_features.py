@@ -8,7 +8,7 @@ from platform_features import (
     consume_point_lots, expire_points_once, record_purchase, RateLimiter,
 )
 from integrations import platform_order
-from server import _brevo_blocked_ip_details, send_email_brevo_api
+from server import _brevo_blocked_ip_details, send_email_brevo_api, ensure_automation_defaults, render_test_template
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -147,5 +147,19 @@ class FeatureTests(unittest.TestCase):
         html=(ROOT/'static/loyalty360.html').read_text(encoding='utf-8')
         self.assertIn('Comprador (opcional)',html); self.assertIn('Beneficiário (opcional)',html)
         self.assertIn('Histórico do vale',html); self.assertIn('QR Code do vale-presente',html)
+
+    def test_automation_defaults_work_without_unique_constraint(self):
+        import sqlite3
+        c=sqlite3.connect(':memory:'); c.row_factory=sqlite3.Row
+        c.execute("CREATE TABLE automation_rules (id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL,rule_type TEXT NOT NULL,channel TEXT NOT NULL,enabled INTEGER NOT NULL,message TEXT NOT NULL,created_at INTEGER NOT NULL)")
+        ensure_automation_defaults(c,7); ensure_automation_defaults(c,7)
+        rows=c.execute("SELECT rule_type,COUNT(*) n FROM automation_rules WHERE campaign_id=7 GROUP BY rule_type").fetchall()
+        self.assertEqual(len(rows),5); self.assertTrue(all(r['n']==1 for r in rows)); c.close()
+
+    def test_whatsapp_template_test_ui_and_rendering(self):
+        html=(ROOT/'static/attendant.html').read_text(encoding='utf-8')
+        self.assertIn('ENVIAR TESTE',html); self.assertIn('/api/admin/template/test',html); self.assertIn('whatsappTestModal',html)
+        msg=render_test_template('Oi {nome}! {empresa} • {selos}/{meta} • {recompensa}',{'name':'Padaria','goal':10,'reward_name':'Café grátis'})
+        self.assertEqual(msg,'Oi Cliente Teste! Padaria • 3/10 • Café grátis')
 
 if __name__=='__main__': unittest.main()

@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v92'
+VERSION='v93'
 
 
 def jdump(obj):
@@ -723,9 +723,26 @@ def ensure_automation_defaults(conn,campaign_id):
       'one_to_reward':('both','Falta só 1 selo, {nome}! Sua recompensa no {cliente} está quase lá.'),
       'reward_available':('both','Parabéns, {nome}! Você já tem uma recompensa disponível no {cliente}.')}
     for rule,(channel,msg) in defaults.items():
-        # Evita violação UNIQUE no PostgreSQL. Capturar IntegrityError sem
-        # rollback deixa toda a transação abortada (InFailedSqlTransaction).
-        conn.execute('INSERT INTO automation_rules(campaign_id,rule_type,channel,enabled,message,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(campaign_id,rule_type) DO NOTHING',(campaign_id,rule,channel,0,msg,now_ts()))
+        # Compatibilidade com bancos de produção antigos: algumas instalações
+        # podem ter automation_rules sem a constraint UNIQUE adicionada depois.
+        # Evitamos ON CONFLICT(campaign_id,rule_type), que falha no PostgreSQL
+        # quando essa constraint não existe e deixa a transação abortada.
+        exists=conn.execute('SELECT id FROM automation_rules WHERE campaign_id=? AND rule_type=? LIMIT 1',(campaign_id,rule)).fetchone()
+        if not exists:
+            conn.execute('INSERT INTO automation_rules(campaign_id,rule_type,channel,enabled,message,created_at) VALUES(?,?,?,?,?,?)',(campaign_id,rule,channel,0,msg,now_ts()))
+
+def render_test_template(body, campaign, customer_name='Cliente Teste'):
+    values={
+      '{nome}':customer_name,
+      '{empresa}':campaign.get('name') or 'Empresa',
+      '{cliente}':campaign.get('name') or 'Empresa',
+      '{selos}':'3',
+      '{meta}':str(campaign.get('goal') or 10),
+      '{recompensa}':campaign.get('reward_name') or 'sua recompensa'
+    }
+    out=str(body or '')
+    for key,value in values.items(): out=out.replace(key,str(value))
+    return out
 
 def run_automations_once():
     today=datetime.now(ZoneInfo('America/Sao_Paulo')).date(); now=now_ts()
@@ -2109,6 +2126,29 @@ class Handler(BaseHTTPRequestHandler):
                 if not name or not body or channel not in ('email','whatsapp','both'):return self.send_json({'ok':False,'error':'invalid_template'},400)
                 tid=insert_id(conn,'INSERT INTO message_templates(campaign_id,name,channel,subject,body,created_at) VALUES(?,?,?,?,?,?)',(s['campaign_id'],name,channel,subject,body,now_ts()))
                 return self.send_json({'ok':True,'template_id':tid})
+            if path == '/api/admin/template/test':
+                if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                try: template_id=int(payload.get('template_id') or 0)
+                except (TypeError,ValueError): template_id=0
+                phone=re.sub(r'\D','',str(payload.get('phone') or ''))[:20]
+                if not template_id or len(phone)<8 or len(phone)>15:return self.send_json({'ok':False,'error':'invalid_test_recipient'},400)
+                tpl=conn.execute('SELECT id,name,channel,body FROM message_templates WHERE id=? AND campaign_id=?',(template_id,s['campaign_id'])).fetchone()
+                if not tpl:return self.send_json({'ok':False,'error':'template_not_found'},404)
+                if tpl['channel'] not in ('whatsapp','both'):return self.send_json({'ok':False,'error':'template_without_whatsapp'},409)
+                camp=conn.execute('SELECT name,reward_name,goal FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
+                if not camp:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                cfg=whatsapp_config_for_client(conn,s['campaign_id'])
+                if not whatsapp_cloud_configured(cfg):return self.send_json({'ok':False,'error':'whatsapp_not_configured'},503)
+                message=render_test_template(tpl['body'],rowdict(camp))
+                try:
+                    response=send_whatsapp_cloud(phone,message,cfg)
+                except Exception as exc:
+                    reason=str(exc)[:700]
+                    print(f'[WHATSAPP_TEST] SEND_FAILED campaign_id={s["campaign_id"]} template_id={template_id} reason={reason}')
+                    return self.send_json({'ok':False,'error':'whatsapp_test_failed','detail':reason},502)
+                message_id=((response.get('messages') or [{}])[0]).get('id') if isinstance(response,dict) else None
+                audit(conn,s['company_id'],s['user_id'],'whatsapp_test_send','message_template',template_id,details=f'phone=***{phone[-4:]};message_id={message_id or ""}',ip_address=self._ip())
+                return self.send_json({'ok':True,'message':'Mensagem de teste enviada com sucesso.','message_id':message_id,'preview':message})
             if path == '/api/admin/template/delete':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 conn.execute('DELETE FROM message_templates WHERE id=? AND campaign_id=?',(int(payload.get('template_id') or 0),s['campaign_id']));return self.send_json({'ok':True})
