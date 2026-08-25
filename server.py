@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v90'
+VERSION='v91'
 
 
 def jdump(obj):
@@ -291,7 +291,10 @@ def _brevo_payload_from_message(msg, cfg=None):
     if html_content: payload['htmlContent']=html_content
     else: payload['textContent']=text or 'Clube Fidelidade'
     if attachments: payload['attachment']=attachments
-    if cfg.get('reply_to'): payload['replyTo']={'email':cfg['reply_to']}
+    # Respeita o Reply-To específico da mensagem (ex.: formulário comercial).
+    # Só usa o Reply-To global como fallback.
+    reply_to=str(msg.get('Reply-To') or cfg.get('reply_to') or '').strip()
+    if reply_to: payload['replyTo']={'email':reply_to}
     return payload
 
 def send_email_brevo_api(msg, cfg=None):
@@ -692,8 +695,9 @@ def ensure_automation_defaults(conn,campaign_id):
       'one_to_reward':('both','Falta só 1 selo, {nome}! Sua recompensa no {cliente} está quase lá.'),
       'reward_available':('both','Parabéns, {nome}! Você já tem uma recompensa disponível no {cliente}.')}
     for rule,(channel,msg) in defaults.items():
-        try: conn.execute('INSERT INTO automation_rules(campaign_id,rule_type,channel,enabled,message,created_at) VALUES(?,?,?,?,?,?)',(campaign_id,rule,channel,0,msg,now_ts()))
-        except integrity_errors(): pass
+        # Evita violação UNIQUE no PostgreSQL. Capturar IntegrityError sem
+        # rollback deixa toda a transação abortada (InFailedSqlTransaction).
+        conn.execute('INSERT INTO automation_rules(campaign_id,rule_type,channel,enabled,message,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(campaign_id,rule_type) DO NOTHING',(campaign_id,rule,channel,0,msg,now_ts()))
 
 def run_automations_once():
     today=datetime.now(ZoneInfo('America/Sao_Paulo')).date(); now=now_ts()
@@ -722,8 +726,7 @@ def run_automations_once():
                 if channel in ('whatsapp','both') and x['phone'] and x['marketing_whatsapp'] and whatsapp_cloud_configured(whatsapp_config_for_client(conn,rule['campaign_id'])):
                     enqueue_message(conn,rule['campaign_id'],'whatsapp',x['phone'],{'message':msg}); queued=True
                 if queued:
-                    try: conn.execute('INSERT INTO automation_runs(rule_id,membership_id,period_key,created_at) VALUES(?,?,?,?)',(rule['id'],x['membership_id'],period,now_ts()))
-                    except integrity_errors(): pass
+                    conn.execute('INSERT INTO automation_runs(rule_id,membership_id,period_key,created_at) VALUES(?,?,?,?) ON CONFLICT(rule_id,membership_id,period_key) DO NOTHING',(rule['id'],x['membership_id'],period,now_ts()))
 
 def background_loop():
     tick=0
@@ -1561,7 +1564,9 @@ class Handler(BaseHTTPRequestHandler):
             if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',email):
                 return self.send_json({'ok':False,'error':'invalid_email'},400)
             cfg=global_email_config()
+            print(f'[CONTACT] EMAIL_CONFIG provider={cfg.get("provider") or "auto"} source={cfg.get("source") or "unknown"} configured={email_configured(cfg)} sender={bool(cfg.get("sender_email") or cfg.get("from_addr"))}')
             if not email_configured(cfg):
+                print('[CONTACT] EMAIL_NOT_CONFIGURED')
                 return self.send_json({'ok':False,'error':'email_not_configured'},503)
             msg=EmailMessage()
             msg['Subject']=f'Novo contato Fidelizaê! • {company}'
@@ -1574,7 +1579,7 @@ class Handler(BaseHTTPRequestHandler):
             )
             result=send_email_message(msg,cfg)
             if not result.get('sent'):
-                print(f'[CONTACT] SEND_FAILED email={email} reason={result.get("reason")}')
+                print(f'[CONTACT] SEND_FAILED email={email} reason={result.get("reason")} status={result.get("status")} source={result.get("source")}')
                 return self.send_json({'ok':False,'error':'send_failed'},502)
             print(f'[CONTACT] SENT company={company!r} email={email}')
             return self.send_json({'ok':True})
@@ -1901,8 +1906,9 @@ class Handler(BaseHTTPRequestHandler):
                     if mc['channel'] in ('whatsapp','both') and r['phone'] and r['marketing_whatsapp'] and whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])):
                         enqueue_message(conn,s['campaign_id'],'whatsapp',r['phone'],{'message':mc['message']}); q=True
                     if q:
-                        try: conn.execute('INSERT INTO marketing_campaign_recipients(marketing_campaign_id,membership_id,sent_at) VALUES(?,?,?)',(mid,r['membership_id'],sent_at)); queued+=1
-                        except integrity_errors(): pass
+                        cur=conn.execute('INSERT INTO marketing_campaign_recipients(marketing_campaign_id,membership_id,sent_at) VALUES(?,?,?) ON CONFLICT(marketing_campaign_id,membership_id) DO NOTHING',(mid,r['membership_id'],sent_at))
+                        # O contador representa destinatários efetivamente novos.
+                        if getattr(cur,'rowcount',0)>0: queued+=1
                 conn.execute("UPDATE marketing_campaigns SET status='sent',sent_at=? WHERE id=?",(sent_at,mid)); audit(conn,s['company_id'],s['user_id'],'marketing_campaign_send','marketing_campaign',mid,details=f'queued={queued}',ip_address=self._ip())
                 return self.send_json({'ok':True,'queued':queued})
             if path == '/api/admin/coupon/save':

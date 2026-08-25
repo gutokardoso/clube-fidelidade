@@ -1,6 +1,13 @@
-# Fidelizaê! v90
+# Fidelizaê! v91
 
-**Versão atual:** v90
+**Versão atual:** v91
+
+## Novidades da v91
+
+- Corrigida a rotina de automações no PostgreSQL: inserções idempotentes agora usam `ON CONFLICT DO NOTHING`, evitando que violações de unicidade deixem a transação em estado abortado (`InFailedSqlTransaction`).
+- Corrigido o mesmo padrão no registro de destinatários de campanhas.
+- Formulário comercial passa a registrar diagnóstico seguro da configuração/envio de e-mail nos logs, sem expor credenciais.
+- O `Reply-To` específico do formulário agora tem prioridade sobre o `BREVO_REPLY_TO` global, permitindo responder diretamente ao lead.
 
 ## Novidades da v90
 
