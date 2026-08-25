@@ -1,11 +1,14 @@
-import os, tempfile, unittest, time
+import os, tempfile, unittest, time, io, urllib.error
 from pathlib import Path
+from email.message import EmailMessage
+from unittest.mock import patch
 from db import init_db, connect
 from platform_features import (
     session_permissions, has_permission, active_multiplier, add_point_lot,
     consume_point_lots, expire_points_once, record_purchase, RateLimiter,
 )
 from integrations import platform_order
+from server import _brevo_blocked_ip_details, send_email_brevo_api
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -119,6 +122,26 @@ class FeatureTests(unittest.TestCase):
         self.assertIn('Dashboard financeiro',html)
         self.assertIn('<polyline points=',html)
         self.assertIn('Receita atribuída a campanhas',html)
+
+
+    def test_brevo_ip_block_detection(self):
+        raw='{"message":"We have detected you are using an unrecognised IP address: 162.220.232.73"}'
+        blocked,ip=_brevo_blocked_ip_details(raw)
+        self.assertTrue(blocked); self.assertEqual(ip,'162.220.232.73')
+        blocked,ip=_brevo_blocked_ip_details('{"message":"Key not found"}')
+        self.assertFalse(blocked); self.assertEqual(ip,'')
+        html=(ROOT/'static/index.html').read_text(encoding='utf-8')
+        self.assertIn('email_provider_ip_blocked',html)
+
+    def test_brevo_http_error_returns_ip_block_reason(self):
+        msg=EmailMessage(); msg['To']='lead@example.com'; msg['Subject']='Teste'; msg.set_content('Olá')
+        body=b'{"message":"We have detected you are using an unrecognised IP address: 162.220.232.73"}'
+        err=urllib.error.HTTPError('https://api.brevo.com/v3/smtp/email',401,'Unauthorized',{},io.BytesIO(body))
+        with patch('urllib.request.urlopen',side_effect=err):
+            result=send_email_brevo_api(msg,{'api_key':'fake','sender_email':'sender@example.com','sender_name':'Fidelizae'})
+        self.assertFalse(result['sent'])
+        self.assertEqual(result['reason'],'brevo_ip_blocked')
+        self.assertEqual(result['blocked_ip'],'162.220.232.73')
 
     def test_gift_card_ui_has_owner_qr_and_history(self):
         html=(ROOT/'static/loyalty360.html').read_text(encoding='utf-8')

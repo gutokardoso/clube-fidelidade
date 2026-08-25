@@ -1,6 +1,13 @@
-# Fidelizaê! v91
+# Fidelizaê! v92
 
-**Versão atual:** v91
+**Versão atual:** v92
+
+## Novidades da v92
+
+- Tratamento específico para bloqueio de IP da Brevo (`401/403` com IP não reconhecido).
+- Logs do Railway agora exibem `BREVO_IP_BLOCKED` e o IP recusado, sem expor API Key ou dados sensíveis.
+- O formulário público deixa de mostrar erro genérico nesse cenário e informa que o serviço de e-mail bloqueou temporariamente a conexão do servidor.
+- O diagnóstico orienta aguardar a autorização automática da Brevo ou revisar **Segurança > IPs autorizados**, sem exigir alteração de código.
 
 ## Novidades da v91
 

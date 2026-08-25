@@ -223,7 +223,12 @@
       const out=await r.json().catch(()=>({}));
       if(!r.ok||!out.ok) throw new Error(out.error||'send_failed');
       form.reset(); status.className='success'; status.textContent='Solicitação enviada! Entraremos em contato em breve.';
-    }catch(err){ status.className='error'; status.textContent='Não foi possível enviar agora. Tente novamente em instantes.'; }
+    }catch(err){
+      status.className='error';
+      status.textContent=err.message==='email_provider_ip_blocked'
+        ? 'O serviço de e-mail bloqueou temporariamente a conexão do servidor. Aguarde alguns minutos e tente novamente.'
+        : 'Não foi possível enviar agora. Tente novamente em instantes.';
+    }
     finally{button.disabled=false;}
   });
 })();

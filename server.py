@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v91'
+VERSION='v92'
 
 
 def jdump(obj):
@@ -297,6 +297,27 @@ def _brevo_payload_from_message(msg, cfg=None):
     if reply_to: payload['replyTo']={'email':reply_to}
     return payload
 
+def _brevo_blocked_ip_details(raw):
+    """Detecta bloqueio de IP da Brevo sem expor credenciais.
+
+    Retorna (bloqueado, ip). A Brevo pode usar grafias "unrecognised"
+    ou "unrecognized" dependendo da resposta/idioma.
+    """
+    text=str(raw or '')
+    try:
+        data=json.loads(text)
+        if isinstance(data,dict):
+            text=str(data.get('message') or data.get('error') or text)
+    except Exception:
+        pass
+    low=text.lower()
+    blocked=('unrecognised ip address' in low or 'unrecognized ip address' in low or
+             ('ip address' in low and ('not authorised' in low or 'not authorized' in low)))
+    if not blocked:
+        return False,''
+    match=re.search(r'(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)',text)
+    return True,(match.group(0) if match else '')
+
 def send_email_brevo_api(msg, cfg=None):
     cfg=cfg or brevo_api_config()
     if not (cfg.get('api_key') and cfg.get('sender_email')):
@@ -311,6 +332,13 @@ def send_email_brevo_api(msg, cfg=None):
         return {'sent':True,'source':'brevo_api','message_id':data.get('messageId')}
     except urllib.error.HTTPError as exc:
         raw=exc.read().decode('utf-8',errors='replace')
+        ip_blocked,blocked_ip=_brevo_blocked_ip_details(raw)
+        if exc.code in (401,403) and ip_blocked:
+            # Mensagem operacional explícita para o Railway. Não imprime API Key,
+            # payload do lead nem outras credenciais; apenas o IP recusado.
+            ip_label=blocked_ip or 'nao_informado'
+            print(f'[EMAIL] BREVO_IP_BLOCKED status={exc.code} ip={ip_label} action=brevo_security_authorized_ips_or_automatic_authorization')
+            return {'sent':False,'reason':'brevo_ip_blocked','status':exc.code,'source':'brevo_api','blocked_ip':blocked_ip}
         print(f'[EMAIL] BREVO_HTTP_ERROR status={exc.code} body={raw[:500]}')
         reason='brevo_auth_failed' if exc.code in (401,403) else ('brevo_sender_invalid' if exc.code==400 else 'brevo_api_failed')
         return {'sent':False,'reason':reason,'status':exc.code,'source':'brevo_api'}
@@ -1579,7 +1607,13 @@ class Handler(BaseHTTPRequestHandler):
             )
             result=send_email_message(msg,cfg)
             if not result.get('sent'):
-                print(f'[CONTACT] SEND_FAILED email={email} reason={result.get("reason")} status={result.get("status")} source={result.get("source")}')
+                reason=result.get('reason') or 'send_failed'
+                if reason=='brevo_ip_blocked':
+                    blocked_ip=result.get('blocked_ip') or 'nao_informado'
+                    print(f'[CONTACT] BREVO_IP_BLOCKED ip={blocked_ip} status={result.get("status")} action=aguardar_autorizacao_automatica_ou_revisar_brevo_security')
+                    # Código seguro para a interface: informa a causa sem expor o IP público.
+                    return self.send_json({'ok':False,'error':'email_provider_ip_blocked'},503)
+                print(f'[CONTACT] SEND_FAILED email={email} reason={reason} status={result.get("status")} source={result.get("source")}')
                 return self.send_json({'ok':False,'error':'send_failed'},502)
             print(f'[CONTACT] SENT company={company!r} email={email}')
             return self.send_json({'ok':True})
