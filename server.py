@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v101'
+VERSION='v102'
 
 
 def jdump(obj):
@@ -510,7 +510,7 @@ def create_mp_subscription(email,plan,reference):
     # ao Mercado Pago pode ser sobrescrito por variável de ambiente. Em produção,
     # basta não definir MERCADOPAGO_TEST_PAYER_EMAIL para usar o e-mail real.
     payer_email=(os.environ.get('MERCADOPAGO_TEST_PAYER_EMAIL') or '').strip() or str(email or '').strip()
-    return mp_request('POST','/preapproval',{'reason':f'Fidelizaê! {plan.title()}','external_reference':reference,'payer_email':payer_email,'auto_recurring':{'frequency':1,'frequency_type':'months','transaction_amount':amount,'currency_id':'BRL'},'back_url':base+'/signup?payment=return','status':'pending'})
+    return mp_request('POST','/preapproval',{'reason':f'Fidelizaê! {plan.title()}','external_reference':reference,'payer_email':payer_email,'auto_recurring':{'frequency':1,'frequency_type':'months','transaction_amount':amount,'currency_id':'BRL'},'back_url':base+'/signup/payment-return','status':'pending'})
 
 
 def _mp_timestamp(value):
@@ -1099,6 +1099,33 @@ class Handler(BaseHTTPRequestHandler):
         path = p.path
         qs = urllib.parse.parse_qs(p.query)
         if path == '/': return self.send_text((STATIC/'index.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION))
+        if path in ('/signup/payment-return','/signup') and (path == '/signup/payment-return' or (qs.get('payment') or [''])[0].startswith('return')):
+            # O Mercado Pago acrescenta os parâmetros de retorno à back_url. Usamos uma rota
+            # dedicada (sem query string prévia) para evitar URLs como ?payment=return?preapproval_id=...
+            # e mantemos compatibilidade com retornos da v101 que já tenham sido gerados.
+            preapproval_id=(qs.get('preapproval_id') or [''])[0].strip()
+            if not preapproval_id and path == '/signup':
+                raw_payment=(qs.get('payment') or [''])[0]
+                if '?' in raw_payment:
+                    legacy=urllib.parse.parse_qs(raw_payment.split('?',1)[1])
+                    preapproval_id=(legacy.get('preapproval_id') or [''])[0].strip()
+            if not preapproval_id:
+                return self.send_redirect('/signup?payment=missing',302)
+            try:
+                sub=mp_request('GET','/preapproval/'+urllib.parse.quote(preapproval_id,safe=''))
+            except Exception:
+                return self.send_redirect('/signup?payment=error',302)
+            status=str(sub.get('status') or '').strip().lower()
+            reference=str(sub.get('external_reference') or '').strip()
+            if status != 'authorized' or not reference.startswith('signup:'):
+                return self.send_redirect('/signup?payment='+urllib.parse.quote(status or 'pending'),302)
+            token=reference.split(':',1)[1]
+            with connect(DB_PATH) as conn:
+                signup=conn.execute('SELECT * FROM subscription_signups WHERE token=? AND subscription_id=?',(token,preapproval_id)).fetchone()
+                if not signup:
+                    return self.send_redirect('/signup?payment=invalid',302)
+                if signup['status'] != 'active': provision_signup(conn,signup,sub)
+            return self.send_redirect('/login?subscription=active',302)
         if path == '/signup': return self.send_text((STATIC/'signup.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION))
         if path == '/auth/meta/callback':
             code=(qs.get('code') or [''])[0].strip()

@@ -1,8 +1,13 @@
-# Fidelizaê! v101
+# Fidelizaê! v102
 
-**Versão atual:** v101
+**Versão atual:** v102
 
-## Novidades da v101
+## Novidades da v102
+
+- Corrigido o retorno do checkout de assinaturas do Mercado Pago com rota dedicada `/signup/payment-return`.
+- O retorno aprovado agora valida a assinatura diretamente na API, conclui o cadastro pendente e redireciona para o login.
+- Mantida compatibilidade com URLs de retorno geradas pela v101.
+
 
 - Testes de Assinaturas do Mercado Pago agora podem usar um `payer_email` de teste separado do e-mail cadastral, via `MERCADOPAGO_TEST_PAYER_EMAIL`.
 - Em produção, sem essa variável, o e-mail real do cadastro continua sendo enviado normalmente ao Mercado Pago.
