@@ -1,10 +1,11 @@
-# Fidelizaê! v102
+# Fidelizaê! v103
 
-**Versão atual:** v102
+**Versão atual:** v103
 
-## Novidades da v102
+## Novidades da v103
 
-- Corrigido o retorno do checkout de assinaturas do Mercado Pago com rota dedicada `/signup/payment-return`.
+- Adicionado diagnóstico seguro do retorno de assinaturas do Mercado Pago (`MP_RETURN`) para registrar status, referência e datas sem expor credenciais.
+- Mantida a correção da rota dedicada `/signup/payment-return` introduzida na v102.
 - O retorno aprovado agora valida a assinatura diretamente na API, conclui o cadastro pendente e redireciona para o login.
 - Mantida compatibilidade com URLs de retorno geradas pela v101.
 

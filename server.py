@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v102'
+VERSION='v103'
 
 
 def jdump(obj):
@@ -1117,7 +1117,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_redirect('/signup?payment=error',302)
             status=str(sub.get('status') or '').strip().lower()
             reference=str(sub.get('external_reference') or '').strip()
+            # Diagnóstico do retorno do Mercado Pago. Não registra e-mail, token de acesso
+            # ou outros dados sensíveis; apenas os campos necessários para entender o fluxo.
+            print('[BILLING] MP_RETURN', json.dumps({
+                'preapproval_id': preapproval_id,
+                'status': status or None,
+                'external_reference': reference or None,
+                'init_point_present': bool(sub.get('init_point')),
+                'date_created': sub.get('date_created'),
+                'last_modified': sub.get('last_modified'),
+                'next_payment_date': sub.get('next_payment_date'),
+            }, ensure_ascii=False, default=str), flush=True)
             if status != 'authorized' or not reference.startswith('signup:'):
+                print('[BILLING] MP_RETURN_NOT_ACTIVE status=%s reference_ok=%s' % (status or 'missing', reference.startswith('signup:')), flush=True)
                 return self.send_redirect('/signup?payment='+urllib.parse.quote(status or 'pending'),302)
             token=reference.split(':',1)[1]
             with connect(DB_PATH) as conn:
