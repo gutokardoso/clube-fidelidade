@@ -1,8 +1,15 @@
-# Fidelizaê! v99
+# Fidelizaê! v100
 
-**Versão atual:** v99
+**Versão atual:** v100
 
-## Novidades da v99
+## Novidades da v100
+
+- Fluxo de assinatura do Mercado Pago endurecido para upgrades/downgrades sem antecipar troca de recursos.
+- Upgrades pagos agora criam uma nova assinatura pendente e só liberam o novo plano após autorização confirmada via webhook.
+- Downgrades permanecem no plano atual até o fim do ciclo já pago; a mudança só é aplicada no vencimento correto.
+- Tratamento de estados `pending`, `authorized`, `paused` e `cancelled` normalizado no painel.
+- Suporte opcional à validação criptográfica `x-signature` dos Webhooks via `MERCADOPAGO_WEBHOOK_SECRET`.
+- Limpeza automática de assinatura anterior após upgrade para reduzir risco de cobrança duplicada.
 
 - Planos Iniciante, Intermediário e PRO com limites e recursos por categoria.
 - Seletor de plano no cadastro/edição de empresas e alteração de plano no Perfil do administrador do cliente.
@@ -250,6 +257,14 @@ META_GRAPH_VERSION=v24.0
 ## v88
 Permissões efetivas, validade real de pontos (1–12 meses; padrão 6), aceleradores aplicados, NPS no cartão, observações internas, alertas acionáveis, ciclo de unidades, atribuição financeira de campanhas, compras em selos/pontos, dashboard financeiro, adaptadores de e-commerce, área pessoal do cartão, cupons com desconto calculado, vale-presente enriquecido, remoção do recurso de indicação, modularização inicial, testes/migrações formais, recuperação de senha por token e rate limiting. Cashback permanece reservado para evolução futura.
 
+
+## v100 — Assinaturas com troca segura de plano
+- Upgrades só entram em vigor após autorização da nova assinatura pelo Mercado Pago.
+- Downgrades ficam agendados até o fim do ciclo corrente; o plano atual continua ativo até então.
+- Webhook não antecipa downgrade ao receber um simples evento `authorized`.
+- Estados financeiros normalizados e reconciliação de plano no carregamento da sessão.
+- Nova variável opcional `MERCADOPAGO_WEBHOOK_SECRET` para validação HMAC do Webhook.
+- Variável obrigatória para cobranças reais continua sendo `MERCADOPAGO_ACCESS_TOKEN`.
 
 ## v99 — Assinaturas self-service
 - Cadastro público direto pelos cards de planos.

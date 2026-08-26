@@ -420,11 +420,12 @@ def init_db(db_path=None, seed=True):
                 if col not in campaign_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
 
 
-        # Migração v99: assinaturas SaaS / Mercado Pago e cadastros públicos pendentes.
+        # Migração v100: assinaturas SaaS / Mercado Pago, troca segura de plano e cadastros públicos pendentes.
         billing_cols=[
             ('subscription_provider','TEXT'),('subscription_id','TEXT'),('subscription_status',"TEXT NOT NULL DEFAULT 'manual'"),
             ('subscription_started_at','BIGINT'),('subscription_current_period_end','BIGINT'),('subscription_last_payment_at','BIGINT'),
-            ('subscription_next_payment_at','BIGINT'),('subscription_status_updated_at','BIGINT'),('subscription_cancel_at_period_end',"INTEGER NOT NULL DEFAULT 0"),('pending_plan','TEXT')
+            ('subscription_next_payment_at','BIGINT'),('subscription_status_updated_at','BIGINT'),('subscription_cancel_at_period_end',"INTEGER NOT NULL DEFAULT 0"),('pending_plan','TEXT'),
+            ('pending_subscription_id','TEXT'),('previous_subscription_id','TEXT'),('subscription_change_requested_at','BIGINT')
         ]
         if _is_postgres(target):
             for col,typ in billing_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS {col} {typ}')
