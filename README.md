@@ -1,6 +1,12 @@
-# Fidelizaê! v108
+# Fidelizaê! v109
 
-**Versão atual:** v108
+**Versão atual:** v109
+
+## Novidades da v109
+
+- Modal **Alterar plano** destaca o plano contratado como indisponível no seletor e sugere automaticamente o plano imediatamente superior quando houver upgrade disponível.
+- Empresas PRO passam a oferecer uma **Área PRO do usuário** no cartão, com status, data de entrada, programa, código, saldo/progresso, recompensas, nível, histórico e atalhos de privacidade/recompensas.
+- Mantidas as melhorias da v108.
 
 ## Novidades da v108
 

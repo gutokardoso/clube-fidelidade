@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v108'
+VERSION='v109'
 
 
 def jdump(obj):
@@ -1258,7 +1258,7 @@ class Handler(BaseHTTPRequestHandler):
             public_id=(qs.get('id') or [''])[0]
             with connect(DB_PATH) as conn:
                 m=conn.execute('''SELECT m.public_id,m.qr_token,m.progress,m.rewards_available,m.status,m.created_at,
-                                  c.name campaign_name,c.reward_name,c.goal,c.icon,c.code,c.logo_image,c.card_theme,c.loyalty_type,c.points_spend_cents,
+                                  c.name campaign_name,c.reward_name,c.goal,c.icon,c.code,c.logo_image,c.card_theme,c.loyalty_type,c.points_spend_cents,c.plan,
                                   m.points_balance,m.id membership_id,cu.name customer_name,co.name company_name,co.primary_color,co.logo_text
                                   FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id JOIN companies co ON co.id=c.company_id
                                   WHERE m.public_id=?''',(public_id,)).fetchone()
@@ -1268,7 +1268,7 @@ class Handler(BaseHTTPRequestHandler):
                 data['qr_value']=data['card_code']
                 data['apple_link']=apple_pass_link(public_id)
                 data['google_link']=google_wallet_link(public_id)
-                data['recent_history']=[rowdict(x) for x in conn.execute('SELECT type,value,note,created_at FROM transactions WHERE membership_id=? ORDER BY created_at DESC LIMIT 5',(m['membership_id'],)).fetchall()]
+                data['recent_history']=[rowdict(x) for x in conn.execute('SELECT type,value,note,created_at FROM transactions WHERE membership_id=? ORDER BY created_at DESC LIMIT 12',(m['membership_id'],)).fetchall()]
                 data['available_coupons']=[rowdict(x) for x in conn.execute("SELECT name,code,benefit_type,benefit_value,ends_at FROM coupons WHERE campaign_id=(SELECT campaign_id FROM memberships WHERE id=?) AND active=1 AND (starts_at IS NULL OR starts_at<=?) AND (ends_at IS NULL OR ends_at>=?) ORDER BY id DESC LIMIT 5",(m['membership_id'],now_ts(),now_ts())).fetchall()]
                 tier=conn.execute('SELECT name,benefit FROM loyalty_tiers WHERE campaign_id=(SELECT campaign_id FROM memberships WHERE id=?) AND active=1 AND min_points<=? ORDER BY min_points DESC LIMIT 1',(m['membership_id'],m['points_balance'] or 0)).fetchone(); data['tier']=rowdict(tier)
                 data['nps_due']=not bool(conn.execute('SELECT 1 FROM nps_responses WHERE membership_id=? AND created_at>=? LIMIT 1',(m['membership_id'],now_ts()-90*86400)).fetchone()) and bool(conn.execute('SELECT 1 FROM transactions WHERE membership_id=? LIMIT 1',(m['membership_id'],)).fetchone())
