@@ -1,8 +1,8 @@
-# Fidelizaê! v105
+# Fidelizaê! v106
 
-**Versão atual:** v105
+**Versão atual:** v106
 
-## Novidades da v105
+## Novidades da v106
 
 - **Produção protegida contra pagador de teste:** `MERCADOPAGO_TEST_PAYER_EMAIL` só é usado quando `APP_ENV` estiver em ambiente de teste/desenvolvimento. Em `production`, o Mercado Pago recebe sempre o e-mail real informado pelo cliente no cadastro.
 - Isso permite manter a variável de teste cadastrada sem risco de ela substituir o pagador de uma assinatura real; ainda assim, recomenda-se removê-la do Railway ao entrar em produção.

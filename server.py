@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v105'
+VERSION='v106'
 
 
 def jdump(obj):
@@ -574,7 +574,7 @@ def provision_signup(conn,row,subscription=None):
     company_id=company['id']; code=('AUTO'+secrets.token_hex(4)).upper()
     plan=normalize_plan(row['plan']); loyalty='stamps' if plan=='beginner' else (row['loyalty_type'] or 'stamps')
     sub=subscription or {}; now=now_ts(); next_ts=_mp_timestamp(sub.get('next_payment_date'))
-    cid=insert_id(conn,"INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,card_theme,plan,loyalty_type,points_spend_cents,subscription_provider,subscription_id,subscription_status,subscription_started_at,subscription_current_period_end,subscription_next_payment_at,subscription_status_updated_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(company_id,code,row['company_name'],'Recompensa do programa',5,'__LOGO__','orange',plan,loyalty,200,'mercadopago' if plan!='beginner' else 'free',row['subscription_id'], 'active',now,next_ts,next_ts,now,now))
+    cid=insert_id(conn,"INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,card_theme,plan,loyalty_type,points_spend_cents,logo_image,subscription_provider,subscription_id,subscription_status,subscription_started_at,subscription_current_period_end,subscription_next_payment_at,subscription_status_updated_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(company_id,code,row['company_name'],'Recompensa do programa',5,'__LOGO__','orange',plan,loyalty,200,row['logo_image'] if 'logo_image' in row.keys() else None,'mercadopago' if plan!='beginner' else 'free',row['subscription_id'], 'active',now,next_ts,next_ts,now,now))
     uid=insert_id(conn,"INSERT INTO users(company_id,name,email,password_hash,role,active,is_client_admin,campaign_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(company_id,row['responsible_name'],row['email'],row['password_hash'],'attendant',1,1,cid,now))
     conn.execute("UPDATE subscription_signups SET status='active',provisioned_at=? WHERE id=?",(now,row['id']))
     audit(conn,company_id,uid,'subscription_signup','campaign',cid,details=plan)
@@ -1747,6 +1747,14 @@ class Handler(BaseHTTPRequestHandler):
                     c['whatsapp_access_token_enc']=None
                 staff=[rowdict(r) for r in conn.execute('''SELECT u.id,u.name,u.email,u.role,u.active,u.is_client_admin,u.created_at,u.campaign_id,c.name client_name FROM users u LEFT JOIN campaigns c ON c.id=u.campaign_id WHERE u.company_id=? ORDER BY u.role,u.name''',(cid,)).fetchall()]
                 return self.send_json({'ok':True,'metrics':metrics,'campaigns':campaigns,'staff':staff})
+        if path == '/api/client-admin/company':
+            with connect(DB_PATH) as conn:
+                s=self._require_auth(conn,'attendant')
+                if not s:return
+                if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                c=conn.execute('SELECT id,name,code,logo_image,plan,loyalty_type,points_spend_cents,goal,reward_name,card_theme,min_stamp_interval_sec,max_stamps_per_hour FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
+                if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                return self.send_json({'ok':True,'company':rowdict(c),'features':PLAN_FEATURES[normalize_plan(c['plan'])]})
         if path == '/api/attendant/recent':
             with connect(DB_PATH) as conn:
                 s=self._require_auth(conn,'attendant')
@@ -1897,10 +1905,13 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/public/signup':
             name=str(payload.get('responsible_name') or '').strip()[:100]; company=str(payload.get('company_name') or '').strip()[:120]; email=normalize_email(payload.get('email')); phone=str(payload.get('phone') or '').strip()[:40]; document=str(payload.get('document') or '').strip()[:30]; password=str(payload.get('password') or ''); plan=normalize_plan(payload.get('plan')); loyalty=str(payload.get('loyalty_type') or 'stamps').lower()
             if not name or not company or not email or len(password)<10 or plan not in PLAN_PRICES:return self.send_json({'ok':False,'error':'invalid_signup'},400)
+            try: logo_image=validate_logo_data(payload.get('logo_image'))
+            except ValueError as exc:return self.send_json({'ok':False,'error':str(exc)},400)
+            if not logo_image:return self.send_json({'ok':False,'error':'logo_required'},400)
             if plan=='beginner': loyalty='stamps'
             with connect(DB_PATH) as conn:
                 if conn.execute('SELECT id FROM users WHERE lower(email)=lower(?)',(email,)).fetchone():return self.send_json({'ok':False,'error':'email_exists'},409)
-                token=secrets.token_urlsafe(24); sid=insert_id(conn,'INSERT INTO subscription_signups(token,company_name,responsible_name,email,phone,document,password_hash,plan,loyalty_type,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(token,company,name,email,phone,document,hash_password(password),plan,loyalty,'pending',now_ts()))
+                token=secrets.token_urlsafe(24); sid=insert_id(conn,'INSERT INTO subscription_signups(token,company_name,responsible_name,email,phone,document,password_hash,plan,loyalty_type,status,created_at,logo_image) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(token,company,name,email,phone,document,hash_password(password),plan,loyalty,'pending',now_ts(),logo_image))
                 row=conn.execute('SELECT * FROM subscription_signups WHERE id=?',(sid,)).fetchone()
                 if plan=='beginner':
                     provision_signup(conn,row); return self.send_json({'ok':True,'active':True,'redirect':'/login'})
@@ -2818,6 +2829,38 @@ class Handler(BaseHTTPRequestHandler):
                     except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
                 conn.execute('UPDATE campaigns SET pending_plan=?,subscription_current_period_end=?,subscription_cancel_at_period_end=?,subscription_change_requested_at=? WHERE id=?',(plan,period_end,1 if plan=='beginner' else 0,now_ts(),s['campaign_id']))
                 audit(conn,s['company_id'],s['user_id'],'plan_downgrade_scheduled','campaign',s['campaign_id'],details=plan,ip_address=self._ip());return self.send_json({'ok':True,'plan':current,'pending_plan':plan,'effective_at':period_end})
+            if path == '/api/client-admin/company/update':
+                if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                c=conn.execute('SELECT * FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
+                if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                plan=normalize_plan(c['plan']); name=str(payload.get('name',c['name'])).strip()[:80]; loyalty=str(payload.get('loyalty_type',c['loyalty_type'])).lower();
+                if plan=='beginner':loyalty='stamps'
+                if loyalty not in ('stamps','points') or (loyalty=='points' and not PLAN_FEATURES[plan]['points']):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                try: points=int(payload.get('points_spend_cents') or c['points_spend_cents'] or 200); goal=int(payload.get('goal') or c['goal'] or 5)
+                except:return self.send_json({'ok':False,'error':'invalid_campaign'},400)
+                if points not in (200,300,500,1000):points=200
+                if goal not in (3,5,8,10,15):goal=5
+                reward=str(payload.get('reward_name',c['reward_name'] or '')).strip()[:100] or 'Recompensa do programa'; theme=str(payload.get('card_theme',c['card_theme'] or 'orange')).lower()
+                if theme not in CARD_THEMES:theme=c['card_theme'] or 'orange'
+                logo=None
+                if payload.get('logo_image'):
+                    try:logo=validate_logo_data(payload.get('logo_image'))
+                    except ValueError as exc:return self.send_json({'ok':False,'error':str(exc)},400)
+                conn.execute('UPDATE campaigns SET name=?,loyalty_type=?,points_spend_cents=?,goal=?,reward_name=?,card_theme=?,logo_image=COALESCE(?,logo_image) WHERE id=? AND company_id=?',(name,loyalty,points,goal,reward,theme,logo,s['campaign_id'],s['company_id']))
+                audit(conn,s['company_id'],s['user_id'],'client_admin_company_update','campaign',s['campaign_id'],details=f'plan={plan}',ip_address=self._ip());return self.send_json({'ok':True})
+            if path == '/api/client-admin/account/delete':
+                if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                password=str(payload.get('password') or '')
+                u=conn.execute('SELECT password_hash FROM users WHERE id=?',(s['user_id'],)).fetchone()
+                if not u or not verify_password(password,u['password_hash']):return self.send_json({'ok':False,'error':'invalid_password'},403)
+                c=conn.execute('SELECT subscription_id FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone(); sid=c['subscription_id'] if c else None
+                conn.execute('UPDATE campaigns SET active=0,subscription_status=? WHERE id=?',('cancelled',s['campaign_id']))
+                conn.execute('UPDATE users SET active=0 WHERE campaign_id=?',(s['campaign_id'],)); conn.execute('DELETE FROM sessions WHERE user_id=?',(s['user_id'],))
+                audit(conn,s['company_id'],s['user_id'],'client_admin_account_delete','campaign',s['campaign_id'],ip_address=self._ip())
+                if sid:_best_effort_cancel_subscription(sid)
+                return self.send_json({'ok':True})
             if path == '/api/client-admin/staff/create':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 name=str(payload.get('name','')).strip()[:80]; email=normalize_email(payload.get('email')); password=str(payload.get('password','')).strip(); branch_raw=payload.get('branch_id')
@@ -3096,7 +3139,7 @@ class Handler(BaseHTTPRequestHandler):
                 c=conn.execute('SELECT id,name,code FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id'])).fetchone()
                 if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
                 conn.execute('UPDATE campaigns SET active=0 WHERE id=? AND company_id=?',(campaign_id,s['company_id']))
-                audit(conn,s['company_id'],s['user_id'],'client_archive','campaign',campaign_id,details=c['code'],ip_address=self._ip())
+                audit(conn,s['company_id'],s['user_id'],'client_delete','campaign',campaign_id,details=c['code'],ip_address=self._ip())
                 return self.send_json({'ok':True,'archived_campaign_id':campaign_id})
             if path == '/api/manager/campaign/restore':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)

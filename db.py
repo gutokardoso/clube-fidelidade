@@ -434,6 +434,11 @@ def init_db(db_path=None, seed=True):
             for col,typ in billing_cols:
                 if col not in campaign_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
         conn.executescript(("""CREATE TABLE IF NOT EXISTS subscription_signups (id BIGSERIAL PRIMARY KEY, token TEXT NOT NULL UNIQUE, company_name TEXT NOT NULL, responsible_name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT, document TEXT, password_hash TEXT NOT NULL, plan TEXT NOT NULL, loyalty_type TEXT NOT NULL DEFAULT 'stamps', status TEXT NOT NULL DEFAULT 'pending', subscription_id TEXT, created_at BIGINT NOT NULL, provisioned_at BIGINT);""" if _is_postgres(target) else """CREATE TABLE IF NOT EXISTS subscription_signups (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT NOT NULL UNIQUE, company_name TEXT NOT NULL, responsible_name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT, document TEXT, password_hash TEXT NOT NULL, plan TEXT NOT NULL, loyalty_type TEXT NOT NULL DEFAULT 'stamps', status TEXT NOT NULL DEFAULT 'pending', subscription_id TEXT, created_at INTEGER NOT NULL, provisioned_at INTEGER);"""))
+        if _is_postgres(target):
+            conn.execute('ALTER TABLE subscription_signups ADD COLUMN IF NOT EXISTS logo_image TEXT')
+        else:
+            sscols={r[1] for r in conn.execute('PRAGMA table_info(subscription_signups)').fetchall()}
+            if 'logo_image' not in sscols: conn.execute('ALTER TABLE subscription_signups ADD COLUMN logo_image TEXT')
 
         # Migração v74: integração de e-commerce por empresa e histórico idempotente de pedidos.
         ecommerce_cols=[
