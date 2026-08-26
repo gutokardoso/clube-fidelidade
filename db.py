@@ -420,6 +420,20 @@ def init_db(db_path=None, seed=True):
                 if col not in campaign_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
 
 
+        # Migração v99: assinaturas SaaS / Mercado Pago e cadastros públicos pendentes.
+        billing_cols=[
+            ('subscription_provider','TEXT'),('subscription_id','TEXT'),('subscription_status',"TEXT NOT NULL DEFAULT 'manual'"),
+            ('subscription_started_at','BIGINT'),('subscription_current_period_end','BIGINT'),('subscription_last_payment_at','BIGINT'),
+            ('subscription_next_payment_at','BIGINT'),('subscription_status_updated_at','BIGINT'),('subscription_cancel_at_period_end',"INTEGER NOT NULL DEFAULT 0"),('pending_plan','TEXT')
+        ]
+        if _is_postgres(target):
+            for col,typ in billing_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS {col} {typ}')
+        else:
+            campaign_cols={r['name'] for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()}
+            for col,typ in billing_cols:
+                if col not in campaign_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
+        conn.executescript(("""CREATE TABLE IF NOT EXISTS subscription_signups (id BIGSERIAL PRIMARY KEY, token TEXT NOT NULL UNIQUE, company_name TEXT NOT NULL, responsible_name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT, document TEXT, password_hash TEXT NOT NULL, plan TEXT NOT NULL, loyalty_type TEXT NOT NULL DEFAULT 'stamps', status TEXT NOT NULL DEFAULT 'pending', subscription_id TEXT, created_at BIGINT NOT NULL, provisioned_at BIGINT);""" if _is_postgres(target) else """CREATE TABLE IF NOT EXISTS subscription_signups (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT NOT NULL UNIQUE, company_name TEXT NOT NULL, responsible_name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT, document TEXT, password_hash TEXT NOT NULL, plan TEXT NOT NULL, loyalty_type TEXT NOT NULL DEFAULT 'stamps', status TEXT NOT NULL DEFAULT 'pending', subscription_id TEXT, created_at INTEGER NOT NULL, provisioned_at INTEGER);"""))
+
         # Migração v74: integração de e-commerce por empresa e histórico idempotente de pedidos.
         ecommerce_cols=[
             ('ecommerce_platform',"TEXT NOT NULL DEFAULT 'none'"),('ecommerce_store_url','TEXT'),
@@ -758,7 +772,7 @@ def create_session(conn, user_id: int, ttl=8*60*60):
 def get_session(conn, token: str):
     if not token:
         return None
-    row = conn.execute('''SELECT s.token,s.csrf,s.expires_at,u.id user_id,u.company_id,u.campaign_id,u.name,u.email,u.role,u.active,u.is_client_admin,u.permissions_json,c.name client_name,c.logo_image client_logo_image,c.plan client_plan
+    row = conn.execute('''SELECT s.token,s.csrf,s.expires_at,u.id user_id,u.company_id,u.campaign_id,u.name,u.email,u.role,u.active,u.is_client_admin,u.permissions_json,c.name client_name,c.logo_image client_logo_image,c.plan client_plan,c.subscription_status,c.subscription_next_payment_at,c.subscription_current_period_end,c.pending_plan,c.subscription_cancel_at_period_end
                           FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN campaigns c ON c.id=u.campaign_id WHERE s.token=?''',(token,)).fetchone()
     if not row or row['expires_at'] < now_ts() or not row['active']:
         return None

@@ -1,8 +1,8 @@
-# Fidelizaê! v98
+# Fidelizaê! v99
 
-**Versão atual:** v98
+**Versão atual:** v99
 
-## Novidades da v98
+## Novidades da v99
 
 - Planos Iniciante, Intermediário e PRO com limites e recursos por categoria.
 - Seletor de plano no cadastro/edição de empresas e alteração de plano no Perfil do administrador do cliente.
@@ -249,3 +249,12 @@ META_GRAPH_VERSION=v24.0
 
 ## v88
 Permissões efetivas, validade real de pontos (1–12 meses; padrão 6), aceleradores aplicados, NPS no cartão, observações internas, alertas acionáveis, ciclo de unidades, atribuição financeira de campanhas, compras em selos/pontos, dashboard financeiro, adaptadores de e-commerce, área pessoal do cartão, cupons com desconto calculado, vale-presente enriquecido, remoção do recurso de indicação, modularização inicial, testes/migrações formais, recuperação de senha por token e rate limiting. Cashback permanece reservado para evolução futura.
+
+
+## v99 — Assinaturas self-service
+- Cadastro público direto pelos cards de planos.
+- Plano Iniciante ativa sem pagamento; planos pagos usam Mercado Pago Assinaturas.
+- Webhook confirma a assinatura consultando a API do Mercado Pago antes de liberar acesso.
+- E-mail automático de ativação e credenciais.
+- Upgrade/downgrade integrado ao Perfil; downgrade fica agendado para o fim do ciclo.
+- Variável obrigatória: `MERCADOPAGO_ACCESS_TOKEN`. Configure webhook em `/api/webhooks/mercadopago`.

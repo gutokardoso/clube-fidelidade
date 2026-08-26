@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v98'
+VERSION='v99'
 
 
 def jdump(obj):
@@ -485,6 +485,50 @@ def campaign_plan(conn,campaign_id):
     return normalize_plan(r['plan'] if r else 'beginner')
 def plan_allows(conn,campaign_id,feature):
     return bool(PLAN_FEATURES[campaign_plan(conn,campaign_id)].get(feature))
+
+PLAN_PRICES={'beginner':0.0,'intermediate':49.90,'pro':99.90}
+
+def mp_request(method,path,payload=None):
+    token=os.environ.get('MERCADOPAGO_ACCESS_TOKEN','').strip()
+    if not token: raise RuntimeError('mercadopago_not_configured')
+    data=json.dumps(payload).encode() if payload is not None else None
+    req=urllib.request.Request('https://api.mercadopago.com'+path,data=data,method=method,headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+    try:
+        with urllib.request.urlopen(req,timeout=20) as r:return json.loads(r.read().decode() or '{}')
+    except urllib.error.HTTPError as e:
+        body=e.read().decode(errors='replace')[:1000]; print('[BILLING] MP_ERROR',e.code,body); raise RuntimeError('mercadopago_api_error')
+
+def create_mp_subscription(email,plan,reference):
+    amount=PLAN_PRICES[plan]; base=(os.environ.get('PUBLIC_BASE_URL') or 'https://clube-fidelidade-production.up.railway.app').rstrip('/')
+    return mp_request('POST','/preapproval',{'reason':f'Fidelizaê! {plan.title()}','external_reference':reference,'payer_email':email,'auto_recurring':{'frequency':1,'frequency_type':'months','transaction_amount':amount,'currency_id':'BRL'},'back_url':base+'/signup?payment=return','status':'pending'})
+
+def send_subscription_welcome(name,email,company,plan):
+    cfg=global_email_config()
+    if not email_configured(cfg): return {'sent':False,'reason':'email_not_configured'}
+    base=(os.environ.get('PUBLIC_BASE_URL') or 'https://clube-fidelidade-production.up.railway.app').rstrip('/')
+    labels={'beginner':'Iniciante — Grátis','intermediate':'Intermediário — R$ 49,90/mês','pro':'PRO — R$ 99,90/mês'}
+    msg=EmailMessage();msg['Subject']='Seu Fidelizaê! está pronto 🎉';msg['To']=email
+    msg.set_content(f'Olá, {name}!\n\nA empresa {company} foi ativada no plano {labels.get(plan,plan)}.\nAcesse: {base}/login\nUsuário: {email}\nUse a senha criada no cadastro.\n\nFidelizaê! — Fidelidade que marca pontos.')
+    return send_email_message(msg,cfg)
+
+def provision_signup(conn,row,subscription=None):
+    if row['status']=='active': return None
+    company=conn.execute("SELECT id FROM companies ORDER BY id LIMIT 1").fetchone()
+    if not company: raise RuntimeError('base_company_missing')
+    company_id=company['id']; code=('AUTO'+secrets.token_hex(4)).upper()
+    plan=normalize_plan(row['plan']); loyalty='stamps' if plan=='beginner' else (row['loyalty_type'] or 'stamps')
+    sub=subscription or {}; now=now_ts(); next_ts=None
+    nd=sub.get('next_payment_date')
+    if nd:
+        try: next_ts=int(datetime.fromisoformat(nd.replace('Z','+00:00')).timestamp())
+        except Exception: pass
+    cid=insert_id(conn,"INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,card_theme,plan,loyalty_type,points_spend_cents,subscription_provider,subscription_id,subscription_status,subscription_started_at,subscription_next_payment_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(company_id,code,row['company_name'],'Recompensa do programa',5,'__LOGO__','orange',plan,loyalty,200,'mercadopago' if plan!='beginner' else 'free',row['subscription_id'], 'active' if plan!='beginner' else 'active',now,next_ts,now))
+    uid=insert_id(conn,"INSERT INTO users(company_id,name,email,password_hash,role,active,is_client_admin,campaign_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(company_id,row['responsible_name'],row['email'],row['password_hash'],'attendant',1,1,cid,now))
+    conn.execute("UPDATE subscription_signups SET status='active',provisioned_at=? WHERE id=?",(now,row['id']))
+    audit(conn,company_id,uid,'subscription_signup','campaign',cid,details=plan)
+    try: send_subscription_welcome(row['responsible_name'],row['email'],row['company_name'],plan)
+    except Exception as exc: print('[BILLING] welcome email failed',exc)
+    return cid
 
 CARD_THEMES={
     'green':('#174f3f','#082b25'),
@@ -968,6 +1012,7 @@ class Handler(BaseHTTPRequestHandler):
         path = p.path
         qs = urllib.parse.parse_qs(p.query)
         if path == '/': return self.send_text((STATIC/'index.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION))
+        if path == '/signup': return self.send_text((STATIC/'signup.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION))
         if path == '/auth/meta/callback':
             code=(qs.get('code') or [''])[0].strip()
             error=(qs.get('error_description') or qs.get('error_message') or qs.get('error') or [''])[0].strip()
@@ -1029,7 +1074,7 @@ class Handler(BaseHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
                 if not s: return self.send_json({'ok':False,'authenticated':False})
-                return self.send_json({'ok':True,'authenticated':True,'user':{'id':s['user_id'],'name':s['name'],'email':s['email'],'role':s['role'],'campaign_id':s['campaign_id'],'client_name':s['client_name'],'client_logo_image':s['client_logo_image'],'client_plan':normalize_plan(s['client_plan']),'is_client_admin':bool(s['is_client_admin']),'permissions':session_permissions(rowdict(s))},'csrf':s['csrf']})
+                return self.send_json({'ok':True,'authenticated':True,'user':{'id':s['user_id'],'name':s['name'],'email':s['email'],'role':s['role'],'campaign_id':s['campaign_id'],'client_name':s['client_name'],'client_logo_image':s['client_logo_image'],'client_plan':normalize_plan(s['client_plan']),'subscription_status':s['subscription_status'] or 'manual','subscription_next_payment_at':s['subscription_next_payment_at'],'subscription_current_period_end':s['subscription_current_period_end'],'pending_plan':s['pending_plan'],'is_client_admin':bool(s['is_client_admin']),'permissions':session_permissions(rowdict(s))},'csrf':s['csrf']})
         if path == '/api/wallet/status': return self.send_json({'ok':True,**wallet_status()})
         if path == '/api/campaign/public':
             code=(qs.get('code') or [''])[0].upper().strip()
@@ -1678,6 +1723,42 @@ class Handler(BaseHTTPRequestHandler):
             if path in ['/login','/join']:
                 return self.send_redirect('/login?error=1' if path == '/login' else '/join?error=1')
             return self.send_json({'ok':False,'error':'invalid_json'},400)
+        if path=='/api/public/signup':
+            name=str(payload.get('responsible_name') or '').strip()[:100]; company=str(payload.get('company_name') or '').strip()[:120]; email=normalize_email(payload.get('email')); phone=str(payload.get('phone') or '').strip()[:40]; document=str(payload.get('document') or '').strip()[:30]; password=str(payload.get('password') or ''); plan=normalize_plan(payload.get('plan')); loyalty=str(payload.get('loyalty_type') or 'stamps').lower()
+            if not name or not company or not email or len(password)<10 or plan not in PLAN_PRICES:return self.send_json({'ok':False,'error':'invalid_signup'},400)
+            if plan=='beginner': loyalty='stamps'
+            with connect(DB_PATH) as conn:
+                if conn.execute('SELECT id FROM users WHERE lower(email)=lower(?)',(email,)).fetchone():return self.send_json({'ok':False,'error':'email_exists'},409)
+                token=secrets.token_urlsafe(24); sid=insert_id(conn,'INSERT INTO subscription_signups(token,company_name,responsible_name,email,phone,document,password_hash,plan,loyalty_type,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(token,company,name,email,phone,document,hash_password(password),plan,loyalty,'pending',now_ts()))
+                row=conn.execute('SELECT * FROM subscription_signups WHERE id=?',(sid,)).fetchone()
+                if plan=='beginner':
+                    provision_signup(conn,row); return self.send_json({'ok':True,'active':True,'redirect':'/login'})
+                try: sub=create_mp_subscription(email,plan,'signup:'+token)
+                except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
+                conn.execute('UPDATE subscription_signups SET subscription_id=? WHERE id=?',(sub.get('id'),sid))
+                return self.send_json({'ok':True,'active':False,'checkout_url':sub.get('init_point')})
+        if path=='/api/webhooks/mercadopago':
+            # O webhook nunca confia no payload para ativar acesso: consulta a assinatura na API do Mercado Pago.
+            data=payload.get('data') or {}; sub_id=str(data.get('id') or payload.get('id') or '').strip(); typ=str(payload.get('type') or payload.get('topic') or '')
+            if not sub_id or ('preapproval' not in typ and typ not in ('subscription_preapproval','')): return self.send_json({'ok':True})
+            try: sub=mp_request('GET','/preapproval/'+urllib.parse.quote(sub_id,safe=''))
+            except Exception:return self.send_json({'ok':True})
+            status=str(sub.get('status') or '').lower(); ref=str(sub.get('external_reference') or '')
+            with connect(DB_PATH) as conn:
+                signup=conn.execute('SELECT * FROM subscription_signups WHERE subscription_id=?',(sub_id,)).fetchone()
+                if signup and status=='authorized': provision_signup(conn,signup,sub)
+                camp=conn.execute('SELECT * FROM campaigns WHERE subscription_id=?',(sub_id,)).fetchone()
+                if camp:
+                    mapped='active' if status=='authorized' else ('cancelled' if status=='cancelled' else ('past_due' if status in ('paused','pending') else status))
+                    next_ts=None; nd=sub.get('next_payment_date')
+                    if nd:
+                        try: next_ts=int(datetime.fromisoformat(nd.replace('Z','+00:00')).timestamp())
+                        except Exception: pass
+                    
+                    # Upgrade pendente só é liberado após confirmação authorized do próprio Mercado Pago.
+                    new_plan=camp['pending_plan'] if (mapped=='active' and camp['pending_plan']) else camp['plan']
+                    conn.execute('UPDATE campaigns SET plan=?,pending_plan=?,subscription_status=?,subscription_next_payment_at=?,subscription_status_updated_at=? WHERE id=?',(new_plan,None if mapped=='active' else camp['pending_plan'],mapped,next_ts,now_ts(),camp['id']))
+            return self.send_json({'ok':True})
         if path=='/api/public/contact':
             # Formulário comercial público da landing page. O campo `website` é
             # um honeypot simples para bots; para visitantes reais fica vazio.
@@ -2498,10 +2579,32 @@ class Handler(BaseHTTPRequestHandler):
                 audit(conn,s['company_id'],s['user_id'],'staff_access_update','user',uid,details=json.dumps(allowed),ip_address=self._ip());return self.send_json({'ok':True})
             if path == '/api/client-admin/plan':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
-                plan=normalize_plan(payload.get('plan')); c=conn.execute('SELECT loyalty_type FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone()
-                if plan=='beginner' and c and c['loyalty_type']!='stamps':return self.send_json({'ok':False,'error':'downgrade_requires_stamps'},409)
+                plan=normalize_plan(payload.get('plan')); c=conn.execute('SELECT * FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone(); current=normalize_plan(c['plan'])
+                if plan==current:return self.send_json({'ok':True,'plan':current,'unchanged':True})
+                if plan=='beginner' and c['loyalty_type']!='stamps':return self.send_json({'ok':False,'error':'downgrade_requires_stamps'},409)
                 if plan=='beginner' and conn.execute("SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND status='active'",(s['campaign_id'],)).fetchone()['n']>50:return self.send_json({'ok':False,'error':'downgrade_client_limit'},409)
-                conn.execute('UPDATE campaigns SET plan=? WHERE id=?',(plan,s['campaign_id'])); audit(conn,s['company_id'],s['user_id'],'plan_update','campaign',s['campaign_id'],details=plan,ip_address=self._ip()); return self.send_json({'ok':True,'plan':plan})
+                order={'beginner':0,'intermediate':1,'pro':2}
+                if order[plan]>order[current]:
+                    if not c['subscription_id']:
+                        token='upgrade:'+str(s['campaign_id'])+':'+plan+':'+secrets.token_urlsafe(8)
+                        try: sub=create_mp_subscription(s['email'],plan,token)
+                        except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
+                        conn.execute('UPDATE campaigns SET pending_plan=?,subscription_provider=?,subscription_id=?,subscription_status=? WHERE id=?',(plan,'mercadopago',sub.get('id'),'pending',s['campaign_id']))
+                        return self.send_json({'ok':True,'payment_required':True,'checkout_url':sub.get('init_point'),'plan':current})
+                    try: sub=mp_request('PUT','/preapproval/'+urllib.parse.quote(c['subscription_id'],safe=''),{'auto_recurring':{'transaction_amount':PLAN_PRICES[plan],'currency_id':'BRL'}})
+                    except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
+                    conn.execute('UPDATE campaigns SET plan=?,pending_plan=NULL,subscription_status=? WHERE id=?',(plan,'active' if sub.get('status')=='authorized' else c['subscription_status'],s['campaign_id']))
+                    audit(conn,s['company_id'],s['user_id'],'plan_upgrade','campaign',s['campaign_id'],details=plan,ip_address=self._ip());return self.send_json({'ok':True,'plan':plan})
+                # Downgrade: agenda para o fim do ciclo atual. O plano atual permanece até lá.
+                period_end=c['subscription_next_payment_at'] or (now_ts()+30*86400)
+                if c['subscription_id'] and plan!='beginner':
+                    try: mp_request('PUT','/preapproval/'+urllib.parse.quote(c['subscription_id'],safe=''),{'auto_recurring':{'transaction_amount':PLAN_PRICES[plan],'currency_id':'BRL'}})
+                    except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
+                if c['subscription_id'] and plan=='beginner':
+                    try: mp_request('PUT','/preapproval/'+urllib.parse.quote(c['subscription_id'],safe=''),{'status':'cancelled'})
+                    except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
+                conn.execute('UPDATE campaigns SET pending_plan=?,subscription_current_period_end=?,subscription_cancel_at_period_end=? WHERE id=?',(plan,period_end,1 if plan=='beginner' else 0,s['campaign_id']))
+                audit(conn,s['company_id'],s['user_id'],'plan_downgrade_scheduled','campaign',s['campaign_id'],details=plan,ip_address=self._ip());return self.send_json({'ok':True,'plan':current,'pending_plan':plan,'effective_at':period_end})
             if path == '/api/client-admin/staff/create':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 name=str(payload.get('name','')).strip()[:80]; email=normalize_email(payload.get('email')); password=str(payload.get('password','')).strip(); branch_raw=payload.get('branch_id')
