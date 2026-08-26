@@ -1,8 +1,8 @@
-# Fidelizaê! v107
+# Fidelizaê! v108
 
-**Versão atual:** v107
+**Versão atual:** v108
 
-## Novidades da v107
+## Novidades da v108
 
 - Corrigidos os itens **Editar empresa** e **Excluir conta** no menu Perfil do administrador do cliente: os modais agora abrem, carregam os dados da empresa e executam as ações corretamente.
 - A edição da empresa respeita o plano contratado; por exemplo, o plano Iniciante não permite selecionar Pontos.

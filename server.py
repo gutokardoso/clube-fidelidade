@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v107'
+VERSION='v108'
 
 
 def jdump(obj):
@@ -2834,8 +2834,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
                 c=conn.execute('SELECT * FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
                 if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
-                plan=normalize_plan(c['plan']); name=str(payload.get('name',c['name'])).strip()[:80]; loyalty=str(payload.get('loyalty_type',c['loyalty_type'])).lower();
+                plan=normalize_plan(c['plan']); name=str(payload.get('name',c['name'])).strip()[:80]; code=re.sub(r'[^A-Z0-9_-]','',str(payload.get('code',c['code'] or '')).upper())[:24]; loyalty=str(payload.get('loyalty_type',c['loyalty_type'])).lower();
                 if plan=='beginner':loyalty='stamps'
+                if not name or not code:return self.send_json({'ok':False,'error':'invalid_campaign'},400)
                 if loyalty not in ('stamps','points') or (loyalty=='points' and not PLAN_FEATURES[plan]['points']):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
                 try: points=int(payload.get('points_spend_cents') or c['points_spend_cents'] or 200); goal=int(payload.get('goal') or c['goal'] or 5)
                 except:return self.send_json({'ok':False,'error':'invalid_campaign'},400)
@@ -2847,7 +2848,10 @@ class Handler(BaseHTTPRequestHandler):
                 if payload.get('logo_image'):
                     try:logo=validate_logo_data(payload.get('logo_image'))
                     except ValueError as exc:return self.send_json({'ok':False,'error':str(exc)},400)
-                conn.execute('UPDATE campaigns SET name=?,loyalty_type=?,points_spend_cents=?,goal=?,reward_name=?,card_theme=?,logo_image=COALESCE(?,logo_image) WHERE id=? AND company_id=?',(name,loyalty,points,goal,reward,theme,logo,s['campaign_id'],s['company_id']))
+                
+                try:
+                    conn.execute('UPDATE campaigns SET code=?,name=?,loyalty_type=?,points_spend_cents=?,goal=?,reward_name=?,card_theme=?,logo_image=COALESCE(?,logo_image) WHERE id=? AND company_id=?',(code,name,loyalty,points,goal,reward,theme,logo,s['campaign_id'],s['company_id']))
+                except integrity_errors():return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'client_admin_company_update','campaign',s['campaign_id'],details=f'plan={plan}',ip_address=self._ip());return self.send_json({'ok':True})
             if path == '/api/client-admin/account/delete':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
