@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v103'
+VERSION='v104'
 
 
 def jdump(obj):
@@ -1130,6 +1130,11 @@ class Handler(BaseHTTPRequestHandler):
             }, ensure_ascii=False, default=str), flush=True)
             if status != 'authorized' or not reference.startswith('signup:'):
                 print('[BILLING] MP_RETURN_NOT_ACTIVE status=%s reference_ok=%s' % (status or 'missing', reference.startswith('signup:')), flush=True)
+                # O Mercado Pago pode retornar ao back_url antes de a assinatura mudar de
+                # pending para authorized. Em vez de perder o contexto e voltar ao formulário,
+                # mantemos o usuário numa tela de confirmação que consulta o status novamente.
+                if status == 'pending' and reference.startswith('signup:'):
+                    return self.send_redirect('/signup/payment-pending?preapproval_id='+urllib.parse.quote(preapproval_id,safe=''),302)
                 return self.send_redirect('/signup?payment='+urllib.parse.quote(status or 'pending'),302)
             token=reference.split(':',1)[1]
             with connect(DB_PATH) as conn:
@@ -1138,6 +1143,36 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_redirect('/signup?payment=invalid',302)
                 if signup['status'] != 'active': provision_signup(conn,signup,sub)
             return self.send_redirect('/login?subscription=active',302)
+        if path == '/signup/payment-pending':
+            preapproval_id=(qs.get('preapproval_id') or [''])[0].strip()
+            if not preapproval_id:
+                return self.send_redirect('/signup?payment=missing',302)
+            page=(STATIC/'signup-payment-pending.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION).replace('{{PREAPPROVAL_ID}}',html.escape(preapproval_id,quote=True))
+            return self.send_text(page)
+        if path == '/api/public/signup/payment-status':
+            preapproval_id=(qs.get('preapproval_id') or [''])[0].strip()
+            if not preapproval_id:
+                return self.send_json({'ok':False,'error':'missing_preapproval_id'},400)
+            try:
+                sub=mp_request('GET','/preapproval/'+urllib.parse.quote(preapproval_id,safe=''))
+            except Exception:
+                return self.send_json({'ok':False,'error':'payment_status_unavailable'},503)
+            status=str(sub.get('status') or '').strip().lower()
+            reference=str(sub.get('external_reference') or '').strip()
+            if not reference.startswith('signup:'):
+                return self.send_json({'ok':False,'error':'invalid_reference'},400)
+            token=reference.split(':',1)[1]
+            with connect(DB_PATH) as conn:
+                signup=conn.execute('SELECT * FROM subscription_signups WHERE token=? AND subscription_id=?',(token,preapproval_id)).fetchone()
+                if not signup:
+                    return self.send_json({'ok':False,'error':'signup_not_found'},404)
+                if signup['status']=='active':
+                    return self.send_json({'ok':True,'active':True,'status':'authorized','redirect':'/login?subscription=active'})
+                if status=='authorized':
+                    provision_signup(conn,signup,sub)
+                    print('[BILLING] MP_POLL_ACTIVATED preapproval_id=%s' % preapproval_id, flush=True)
+                    return self.send_json({'ok':True,'active':True,'status':status,'redirect':'/login?subscription=active'})
+            return self.send_json({'ok':True,'active':False,'status':status or 'pending'})
         if path == '/signup': return self.send_text((STATIC/'signup.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION))
         if path == '/auth/meta/callback':
             code=(qs.get('code') or [''])[0].strip()

@@ -1,8 +1,13 @@
-# Fidelizaê! v103
+# Fidelizaê! v104
 
-**Versão atual:** v103
+**Versão atual:** v104
 
-## Novidades da v103
+## Novidades da v104
+
+- Corrigido o retorno assíncrono do Mercado Pago: assinaturas que retornam inicialmente como `pending` agora permanecem em uma tela de confirmação e são verificadas automaticamente até a autorização.
+- Os dados do cadastro permanecem preservados durante a confirmação; o usuário não volta mais para um formulário vazio enquanto o pagamento está pendente.
+- Adicionado endpoint seguro de consulta do status que valida `external_reference` e a assinatura pendente antes de provisionar a conta.
+- Ao receber `authorized`, o cadastro é provisionado e o usuário é redirecionado automaticamente para o login.
 
 - Adicionado diagnóstico seguro do retorno de assinaturas do Mercado Pago (`MP_RETURN`) para registrar status, referência e datas sem expor credenciais.
 - Mantida a correção da rota dedicada `/signup/payment-return` introduzida na v102.
