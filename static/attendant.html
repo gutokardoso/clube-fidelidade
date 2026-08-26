@@ -51,6 +51,60 @@
 const {api,$,idem,deviceId}=Clube;let csrf='',current=null,stream=null,scanTimer=null,customerDirectory=[],customerPage=1;
 const segmentLabels={new:'Novo',active:'Ativo',vip:'VIP',at_risk:'Em risco',inactive60:'Inativo 60d',inactive90:'Inativo 90d',almost_reward:'Quase lá',reward_ready:'Recompensa disponível',birthdays:'Aniversariante'};
 const esc=v=>String(v??'').replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
+function fileToDataUrl(file){return new Promise((resolve,reject)=>{if(!file){resolve(null);return}const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(new Error('file_read_failed'));r.readAsDataURL(file)})}
+function showAccountPanel(id){const el=$(id);if(!el)return;el.classList.remove('hidden');el.setAttribute('aria-hidden','false');document.body.classList.add('modal-open')}
+function hideAccountPanel(id){const el=$(id);if(!el)return;el.classList.add('hidden');el.setAttribute('aria-hidden','true');if(!document.querySelector('.account-popover:not(.hidden)'))document.body.classList.remove('modal-open')}
+async function openCompanyPanel(){
+  if(!window.isClientAdmin)return;
+  const msg=$('#companyEditMsg'); if(msg)msg.innerHTML='';
+  try{
+    const j=await api('/api/client-admin/company'), c=j.company||{}, f=j.features||{};
+    $('#companyName').value=c.name||'';
+    $('#companyLoyalty').value=c.loyalty_type||'stamps';
+    const pointOpt=$('#companyLoyalty')?.querySelector('option[value="points"]');
+    if(pointOpt)pointOpt.disabled=!f.points;
+    if(!f.points)$('#companyLoyalty').value='stamps';
+    $('#companyPoints').value=String(c.points_spend_cents||200);
+    $('#companyGoal').value=String(c.goal||5);
+    $('#companyReward').value=c.reward_name||'';
+    $('#companyTheme').value=c.card_theme||'orange';
+    $('#companyLogo').value='';
+    $('#companyLogoPreview').innerHTML=c.logo_image?`<img src="${esc(c.logo_image)}" alt="Logo atual">`:'<span class="small muted">Sem logo cadastrada</span>';
+    $('#companyPlanNote').textContent=`Plano ${window.clientPlan==='beginner'?'Iniciante':window.clientPlan==='intermediate'?'Intermediário':'PRO'} • exibindo somente recursos disponíveis neste plano.`;
+    updateCompanyEditMode();
+    showAccountPanel('#companyPanel');
+  }catch(e){if(msg)msg.innerHTML=`<div class="notice error">${esc(e.data?.error||e.message)}</div>`;showAccountPanel('#companyPanel')}
+}
+function closeCompanyPanel(){hideAccountPanel('#companyPanel')}
+function updateCompanyEditMode(){const points=$('#companyLoyalty')?.value==='points';$('#companyPointsBox')?.classList.toggle('hidden',!points);$('#companyStampBox')?.classList.toggle('hidden',points)}
+$('#companyLoyalty')?.addEventListener('change',updateCompanyEditMode);
+$('#companyLogo')?.addEventListener('change',async e=>{const f=e.target.files?.[0];if(!f)return;try{const data=await fileToDataUrl(f);$('#companyLogoPreview').innerHTML=`<img src="${data}" alt="Nova logo">`}catch{}});
+$('#companyEditForm')?.addEventListener('submit',async e=>{
+  e.preventDefault(); const btn=e.submitter; if(btn)btn.disabled=true; $('#companyEditMsg').innerHTML='';
+  try{
+    const logo=await fileToDataUrl($('#companyLogo').files?.[0]);
+    const body={name:$('#companyName').value.trim(),loyalty_type:$('#companyLoyalty').value,points_spend_cents:+$('#companyPoints').value,goal:+$('#companyGoal').value,reward_name:$('#companyReward').value.trim(),card_theme:$('#companyTheme').value};
+    if(logo)body.logo_image=logo;
+    await api('/api/client-admin/company/update',{method:'POST',headers:{'X-CSRF-Token':csrf},body:JSON.stringify(body)});
+    $('#companyEditMsg').innerHTML='<div class="notice success">Empresa atualizada com sucesso.</div>';
+    $('#clientTitle').textContent=body.name||$('#clientTitle').textContent;
+    const refreshed=await api('/api/client-admin/company'); const c=refreshed.company||{};
+    if(c.logo_image){$('#clientLogo').src=c.logo_image;$('#clientLogoWrap').classList.remove('hidden');$('#companyLogoPreview').innerHTML=`<img src="${esc(c.logo_image)}" alt="Logo atual">`}
+  }catch(e){const map={plan_feature_not_available:'Este recurso não está disponível no seu plano.',invalid_campaign:'Confira os dados informados.',logo_too_large:'A logo excede o tamanho permitido.',invalid_logo:'Arquivo de logo inválido.'};$('#companyEditMsg').innerHTML=`<div class="notice error">${esc(map[e.data?.error]||e.data?.error||e.message)}</div>`}
+  finally{if(btn)btn.disabled=false}
+});
+function openDeleteAccountPanel(){if(!window.isClientAdmin)return;$('#deleteAccountPassword').value='';$('#deleteAccountMsg').innerHTML='';showAccountPanel('#deleteAccountPanel')}
+function closeDeleteAccountPanel(){hideAccountPanel('#deleteAccountPanel')}
+$('#deleteAccountForm')?.addEventListener('submit',async e=>{
+  e.preventDefault();
+  if(!await Clube.confirmDialog('Tem certeza de que deseja excluir sua conta? A empresa será encerrada e a assinatura vinculada será cancelada.',{title:'Excluir conta',confirmText:'Excluir conta',danger:true}))return;
+  const btn=e.submitter;if(btn)btn.disabled=true;$('#deleteAccountMsg').innerHTML='';
+  try{
+    await api('/api/client-admin/account/delete',{method:'POST',headers:{'X-CSRF-Token':csrf},body:JSON.stringify({password:$('#deleteAccountPassword').value})});
+    location='/login?account=deleted';
+  }catch(e){const map={invalid_password:'Senha incorreta.',forbidden:'Esta ação está disponível apenas para o administrador da empresa.'};$('#deleteAccountMsg').innerHTML=`<div class="notice error">${esc(map[e.data?.error]||e.data?.error||e.message)}</div>`;if(btn)btn.disabled=false}
+});
+['#companyPanel','#deleteAccountPanel'].forEach(sel=>$(sel)?.addEventListener('click',e=>{if(e.target===e.currentTarget){if(sel==='#companyPanel')closeCompanyPanel();else closeDeleteAccountPanel()}}));
 async function boot(){const s=await api('/api/session');if(!s.authenticated||s.user.role!=='attendant'){location='/login';return}if(!s.user.campaign_id){$('#member').innerHTML='<div class="notice error">Este atendente não está vinculado a nenhum cliente. Solicite o ajuste ao administrador Taboo.</div>';return}csrf=s.csrf;$('#clientTitle').textContent=s.user.client_name||'Área do cliente';$('#who').textContent=s.user.name+(s.user.is_client_admin?' • Administrador do cliente':' • Atendente');if(s.user.client_logo_image){$('#clientLogo').src=s.user.client_logo_image;$('#clientLogoWrap').classList.remove('hidden')}window.currentUserId=+s.user.id;window.isClientAdmin=!!s.user.is_client_admin;if(!window.isClientAdmin)$('#planMenuItem')?.classList.add('hidden');window.clientPlan=s.user.client_plan||'pro';window.subscriptionStatus=s.user.subscription_status||'manual';document.body.dataset.plan=window.clientPlan;document.body.classList.toggle('client-admin-mode',window.isClientAdmin);$('#loyalty360Link').textContent=window.isClientAdmin?'Programa de Fidelidade':'Programa de Fidelidade • Consultar';if(window.isClientAdmin){const pro=window.clientPlan==='pro',inter=window.clientPlan==='intermediate';$('#staffAdminLink').classList.remove('hidden');if(pro){$('#onboardingCard').classList.remove('hidden');$('#automationCard').classList.remove('hidden');$('#advancedAdminLink').classList.remove('hidden');loadTemplates()}if(pro||inter)$('#adminReportLink').classList.remove('hidden');if(!pro){$('#messagesCard')?.classList.add('hidden');document.querySelector('a[href="#messagesCard"]')?.classList.add('hidden')}}loadAudit();loadCustomers();loadDashboard();if(window.clientPlan==='pro'){loadMessages();loadAutomations()}if(window.isClientAdmin)loadStaff()}
 async function loadAudit(){const j=await api('/api/attendant/recent');$('#recent').innerHTML=j.transactions.length?`<table class="table"><tr><th>Consumidor</th><th>Ação</th><th>Atendente</th><th>Antes → Depois</th><th>Data</th></tr>${j.transactions.map(t=>`<tr><td>${esc(t.customer_name)}</td><td>${window.loyaltyType==='points'?(t.type==='redeem'?'Resgate de pontos':(t.value>=0?'+'+t.value+' pontos':t.value+' pontos')):(t.type==='stamp'?('+'+t.value+' selo'):t.type==='adjustment'?'Remoção de selo':t.type==='redeem'?'Resgate':esc(t.type))}</td><td>${esc(t.user_name||'Sistema')}</td><td>${t.previous_progress} → ${t.new_progress}</td><td>${Clube.fmtDate(t.created_at)}</td></tr>`).join('')}</table>`:'<p class="muted">Sem operações registradas.</p>'}
 async function loadCustomers(){try{const j=await api('/api/attendant/customers');customerDirectory=j.customers||[];window.loyaltyType=customerDirectory[0]?.loyalty_type||window.loyaltyType||'stamps';$('#whatsappCard').classList.toggle('hidden',!j.whatsapp_configured);$('#emailCard').classList.toggle('hidden',!j.email_configured);$('#communicationGrid').classList.toggle('hidden',!j.whatsapp_configured&&!j.email_configured);renderCustomerList();const withPhone=customerDirectory.filter(c=>c.phone);$('#waRecipient').innerHTML='<option value="all">Todos os clientes</option><option value="segment:birthdays">Aniversariantes do mês</option><option value="segment:inactive30">Inativos há 30 dias</option><option value="segment:reward_ready">Com recompensa disponível</option>'+withPhone.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');const withEmail=customerDirectory.filter(c=>c.email);$('#emailRecipient').innerHTML='<option value="all">Todos os clientes</option><option value="segment:birthdays">Aniversariantes do mês</option><option value="segment:inactive30">Inativos há 30 dias</option><option value="segment:reward_ready">Com recompensa disponível</option>'+withEmail.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');const b=j.birthdays||[];$('#birthdays').innerHTML=b.length?`<table class="table"><tr><th>Data</th><th>Nome</th><th>Celular</th></tr>${b.map(c=>`<tr><td>${esc(c.birth_date.slice(8,10)+'/'+c.birth_date.slice(5,7))}</td><td>${esc(c.name)}</td><td>${esc(formatPhone(c.phone))}</td></tr>`).join('')}</table>`:'<p class="muted">Nenhum aniversariante neste mês.</p>';$('#whatsappForm').dataset.cloud=j.whatsapp_cloud?'1':'0'}catch(e){$('#customerList').innerHTML='<div class="notice error">Não foi possível carregar os clientes.</div>';$('#birthdays').innerHTML='<div class="notice error">Não foi possível carregar os clientes.</div>';$('#waRecipient').innerHTML='<option value="">Erro ao carregar</option>';$('#emailRecipient').innerHTML='<option value="">Erro ao carregar</option>'}}

@@ -1,8 +1,13 @@
-# Fidelizaê! v106
+# Fidelizaê! v107
 
-**Versão atual:** v106
+**Versão atual:** v107
 
-## Novidades da v106
+## Novidades da v107
+
+- Corrigidos os itens **Editar empresa** e **Excluir conta** no menu Perfil do administrador do cliente: os modais agora abrem, carregam os dados da empresa e executam as ações corretamente.
+- A edição da empresa respeita o plano contratado; por exemplo, o plano Iniciante não permite selecionar Pontos.
+- No Painel Fidelizaê!, a ação visível passou de **Arquivar** para **Excluir empresa** e, após a exclusão, a empresa sai da lista ativa.
+- Os conteúdos de **Detalhes** e **Editar** no Painel Fidelizaê! permanecem em sobreposição modal, sem deslocar a página.
 
 - **Produção protegida contra pagador de teste:** `MERCADOPAGO_TEST_PAYER_EMAIL` só é usado quando `APP_ENV` estiver em ambiente de teste/desenvolvimento. Em `production`, o Mercado Pago recebe sempre o e-mail real informado pelo cliente no cadastro.
 - Isso permite manter a variável de teste cadastrada sem risco de ela substituir o pagador de uma assinatura real; ainda assim, recomenda-se removê-la do Railway ao entrar em produção.
