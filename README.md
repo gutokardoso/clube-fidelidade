@@ -1,8 +1,15 @@
-# Fidelizaê! v97
+# Fidelizaê! v98
 
-**Versão atual:** v97
+**Versão atual:** v98
 
-## Novidades da v97
+## Novidades da v98
+
+- Planos Iniciante, Intermediário e PRO com limites e recursos por categoria.
+- Seletor de plano no cadastro/edição de empresas e alteração de plano no Perfil do administrador do cliente.
+- Landing page com cards e tabela comparativa dos três planos.
+- Limites de 50 clientes/1 atendente no Iniciante e 5 atendentes no Intermediário.
+- Recursos avançados e comunicação visíveis apenas no PRO.
+
 
 - Botões **Escanear QR** e **Parar câmera** mantêm a altura padrão mesmo quando o painel lateral cresce.
 - Central de auditoria traduz detalhes do teste de WhatsApp e oculta `message_id`/códigos técnicos da interface.
