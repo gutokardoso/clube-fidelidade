@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v104'
+VERSION='v105'
 
 
 def jdump(obj):
@@ -505,11 +505,18 @@ def mp_request(method,path,payload=None):
 
 def create_mp_subscription(email,plan,reference):
     amount=PLAN_PRICES[plan]; base=(os.environ.get('PUBLIC_BASE_URL') or 'https://clube-fidelidade-production.up.railway.app').rstrip('/')
-    # Em testes do Mercado Pago, o pagador também precisa ser um usuário de teste.
-    # O e-mail cadastral do Fidelizaê! continua intacto; somente o payer_email enviado
-    # ao Mercado Pago pode ser sobrescrito por variável de ambiente. Em produção,
-    # basta não definir MERCADOPAGO_TEST_PAYER_EMAIL para usar o e-mail real.
-    payer_email=(os.environ.get('MERCADOPAGO_TEST_PAYER_EMAIL') or '').strip() or str(email or '').strip()
+    # O payer de teste só pode substituir o e-mail real fora de produção.
+    # Isso evita que MERCADOPAGO_TEST_PAYER_EMAIL, deixado por engano no Railway,
+    # faça uma venda real tentar cobrar uma conta de teste do Mercado Pago.
+    environment=(os.environ.get('APP_ENV') or 'production').strip().lower()
+    test_payer=(os.environ.get('MERCADOPAGO_TEST_PAYER_EMAIL') or '').strip()
+    test_environments={'test','testing','development','dev','staging','sandbox'}
+    if test_payer and environment in test_environments:
+        payer_email=test_payer
+    else:
+        payer_email=str(email or '').strip()
+        if test_payer and environment not in test_environments:
+            print(f'[BILLING] TEST_PAYER_IGNORED environment={environment}')
     return mp_request('POST','/preapproval',{'reason':f'Fidelizaê! {plan.title()}','external_reference':reference,'payer_email':payer_email,'auto_recurring':{'frequency':1,'frequency_type':'months','transaction_amount':amount,'currency_id':'BRL'},'back_url':base+'/signup/payment-return','status':'pending'})
 
 

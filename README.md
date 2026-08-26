@@ -1,8 +1,11 @@
-# Fidelizaê! v104
+# Fidelizaê! v105
 
-**Versão atual:** v104
+**Versão atual:** v105
 
-## Novidades da v104
+## Novidades da v105
+
+- **Produção protegida contra pagador de teste:** `MERCADOPAGO_TEST_PAYER_EMAIL` só é usado quando `APP_ENV` estiver em ambiente de teste/desenvolvimento. Em `production`, o Mercado Pago recebe sempre o e-mail real informado pelo cliente no cadastro.
+- Isso permite manter a variável de teste cadastrada sem risco de ela substituir o pagador de uma assinatura real; ainda assim, recomenda-se removê-la do Railway ao entrar em produção.
 
 - Corrigido o retorno assíncrono do Mercado Pago: assinaturas que retornam inicialmente como `pending` agora permanecem em uma tela de confirmação e são verificadas automaticamente até a autorização.
 - Os dados do cadastro permanecem preservados durante a confirmação; o usuário não volta mais para um formulário vazio enquanto o pagamento está pendente.
