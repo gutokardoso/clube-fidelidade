@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v100'
+VERSION='v101'
 
 
 def jdump(obj):
@@ -505,7 +505,12 @@ def mp_request(method,path,payload=None):
 
 def create_mp_subscription(email,plan,reference):
     amount=PLAN_PRICES[plan]; base=(os.environ.get('PUBLIC_BASE_URL') or 'https://clube-fidelidade-production.up.railway.app').rstrip('/')
-    return mp_request('POST','/preapproval',{'reason':f'Fidelizaê! {plan.title()}','external_reference':reference,'payer_email':email,'auto_recurring':{'frequency':1,'frequency_type':'months','transaction_amount':amount,'currency_id':'BRL'},'back_url':base+'/signup?payment=return','status':'pending'})
+    # Em testes do Mercado Pago, o pagador também precisa ser um usuário de teste.
+    # O e-mail cadastral do Fidelizaê! continua intacto; somente o payer_email enviado
+    # ao Mercado Pago pode ser sobrescrito por variável de ambiente. Em produção,
+    # basta não definir MERCADOPAGO_TEST_PAYER_EMAIL para usar o e-mail real.
+    payer_email=(os.environ.get('MERCADOPAGO_TEST_PAYER_EMAIL') or '').strip() or str(email or '').strip()
+    return mp_request('POST','/preapproval',{'reason':f'Fidelizaê! {plan.title()}','external_reference':reference,'payer_email':payer_email,'auto_recurring':{'frequency':1,'frequency_type':'months','transaction_amount':amount,'currency_id':'BRL'},'back_url':base+'/signup?payment=return','status':'pending'})
 
 
 def _mp_timestamp(value):

@@ -420,7 +420,7 @@ def init_db(db_path=None, seed=True):
                 if col not in campaign_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
 
 
-        # Migração v100: assinaturas SaaS / Mercado Pago, troca segura de plano e cadastros públicos pendentes.
+        # Migração v101: assinaturas SaaS / Mercado Pago, troca segura de plano e cadastros públicos pendentes.
         billing_cols=[
             ('subscription_provider','TEXT'),('subscription_id','TEXT'),('subscription_status',"TEXT NOT NULL DEFAULT 'manual'"),
             ('subscription_started_at','BIGINT'),('subscription_current_period_end','BIGINT'),('subscription_last_payment_at','BIGINT'),

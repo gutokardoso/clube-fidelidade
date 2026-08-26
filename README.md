@@ -1,8 +1,11 @@
-# Fidelizaê! v100
+# Fidelizaê! v101
 
-**Versão atual:** v100
+**Versão atual:** v101
 
-## Novidades da v100
+## Novidades da v101
+
+- Testes de Assinaturas do Mercado Pago agora podem usar um `payer_email` de teste separado do e-mail cadastral, via `MERCADOPAGO_TEST_PAYER_EMAIL`.
+- Em produção, sem essa variável, o e-mail real do cadastro continua sendo enviado normalmente ao Mercado Pago.
 
 - Fluxo de assinatura do Mercado Pago endurecido para upgrades/downgrades sem antecipar troca de recursos.
 - Upgrades pagos agora criam uma nova assinatura pendente e só liberam o novo plano após autorização confirmada via webhook.
