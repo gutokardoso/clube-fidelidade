@@ -1,9 +1,12 @@
-# Fidelizaê! v110
+# Fidelizaê! v111
 
-**Versão atual:** v110
+**Versão atual:** v111
 
-## Novidades da v110
+## Novidades da v111
 
+- Página inicial: removido o botão “Ver como funciona” do hero.
+- Texto atualizado para “Mais que um cartão fidelidade.”
+- Título de planos quebrado em duas linhas: “Escolha o plano ideal” / “para o seu negócio.”
 - A composição do celular criada em HTML/CSS na seção principal foi substituída pela imagem `static/iphone.png` enviada pelo usuário.
 - Os dois cards flutuantes do hero foram preservados nas mesmas posições e continuam sobrepostos ao celular.
 - Mantida a responsividade do hero em desktop, tablet e mobile.

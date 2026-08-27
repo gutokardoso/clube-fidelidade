@@ -332,7 +332,7 @@ body:has(#editClientCard.manager-inline-modal:not(.hidden))::before,body:has(#cl
 .pro-history-box p{margin:8px 0}
 @media(max-width:640px){.pro-member-grid{grid-template-columns:1fr}}
 
-/* v110: hero usa a imagem real do celular, preservando os dois cards flutuantes */
+/* v111: ajustes de conteúdo da landing; hero mantém a imagem real do celular e os dois cards flutuantes */
 .landing-phone-image{
   position:relative;
   z-index:3;
