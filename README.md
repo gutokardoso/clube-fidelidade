@@ -1,6 +1,24 @@
-# Fidelizaê! v112
+# Fidelizaê! v113
 
-**Versão atual:** v112
+**Versão atual:** v113
+
+## Novidades da v113
+
+- Domínios oficiais de produção consolidados: `https://www.fidelizae.com.br` para o site institucional e `https://app.fidelizae.com.br` para a plataforma.
+- Removidos os fallbacks públicos legados que apontavam para `clube-fidelidade-production.up.railway.app`.
+- Recuperação de senha, retorno do Mercado Pago, e-mails de boas-vindas, links de acesso e URLs públicas de Wallet passam a usar `https://app.fidelizae.com.br` como fallback de produção.
+- Os links **Acesso da equipe** e **Acessar plataforma** do site institucional agora levam explicitamente a `https://app.fidelizae.com.br/login`.
+- Integrações que usam `PUBLIC_BASE_URL`/`CLUBE_PUBLIC_URL` (incluindo callback da Meta, webhook de e-commerce e URLs públicas de Wallet) permanecem configuráveis por variável de ambiente.
+
+### Variáveis recomendadas no Railway para produção
+
+```
+PUBLIC_BASE_URL=https://app.fidelizae.com.br
+CLUBE_PUBLIC_URL=https://app.fidelizae.com.br
+CLUBE_LOGIN_URL=https://app.fidelizae.com.br/login
+```
+
+O domínio gerado `*.up.railway.app` continua válido apenas como endereço técnico do serviço e não é mais usado como URL pública padrão pelo código.
 
 ## Novidades da v112
 

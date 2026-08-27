@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v112'
+VERSION='v113'
 
 
 def jdump(obj):
@@ -464,7 +464,7 @@ def send_campaign_email(to_email, to_name, message, image_data=None, subject='Me
 def send_password_recovery_email(email, reset_token, smtp_config=None):
     if not email_configured(smtp_config):
         return {'sent':False,'reason':'smtp_not_configured'}
-    base=(os.environ.get('PUBLIC_BASE_URL') or 'https://clube-fidelidade-production.up.railway.app').rstrip('/')
+    base=(os.environ.get('PUBLIC_BASE_URL') or 'https://app.fidelizae.com.br').rstrip('/')
     reset_url=base+'/reset-password?token='+urllib.parse.quote(reset_token)
     msg=EmailMessage(); msg['Subject']='Redefinição de senha • Fidelizaê!'; msg['To']=email
     msg.set_content('Recebemos uma solicitação para redefinir sua senha no Fidelizaê!.\n\nAbra o link abaixo (válido por 30 minutos):\n'+reset_url+'\n\nSe você não solicitou a alteração, ignore esta mensagem.')
@@ -504,7 +504,7 @@ def mp_request(method,path,payload=None):
 
 
 def create_mp_subscription(email,plan,reference):
-    amount=PLAN_PRICES[plan]; base=(os.environ.get('PUBLIC_BASE_URL') or 'https://clube-fidelidade-production.up.railway.app').rstrip('/')
+    amount=PLAN_PRICES[plan]; base=(os.environ.get('PUBLIC_BASE_URL') or 'https://app.fidelizae.com.br').rstrip('/')
     # O payer de teste só pode substituir o e-mail real fora de produção.
     # Isso evita que MERCADOPAGO_TEST_PAYER_EMAIL, deixado por engano no Railway,
     # faça uma venda real tentar cobrar uma conta de teste do Mercado Pago.
@@ -560,7 +560,7 @@ def validate_mp_webhook_signature(headers,query):
 def send_subscription_welcome(name,email,company,plan):
     cfg=global_email_config()
     if not email_configured(cfg): return {'sent':False,'reason':'email_not_configured'}
-    base=(os.environ.get('PUBLIC_BASE_URL') or 'https://clube-fidelidade-production.up.railway.app').rstrip('/')
+    base=(os.environ.get('PUBLIC_BASE_URL') or 'https://app.fidelizae.com.br').rstrip('/')
     labels={'beginner':'Iniciante — Grátis','intermediate':'Intermediário — R$ 49,90/mês','pro':'PRO — R$ 99,90/mês'}
     msg=EmailMessage();msg['Subject']='Seu Fidelizaê! está pronto 🎉';msg['To']=email
     msg.set_content(f'Olá, {name}!\n\nA empresa {company} foi ativada no plano {labels.get(plan,plan)}.\nAcesse: {base}/login\nUsuário: {email}\nUse a senha criada no cadastro.\n\nFidelizaê! — Fidelidade que marca pontos.')
@@ -640,7 +640,7 @@ def send_customer_welcome_email(name, email, client_name, public_id, campaign, e
     """Envia o cartão recém-criado usando exclusivamente a integração do cliente."""
     if not email_configured(email_config):
         return {'sent':False,'reason':'email_provider_not_configured','skipped':True}
-    base_url=(os.environ.get('CLUBE_PUBLIC_URL') or 'https://clube-fidelidade-production.up.railway.app').strip().rstrip('/')
+    base_url=(os.environ.get('CLUBE_PUBLIC_URL') or 'https://app.fidelizae.com.br').strip().rstrip('/')
     card_url=f'{base_url}/card?id={urllib.parse.quote(public_id)}'
     card_code=f'CLUBE:{public_id}'
     qr_url=f'{base_url}/api/qr?data={urllib.parse.quote(card_code, safe="")}'
@@ -695,7 +695,7 @@ def send_customer_welcome_email(name, email, client_name, public_id, campaign, e
 def send_attendant_welcome_email(name, email, password, client_name, smtp_config=None):
     if not email_configured(smtp_config):
         return {'sent':False,'reason':'smtp_not_configured'}
-    login_url=os.environ.get('CLUBE_LOGIN_URL','https://clube-fidelidade-production.up.railway.app/login').strip()
+    login_url=os.environ.get('CLUBE_LOGIN_URL','https://app.fidelizae.com.br/login').strip()
     msg=EmailMessage()
     msg['Subject']='Acesso ao Clube Fidelidade'
     msg['To']=email
