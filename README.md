@@ -1,8 +1,8 @@
-# Fidelizaê! v111
+# Fidelizaê! v112
 
-**Versão atual:** v111
+**Versão atual:** v112
 
-## Novidades da v111
+## Novidades da v112
 
 - Página inicial: removido o botão “Ver como funciona” do hero.
 - Texto atualizado para “Mais que um cartão fidelidade.”

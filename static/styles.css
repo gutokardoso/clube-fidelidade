@@ -332,7 +332,7 @@ body:has(#editClientCard.manager-inline-modal:not(.hidden))::before,body:has(#cl
 .pro-history-box p{margin:8px 0}
 @media(max-width:640px){.pro-member-grid{grid-template-columns:1fr}}
 
-/* v111: ajustes de conteúdo da landing; hero mantém a imagem real do celular e os dois cards flutuantes */
+/* v112: ajustes de conteúdo da landing; hero mantém a imagem real do celular e os dois cards flutuantes */
 .landing-phone-image{
   position:relative;
   z-index:3;
@@ -348,4 +348,10 @@ body:has(#editClientCard.manager-inline-modal:not(.hidden))::before,body:has(#cl
 }
 @media(max-width:560px){
   .landing-phone-image{width:308px}
+}
+
+/* v112: leitor QR compatível com iPhone + menu móvel não fixo */
+@media(max-width:800px){
+  .workspace-nav{position:static!important;top:auto!important;z-index:auto!important;}
+  .premium-section{scroll-margin-top:20px;}
 }
