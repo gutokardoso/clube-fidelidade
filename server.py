@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v114'
+VERSION='v115'
 
 
 def jdump(obj):
@@ -503,6 +503,35 @@ def mp_request(method,path,payload=None):
         body=e.read().decode(errors='replace')[:1000]; print('[BILLING] MP_ERROR',e.code,body); raise RuntimeError('mercadopago_api_error')
 
 
+def _mp_subscription_diagnostic(sub, event='MP_SUBSCRIPTION'):
+    """Registra somente metadados não secretos úteis ao diagnóstico de Assinaturas.
+
+    Nunca inclui payer_email, access token, dados do cartão, URL completa do checkout ou
+    qualquer segredo. IDs de conta/cartão são reduzidos a flags de presença.
+    """
+    sub=sub if isinstance(sub,dict) else {}
+    recurring=sub.get('auto_recurring') if isinstance(sub.get('auto_recurring'),dict) else {}
+    safe={
+        'id': str(sub.get('id') or '') or None,
+        'status': str(sub.get('status') or '') or None,
+        'reason': str(sub.get('reason') or '')[:120] or None,
+        'external_reference': str(sub.get('external_reference') or '')[:160] or None,
+        'init_point_present': bool(sub.get('init_point')),
+        'payer_id_present': bool(sub.get('payer_id')),
+        'card_id_present': bool(sub.get('card_id')),
+        'payment_method_id': str(sub.get('payment_method_id') or '')[:60] or None,
+        'frequency': recurring.get('frequency'),
+        'frequency_type': recurring.get('frequency_type'),
+        'transaction_amount': recurring.get('transaction_amount'),
+        'currency_id': recurring.get('currency_id'),
+        'date_created': sub.get('date_created'),
+        'last_modified': sub.get('last_modified'),
+        'next_payment_date': sub.get('next_payment_date'),
+    }
+    print('[BILLING] '+event+' '+json.dumps(safe,ensure_ascii=False,default=str),flush=True)
+    return safe
+
+
 def create_mp_subscription(email,plan,reference):
     amount=PLAN_PRICES[plan]; base=(os.environ.get('PUBLIC_BASE_URL') or 'https://app.fidelizae.com.br').rstrip('/')
     # O payer de teste só pode substituir o e-mail real fora de produção.
@@ -517,7 +546,18 @@ def create_mp_subscription(email,plan,reference):
         payer_email=str(email or '').strip()
         if test_payer and environment not in test_environments:
             print(f'[BILLING] TEST_PAYER_IGNORED environment={environment}')
-    return mp_request('POST','/preapproval',{'reason':f'Fidelizaê! {plan.title()}','external_reference':reference,'payer_email':payer_email,'auto_recurring':{'frequency':1,'frequency_type':'months','transaction_amount':amount,'currency_id':'BRL'},'back_url':base+'/signup/payment-return','status':'pending'})
+    sub=mp_request('POST','/preapproval',{'reason':f'Fidelizaê! {plan.title()}','external_reference':reference,'payer_email':payer_email,'auto_recurring':{'frequency':1,'frequency_type':'months','transaction_amount':amount,'currency_id':'BRL'},'back_url':base+'/signup/payment-return','status':'pending'})
+    _mp_subscription_diagnostic(sub,'MP_CREATE_RESPONSE')
+    # Uma leitura imediata do recurso ajuda a identificar diferenças entre a resposta do POST
+    # e o estado efetivamente persistido pelo Mercado Pago. Falhas aqui não quebram o checkout.
+    sub_id=str(sub.get('id') or '').strip()
+    if sub_id:
+        try:
+            fresh=mp_request('GET','/preapproval/'+urllib.parse.quote(sub_id,safe=''))
+            _mp_subscription_diagnostic(fresh,'MP_CREATE_STATE')
+        except Exception as exc:
+            print('[BILLING] MP_CREATE_STATE_UNAVAILABLE type=%s' % type(exc).__name__,flush=True)
+    return sub
 
 
 def _mp_timestamp(value):
@@ -1166,6 +1206,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({'ok':False,'error':'payment_status_unavailable'},503)
             status=str(sub.get('status') or '').strip().lower()
             reference=str(sub.get('external_reference') or '').strip()
+            _mp_subscription_diagnostic(sub,'MP_STATUS_POLL')
             if not reference.startswith('signup:'):
                 return self.send_json({'ok':False,'error':'invalid_reference'},400)
             token=reference.split(':',1)[1]

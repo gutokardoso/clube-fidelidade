@@ -1,6 +1,14 @@
-# Fidelizaê! v114
+# Fidelizaê! v115
 
-**Versão atual:** v114
+**Versão atual:** v115
+
+
+## Novidades da v115
+
+- **Diagnóstico seguro de Assinaturas do Mercado Pago:** ao criar uma assinatura, o servidor registra `MP_CREATE_RESPONSE` e consulta imediatamente o recurso para registrar `MP_CREATE_STATE`.
+- Os logs mostram apenas metadados necessários ao diagnóstico: `id`, `status`, motivo, referência externa, presença de `init_point`/pagador/cartão, `payment_method_id`, recorrência e datas. **E-mail do pagador, Access Token, dados do cartão e URL completa do checkout não são registrados.**
+- A consulta de status da tela de pagamento pendente também registra `MP_STATUS_POLL`, permitindo comparar a evolução do mesmo `preapproval`.
+- A leitura diagnóstica adicional do Mercado Pago é *best effort*: se falhar, o checkout continua funcionando normalmente.
 
 ## Novidades da v114
 
