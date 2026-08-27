@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v113'
+VERSION='v114'
 
 
 def jdump(obj):
@@ -2861,8 +2861,17 @@ class Handler(BaseHTTPRequestHandler):
                 if not u or not verify_password(password,u['password_hash']):return self.send_json({'ok':False,'error':'invalid_password'},403)
                 c=conn.execute('SELECT subscription_id FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone(); sid=c['subscription_id'] if c else None
                 conn.execute('UPDATE campaigns SET active=0,subscription_status=? WHERE id=?',('cancelled',s['campaign_id']))
-                conn.execute('UPDATE users SET active=0 WHERE campaign_id=?',(s['campaign_id'],)); conn.execute('DELETE FROM sessions WHERE user_id=?',(s['user_id'],))
-                audit(conn,s['company_id'],s['user_id'],'client_admin_account_delete','campaign',s['campaign_id'],ip_address=self._ip())
+                # Encerra os acessos e libera os e-mails para um cadastro futuro sem apagar
+                # os IDs históricos usados por auditoria/transações. O endereço original não
+                # permanece na tabela users e, portanto, não bloqueia a restrição UNIQUE(email).
+                deleted_at=now_ts()
+                campaign_users=conn.execute('SELECT id FROM users WHERE campaign_id=?',(s['campaign_id'],)).fetchall()
+                for deleted_user in campaign_users:
+                    uid=int(deleted_user['id'])
+                    tombstone=f'deleted-{uid}-{deleted_at}-{secrets.token_hex(4)}@deleted.invalid'
+                    conn.execute('UPDATE users SET active=0,email=?,password_hash=? WHERE id=?',(tombstone,hash_password(secrets.token_urlsafe(32)),uid))
+                    conn.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
+                audit(conn,s['company_id'],s['user_id'],'client_admin_account_delete','campaign',s['campaign_id'],details='emails_released',ip_address=self._ip())
                 if sid:_best_effort_cancel_subscription(sid)
                 return self.send_json({'ok':True})
             if path == '/api/client-admin/staff/create':

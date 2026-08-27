@@ -1,8 +1,10 @@
-# Fidelizaê! v113
+# Fidelizaê! v114
 
-**Versão atual:** v113
+**Versão atual:** v114
 
-## Novidades da v113
+## Novidades da v114
+
+- Exclusão de conta agora libera os e-mails dos usuários encerrados para novo cadastro, preservando referências históricas de auditoria.
 
 - Domínios oficiais de produção consolidados: `https://www.fidelizae.com.br` para o site institucional e `https://app.fidelizae.com.br` para a plataforma.
 - Removidos os fallbacks públicos legados que apontavam para `clube-fidelidade-production.up.railway.app`.
