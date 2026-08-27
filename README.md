@@ -1,6 +1,13 @@
-# Fidelizaê! v109
+# Fidelizaê! v110
 
-**Versão atual:** v109
+**Versão atual:** v110
+
+## Novidades da v110
+
+- A composição do celular criada em HTML/CSS na seção principal foi substituída pela imagem `static/iphone.png` enviada pelo usuário.
+- Os dois cards flutuantes do hero foram preservados nas mesmas posições e continuam sobrepostos ao celular.
+- Mantida a responsividade do hero em desktop, tablet e mobile.
+- Mantidas todas as funcionalidades da v109.
 
 ## Novidades da v109
 
