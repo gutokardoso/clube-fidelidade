@@ -1,17 +1,29 @@
-# Fidelizaê! v118
+# Fidelizaê! v120
 
-## v118 — aprovação Mercado Pago e proteção contra tentativas duplicadas
+## v120 — cancelamento de renovação e encerramento seguro da conta
 
-- Adicionada coleta do Device ID pelo script oficial de segurança do Mercado Pago na tela de cadastro/checkout.
-- O Device ID é encaminhado ao Mercado Pago via header `X-meli-session-id` e não é persistido nem exibido em logs.
-- Tentativas de assinatura pendentes criadas nos últimos 15 minutos podem reutilizar o checkout existente, evitando múltiplas assinaturas idênticas em sequência.
-- Webhooks `subscription_authorized_payment` agora são consultados na API e registram apenas metadados seguros de status/rejeição para diagnóstico.
-- Mantido o fluxo oficial de assinatura `preapproval` pendente e todos os ajustes visuais da v117.
+- Perfil > Plano e cobrança mostra modalidade, valor, próxima cobrança, compromisso e situação da renovação.
+- Mensal: cancelar renovação interrompe a assinatura no Mercado Pago e preserva o acesso até o fim do período já pago.
+- Anual à vista: cancelar renovação impede a próxima cobrança anual e preserva o acesso até o fim dos 12 meses já pagos.
+- Anual parcelado: cancelar renovação mantém as parcelas do compromisso atual e impede um novo ciclo anual; após 12 pagamentos aprovados a assinatura remota é cancelada.
+- Excluir conta cancela cobranças remotas antes de remover os acessos. Durante compromisso anual parcelado, a exclusão é bloqueada até o fim do contrato para não cobrar por uma conta já inacessível.
+- Ao término de um período não renovado, o acesso é encerrado sem apagar o histórico financeiro/auditoria.
 
-**Versão atual:** v118
+## v119 — contratação mensal e anual por plano
+
+- A página de cadastro não pede mais para escolher novamente o plano clicado na landing page; o plano selecionado aparece como informação fixa.
+- Intermediário: Mensal R$ 49,90/mês; Anual parcelado R$ 44,90/mês por 12 meses; Anual à vista R$ 515,00.
+- PRO: Mensal R$ 99,90/mês; Anual parcelado R$ 89,90/mês por 12 meses; Anual à vista R$ 1.020,00.
+- Planos anuais exibem claramente o compromisso de 12 meses e a política de não cancelamento antecipado/estorno, ressalvados direitos legais aplicáveis.
+- O backend grava a modalidade de cobrança, valor contratado e término do compromisso anual.
+- Cobrança anual à vista usa recorrência de 12 meses no Mercado Pago; anual parcelado mantém cobrança mensal com preço reduzido e compromisso anual registrado.
+- Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
+- Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
+
+**Versão atual:** v120
 
 
-## Novidades da v118
+## Novidades da v117
 
 - Landing page atualizada com as novas imagens reais fornecidas para o celular do hero e para a seção de experiência; os ajustes mobile da v116 foram preservados.
 

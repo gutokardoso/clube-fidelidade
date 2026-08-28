@@ -436,9 +436,31 @@ def init_db(db_path=None, seed=True):
         conn.executescript(("""CREATE TABLE IF NOT EXISTS subscription_signups (id BIGSERIAL PRIMARY KEY, token TEXT NOT NULL UNIQUE, company_name TEXT NOT NULL, responsible_name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT, document TEXT, password_hash TEXT NOT NULL, plan TEXT NOT NULL, loyalty_type TEXT NOT NULL DEFAULT 'stamps', status TEXT NOT NULL DEFAULT 'pending', subscription_id TEXT, created_at BIGINT NOT NULL, provisioned_at BIGINT);""" if _is_postgres(target) else """CREATE TABLE IF NOT EXISTS subscription_signups (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT NOT NULL UNIQUE, company_name TEXT NOT NULL, responsible_name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT, document TEXT, password_hash TEXT NOT NULL, plan TEXT NOT NULL, loyalty_type TEXT NOT NULL DEFAULT 'stamps', status TEXT NOT NULL DEFAULT 'pending', subscription_id TEXT, created_at INTEGER NOT NULL, provisioned_at INTEGER);"""))
         if _is_postgres(target):
             conn.execute('ALTER TABLE subscription_signups ADD COLUMN IF NOT EXISTS logo_image TEXT')
+            conn.execute("ALTER TABLE subscription_signups ADD COLUMN IF NOT EXISTS billing_option TEXT NOT NULL DEFAULT 'monthly'")
+            conn.execute('ALTER TABLE subscription_signups ADD COLUMN IF NOT EXISTS billing_amount NUMERIC')
         else:
             sscols={r[1] for r in conn.execute('PRAGMA table_info(subscription_signups)').fetchall()}
             if 'logo_image' not in sscols: conn.execute('ALTER TABLE subscription_signups ADD COLUMN logo_image TEXT')
+            if 'billing_option' not in sscols: conn.execute("ALTER TABLE subscription_signups ADD COLUMN billing_option TEXT NOT NULL DEFAULT 'monthly'")
+            if 'billing_amount' not in sscols: conn.execute('ALTER TABLE subscription_signups ADD COLUMN billing_amount NUMERIC')
+
+        # Migração v119: modalidade de cobrança e compromisso anual.
+        commitment_cols=[('billing_option',"TEXT NOT NULL DEFAULT 'monthly'"),('billing_amount','NUMERIC'),('commitment_until','BIGINT')]
+        if _is_postgres(target):
+            for col,typ in commitment_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS {col} {typ}')
+        else:
+            ccols={r['name'] for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()}
+            for col,typ in commitment_cols:
+                if col not in ccols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
+
+        # Migração v120: cancelamento de renovação sem perder o período já contratado.
+        renewal_cols=[('renewal_cancelled_at','BIGINT')]
+        if _is_postgres(target):
+            for col,typ in renewal_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS {col} {typ}')
+        else:
+            ccols={r['name'] for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()}
+            for col,typ in renewal_cols:
+                if col not in ccols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
 
         # Migração v74: integração de e-commerce por empresa e histórico idempotente de pedidos.
         ecommerce_cols=[
@@ -778,9 +800,11 @@ def create_session(conn, user_id: int, ttl=8*60*60):
 def get_session(conn, token: str):
     if not token:
         return None
-    row = conn.execute('''SELECT s.token,s.csrf,s.expires_at,u.id user_id,u.company_id,u.campaign_id,u.name,u.email,u.role,u.active,u.is_client_admin,u.permissions_json,c.name client_name,c.logo_image client_logo_image,c.plan client_plan,c.subscription_status,c.subscription_next_payment_at,c.subscription_current_period_end,c.pending_plan,c.subscription_cancel_at_period_end
+    row = conn.execute('''SELECT s.token,s.csrf,s.expires_at,u.id user_id,u.company_id,u.campaign_id,u.name,u.email,u.role,u.active,u.is_client_admin,u.permissions_json,c.name client_name,c.logo_image client_logo_image,c.plan client_plan,c.active client_active,c.subscription_status,c.subscription_next_payment_at,c.subscription_current_period_end,c.pending_plan,c.subscription_cancel_at_period_end,c.billing_option,c.billing_amount,c.commitment_until,c.renewal_cancelled_at
                           FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN campaigns c ON c.id=u.campaign_id WHERE s.token=?''',(token,)).fetchone()
     if not row or row['expires_at'] < now_ts() or not row['active']:
+        return None
+    if row['campaign_id'] is not None and not row['client_active']:
         return None
     return row
 

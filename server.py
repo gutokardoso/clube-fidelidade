@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v118'
+VERSION='v120'
 
 
 def jdump(obj):
@@ -490,6 +490,30 @@ def plan_allows(conn,campaign_id,feature):
     return bool(PLAN_FEATURES[campaign_plan(conn,campaign_id)].get(feature))
 
 PLAN_PRICES={'beginner':0.0,'intermediate':49.90,'pro':99.90}
+BILLING_OPTIONS={
+    'beginner': {'free': {'amount':0.0,'frequency':None,'frequency_type':None,'commitment_days':0,'label':'Grátis'}},
+    'intermediate': {
+        'monthly': {'amount':49.90,'frequency':1,'frequency_type':'months','commitment_days':0,'label':'Mensal — R$ 49,90/mês'},
+        'annual_monthly': {'amount':44.90,'frequency':1,'frequency_type':'months','commitment_days':365,'label':'Anual — R$ 44,90/mês por 12 meses'},
+        'annual_upfront': {'amount':515.00,'frequency':12,'frequency_type':'months','commitment_days':365,'label':'Anual à vista — R$ 515,00/ano'},
+    },
+    'pro': {
+        'monthly': {'amount':99.90,'frequency':1,'frequency_type':'months','commitment_days':0,'label':'Mensal — R$ 99,90/mês'},
+        'annual_monthly': {'amount':89.90,'frequency':1,'frequency_type':'months','commitment_days':365,'label':'Anual — R$ 89,90/mês por 12 meses'},
+        'annual_upfront': {'amount':1020.00,'frequency':12,'frequency_type':'months','commitment_days':365,'label':'Anual à vista — R$ 1.020,00/ano'},
+    },
+}
+
+def normalize_billing_option(plan,value):
+    plan=normalize_plan(plan)
+    if plan=='beginner': return 'free'
+    value=str(value or 'monthly').strip().lower()
+    return value if value in BILLING_OPTIONS.get(plan,{}) else 'monthly'
+
+def billing_config(plan,billing_option):
+    plan=normalize_plan(plan); option=normalize_billing_option(plan,billing_option)
+    return option,BILLING_OPTIONS[plan][option]
+
 
 
 def mp_request(method,path,payload=None,extra_headers=None):
@@ -536,8 +560,9 @@ def _mp_subscription_diagnostic(sub, event='MP_SUBSCRIPTION'):
     return safe
 
 
-def create_mp_subscription(email,plan,reference,device_id=None):
-    amount=PLAN_PRICES[plan]; base=(os.environ.get('PUBLIC_BASE_URL') or 'https://app.fidelizae.com.br').rstrip('/')
+def create_mp_subscription(email,plan,reference,device_id=None,billing_option='monthly'):
+    billing_option,cfg=billing_config(plan,billing_option)
+    amount=cfg['amount']; base=(os.environ.get('PUBLIC_BASE_URL') or 'https://app.fidelizae.com.br').rstrip('/')
     # O payer de teste só pode substituir o e-mail real fora de produção.
     # Isso evita que MERCADOPAGO_TEST_PAYER_EMAIL, deixado por engano no Railway,
     # faça uma venda real tentar cobrar uma conta de teste do Mercado Pago.
@@ -553,7 +578,8 @@ def create_mp_subscription(email,plan,reference,device_id=None):
     # O Device ID é coletado no navegador pelo security.js oficial do Mercado Pago e
     # encaminhado somente como header de risco. Nunca é persistido nem registrado em log.
     risk_headers={'X-meli-session-id':str(device_id or '').strip()} if str(device_id or '').strip() else None
-    sub=mp_request('POST','/preapproval',{'reason':f'Fidelizaê! {plan.title()}','external_reference':reference,'payer_email':payer_email,'auto_recurring':{'frequency':1,'frequency_type':'months','transaction_amount':amount,'currency_id':'BRL'},'back_url':base+'/signup/payment-return','status':'pending'},extra_headers=risk_headers)
+    recurring={'frequency':cfg['frequency'],'frequency_type':cfg['frequency_type'],'transaction_amount':amount,'currency_id':'BRL'}
+    sub=mp_request('POST','/preapproval',{'reason':f"Fidelizaê! {plan.title()} • {cfg['label']}",'external_reference':reference,'payer_email':payer_email,'auto_recurring':recurring,'back_url':base+'/signup/payment-return','status':'pending'},extra_headers=risk_headers)
     _mp_subscription_diagnostic(sub,'MP_CREATE_RESPONSE')
     # Uma leitura imediata do recurso ajuda a identificar diferenças entre a resposta do POST
     # e o estado efetivamente persistido pelo Mercado Pago. Falhas aqui não quebram o checkout.
@@ -621,7 +647,9 @@ def provision_signup(conn,row,subscription=None):
     company_id=company['id']; code=('AUTO'+secrets.token_hex(4)).upper()
     plan=normalize_plan(row['plan']); loyalty='stamps' if plan=='beginner' else (row['loyalty_type'] or 'stamps')
     sub=subscription or {}; now=now_ts(); next_ts=_mp_timestamp(sub.get('next_payment_date'))
-    cid=insert_id(conn,"INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,card_theme,plan,loyalty_type,points_spend_cents,logo_image,subscription_provider,subscription_id,subscription_status,subscription_started_at,subscription_current_period_end,subscription_next_payment_at,subscription_status_updated_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(company_id,code,row['company_name'],'Recompensa do programa',5,'__LOGO__','orange',plan,loyalty,200,row['logo_image'] if 'logo_image' in row.keys() else None,'mercadopago' if plan!='beginner' else 'free',row['subscription_id'], 'active',now,next_ts,next_ts,now,now))
+    billing_option=normalize_billing_option(plan,row['billing_option'] if 'billing_option' in row.keys() else ('free' if plan=='beginner' else 'monthly'))
+    _,bcfg=billing_config(plan,billing_option); commitment_until=(now+bcfg['commitment_days']*86400) if bcfg['commitment_days'] else None
+    cid=insert_id(conn,"INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,card_theme,plan,loyalty_type,points_spend_cents,logo_image,subscription_provider,subscription_id,subscription_status,subscription_started_at,subscription_current_period_end,subscription_next_payment_at,subscription_status_updated_at,billing_option,billing_amount,commitment_until,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(company_id,code,row['company_name'],'Recompensa do programa',5,'__LOGO__','orange',plan,loyalty,200,row['logo_image'] if 'logo_image' in row.keys() else None,'mercadopago' if plan!='beginner' else 'free',row['subscription_id'], 'active',now,next_ts,next_ts,now,billing_option,bcfg['amount'],commitment_until,now))
     uid=insert_id(conn,"INSERT INTO users(company_id,name,email,password_hash,role,active,is_client_admin,campaign_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(company_id,row['responsible_name'],row['email'],row['password_hash'],'attendant',1,1,cid,now))
     conn.execute("UPDATE subscription_signups SET status='active',provisioned_at=? WHERE id=?",(now,row['id']))
     audit(conn,company_id,uid,'subscription_signup','campaign',cid,details=plan)
@@ -640,6 +668,28 @@ def _best_effort_cancel_subscription(subscription_id):
         return False
 
 
+def _approved_subscription_invoice_count(subscription_id):
+    """Conta somente faturas da assinatura cujo pagamento foi efetivamente aprovado."""
+    if not subscription_id:return 0
+    try:
+        data=mp_request('GET','/authorized_payments/search?preapproval_id='+urllib.parse.quote(str(subscription_id),safe=''))
+    except Exception as exc:
+        print('[BILLING] invoice count unavailable type=%s' % type(exc).__name__,flush=True)
+        return None
+    count=0
+    for invoice in (data.get('results') or []):
+        payment=invoice.get('payment') if isinstance(invoice,dict) else None
+        if isinstance(payment,dict) and str(payment.get('status') or '').lower()=='approved':count+=1
+    return count
+
+
+def _expire_non_renewing_campaign(conn,campaign_id):
+    """Encerra o acesso quando termina o período já pago, sem apagar dados históricos."""
+    now=now_ts()
+    conn.execute("UPDATE campaigns SET active=0,subscription_status='expired',subscription_next_payment_at=NULL,subscription_status_updated_at=? WHERE id=?",(now,campaign_id))
+    conn.execute('DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE campaign_id=?)',(campaign_id,))
+
+
 def reconcile_campaign_billing(conn,campaign_id,allow_remote=True):
     """Aplica mudanças agendadas somente quando o ciclo pago realmente terminou.
 
@@ -651,6 +701,19 @@ def reconcile_campaign_billing(conn,campaign_id,allow_remote=True):
     c=conn.execute('SELECT * FROM campaigns WHERE id=?',(campaign_id,)).fetchone()
     if not c:return None
     now=now_ts()
+    # Cancelamento de renovação preserva o acesso pelo período já pago/contratado.
+    if c['subscription_cancel_at_period_end']:
+        option=normalize_billing_option(normalize_plan(c['plan']),c['billing_option'] if 'billing_option' in c.keys() else 'monthly')
+        access_until=int((c['commitment_until'] if option in ('annual_monthly','annual_upfront') else c['subscription_current_period_end']) or 0)
+        if option=='annual_monthly' and allow_remote and c['subscription_id']:
+            paid=_approved_subscription_invoice_count(c['subscription_id'])
+            if paid is not None and paid>=12:
+                if _best_effort_cancel_subscription(c['subscription_id']):
+                    conn.execute("UPDATE campaigns SET subscription_status='non_renewing',subscription_next_payment_at=NULL,subscription_status_updated_at=? WHERE id=?",(now,campaign_id))
+        if access_until and now>=access_until:
+            _expire_non_renewing_campaign(conn,campaign_id)
+            return conn.execute('SELECT * FROM campaigns WHERE id=?',(campaign_id,)).fetchone()
+        c=conn.execute('SELECT * FROM campaigns WHERE id=?',(campaign_id,)).fetchone()
     # Limpeza de uma assinatura anterior que não pôde ser cancelada no instante do upgrade.
     if allow_remote and c['previous_subscription_id']:
         if _best_effort_cancel_subscription(c['previous_subscription_id']):
@@ -1285,7 +1348,9 @@ class Handler(BaseHTTPRequestHandler):
             name = path.strip('/') + '.html'
             template=(STATIC/name).read_text(encoding='utf-8').replace('{{VERSION}}',VERSION)
             if path == '/login' and (qs.get('error') or [''])[0]:
-                template=template.replace('<div id="msg"></div>','<div id="msg"><div class="notice error">E-mail ou senha inválidos.</div></div>')
+                login_error=(qs.get('error') or [''])[0]
+                message='Sua assinatura terminou e o acesso da empresa está encerrado. Entre em contato para reativar o plano.' if login_error=='subscription_expired' else 'E-mail ou senha inválidos.'
+                template=template.replace('<div id="msg"></div>','<div id="msg"><div class="notice error">'+html.escape(message)+'</div></div>')
             return self.send_text(template)
         if path.startswith('/static/'):
             target = (STATIC / path[len('/static/'):]).resolve()
@@ -1306,7 +1371,8 @@ class Handler(BaseHTTPRequestHandler):
                 if s['campaign_id']:
                     reconcile_campaign_billing(conn,s['campaign_id'])
                     s=self._session(conn)
-                return self.send_json({'ok':True,'authenticated':True,'user':{'id':s['user_id'],'name':s['name'],'email':s['email'],'role':s['role'],'campaign_id':s['campaign_id'],'client_name':s['client_name'],'client_logo_image':s['client_logo_image'],'client_plan':normalize_plan(s['client_plan']),'subscription_status':s['subscription_status'] or 'manual','subscription_next_payment_at':s['subscription_next_payment_at'],'subscription_current_period_end':s['subscription_current_period_end'],'pending_plan':s['pending_plan'],'is_client_admin':bool(s['is_client_admin']),'permissions':session_permissions(rowdict(s))},'csrf':s['csrf']})
+                    if not s:return self.send_json({'ok':False,'authenticated':False,'error':'subscription_expired'},401)
+                return self.send_json({'ok':True,'authenticated':True,'user':{'id':s['user_id'],'name':s['name'],'email':s['email'],'role':s['role'],'campaign_id':s['campaign_id'],'client_name':s['client_name'],'client_logo_image':s['client_logo_image'],'client_plan':normalize_plan(s['client_plan']),'subscription_status':s['subscription_status'] or 'manual','subscription_next_payment_at':s['subscription_next_payment_at'],'subscription_current_period_end':s['subscription_current_period_end'],'subscription_cancel_at_period_end':bool(s['subscription_cancel_at_period_end']),'billing_option':s['billing_option'],'billing_amount':s['billing_amount'],'commitment_until':s['commitment_until'],'renewal_cancelled_at':s['renewal_cancelled_at'],'pending_plan':s['pending_plan'],'is_client_admin':bool(s['is_client_admin']),'permissions':session_permissions(rowdict(s))},'csrf':s['csrf']})
         if path == '/api/wallet/status': return self.send_json({'ok':True,**wallet_status()})
         if path == '/api/campaign/public':
             code=(qs.get('code') or [''])[0].upper().strip()
@@ -1964,7 +2030,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_redirect('/login?error=1' if path == '/login' else '/join?error=1')
             return self.send_json({'ok':False,'error':'invalid_json'},400)
         if path=='/api/public/signup':
-            name=str(payload.get('responsible_name') or '').strip()[:100]; company=str(payload.get('company_name') or '').strip()[:120]; email=normalize_email(payload.get('email')); phone=str(payload.get('phone') or '').strip()[:40]; document=str(payload.get('document') or '').strip()[:30]; password=str(payload.get('password') or ''); plan=normalize_plan(payload.get('plan')); loyalty=str(payload.get('loyalty_type') or 'stamps').lower(); device_id=str(payload.get('mp_device_id') or '').strip()[:240]
+            name=str(payload.get('responsible_name') or '').strip()[:100]; company=str(payload.get('company_name') or '').strip()[:120]; email=normalize_email(payload.get('email')); phone=str(payload.get('phone') or '').strip()[:40]; document=str(payload.get('document') or '').strip()[:30]; password=str(payload.get('password') or ''); plan=normalize_plan(payload.get('plan')); loyalty=str(payload.get('loyalty_type') or 'stamps').lower(); device_id=str(payload.get('mp_device_id') or '').strip()[:240]; billing_option=normalize_billing_option(plan,payload.get('billing_option'))
             if not name or not company or not email or len(password)<10 or plan not in PLAN_PRICES:return self.send_json({'ok':False,'error':'invalid_signup'},400)
             try: logo_image=validate_logo_data(payload.get('logo_image'))
             except ValueError as exc:return self.send_json({'ok':False,'error':str(exc)},400)
@@ -1976,7 +2042,7 @@ class Handler(BaseHTTPRequestHandler):
                 # uma tentativa recente ainda válida no MP, reutilizamos o checkout existente.
                 if plan!='beginner':
                     cutoff=now_ts()-15*60
-                    recent=conn.execute("SELECT * FROM subscription_signups WHERE lower(email)=lower(?) AND plan=? AND status='pending' AND subscription_id IS NOT NULL AND created_at>=? ORDER BY id DESC LIMIT 1",(email,plan,cutoff)).fetchone()
+                    recent=conn.execute("SELECT * FROM subscription_signups WHERE lower(email)=lower(?) AND plan=? AND billing_option=? AND status='pending' AND subscription_id IS NOT NULL AND created_at>=? ORDER BY id DESC LIMIT 1",(email,plan,billing_option,cutoff)).fetchone()
                     if recent:
                         try:
                             existing=mp_request('GET','/preapproval/'+urllib.parse.quote(str(recent['subscription_id']),safe=''))
@@ -1985,11 +2051,11 @@ class Handler(BaseHTTPRequestHandler):
                                 return self.send_json({'ok':True,'active':False,'checkout_url':existing.get('init_point'),'reused':True})
                         except Exception as exc:
                             print('[BILLING] MP_REUSE_CHECK_UNAVAILABLE type=%s' % type(exc).__name__,flush=True)
-                token=secrets.token_urlsafe(24); sid=insert_id(conn,'INSERT INTO subscription_signups(token,company_name,responsible_name,email,phone,document,password_hash,plan,loyalty_type,status,created_at,logo_image) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(token,company,name,email,phone,document,hash_password(password),plan,loyalty,'pending',now_ts(),logo_image))
+                token=secrets.token_urlsafe(24); _,bcfg=billing_config(plan,billing_option); sid=insert_id(conn,'INSERT INTO subscription_signups(token,company_name,responsible_name,email,phone,document,password_hash,plan,loyalty_type,status,created_at,logo_image,billing_option,billing_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(token,company,name,email,phone,document,hash_password(password),plan,loyalty,'pending',now_ts(),logo_image,billing_option,bcfg['amount']))
                 row=conn.execute('SELECT * FROM subscription_signups WHERE id=?',(sid,)).fetchone()
                 if plan=='beginner':
                     provision_signup(conn,row); return self.send_json({'ok':True,'active':True,'redirect':'/login'})
-                try: sub=create_mp_subscription(email,plan,'signup:'+token,device_id=device_id)
+                try: sub=create_mp_subscription(email,plan,'signup:'+token,device_id=device_id,billing_option=billing_option)
                 except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
                 conn.execute('UPDATE subscription_signups SET subscription_id=? WHERE id=?',(sub.get('id'),sid))
                 return self.send_json({'ok':True,'active':False,'checkout_url':sub.get('init_point')})
@@ -2016,13 +2082,21 @@ class Handler(BaseHTTPRequestHandler):
                     print('[BILLING] MP_AUTHORIZED_PAYMENT '+json.dumps(safe_ap,ensure_ascii=False,default=str),flush=True)
                     pre_id=str(ap.get('preapproval_id') or '').strip()
                     rejection=str(ap.get('rejection_code') or '').strip().lower()
-                    if pre_id and rejection:
+                    if pre_id:
+                        payment=ap.get('payment') if isinstance(ap.get('payment'),dict) else {}
+                        approved=str(payment.get('status') or '').lower()=='approved'
                         with connect(DB_PATH) as conn:
                             signup=conn.execute('SELECT * FROM subscription_signups WHERE subscription_id=?',(pre_id,)).fetchone()
-                            if signup and signup['status']!='active':
+                            if rejection and signup and signup['status']!='active':
                                 # Mantemos pending enquanto o MP estiver em recycling, mas
                                 # registramos a recusa para diagnóstico sem expor dados sensíveis.
                                 print('[BILLING] MP_SIGNUP_PAYMENT_REJECTED subscription_id=%s code=%s' % (pre_id,rejection),flush=True)
+                            camp=conn.execute('SELECT * FROM campaigns WHERE subscription_id=?',(pre_id,)).fetchone()
+                            if approved and camp and camp['subscription_cancel_at_period_end'] and normalize_billing_option(camp['plan'],camp['billing_option'])=='annual_monthly':
+                                paid=_approved_subscription_invoice_count(pre_id)
+                                if paid is not None and paid>=12 and _best_effort_cancel_subscription(pre_id):
+                                    conn.execute("UPDATE campaigns SET subscription_status='non_renewing',subscription_next_payment_at=NULL,subscription_status_updated_at=? WHERE id=?",(now_ts(),camp['id']))
+                                    audit(conn,camp['company_id'],None,'subscription_annual_commitment_completed','campaign',camp['id'],details='12_paid_installments')
                 except Exception as exc:
                     print('[BILLING] MP_AUTHORIZED_PAYMENT_UNAVAILABLE type=%s' % type(exc).__name__,flush=True)
                 return self.send_json({'ok':True})
@@ -2199,6 +2273,12 @@ class Handler(BaseHTTPRequestHandler):
                     if path == '/login':
                         return self.send_redirect('/login?error=1')
                     return self.send_json({'ok':False,'error':'invalid_credentials'},401)
+                if u['role']=='attendant' and u['campaign_id']:
+                    reconcile_campaign_billing(conn,u['campaign_id'])
+                    camp=conn.execute('SELECT active,subscription_status FROM campaigns WHERE id=?',(u['campaign_id'],)).fetchone()
+                    if not camp or not camp['active']:
+                        if path=='/login':return self.send_redirect('/login?error=subscription_expired')
+                        return self.send_json({'ok':False,'error':'subscription_expired'},403)
                 token,csrf=create_session(conn,u['id']); audit(conn,u['company_id'],u['id'],'login_success',ip_address=self._ip())
                 print(f'[AUTH] LOGIN_SUCCESS email={email} role={u["role"]}')
                 cookie=f'{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=28800'
@@ -2890,6 +2970,9 @@ class Handler(BaseHTTPRequestHandler):
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 reconcile_campaign_billing(conn,s['campaign_id'])
                 plan=normalize_plan(payload.get('plan')); c=conn.execute('SELECT * FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone(); current=normalize_plan(c['plan'])
+                commitment_until=int(c['commitment_until'] or 0) if 'commitment_until' in c.keys() else 0
+                if commitment_until and commitment_until>now_ts() and plan!=current:
+                    return self.send_json({'ok':False,'error':'annual_commitment_active','commitment_until':commitment_until},409)
                 order={'beginner':0,'intermediate':1,'pro':2}
                 if c['pending_subscription_id']:
                     if c['pending_plan']==plan:
@@ -2952,26 +3035,80 @@ class Handler(BaseHTTPRequestHandler):
                     conn.execute('UPDATE campaigns SET code=?,name=?,loyalty_type=?,points_spend_cents=?,goal=?,reward_name=?,card_theme=?,logo_image=COALESCE(?,logo_image) WHERE id=? AND company_id=?',(code,name,loyalty,points,goal,reward,theme,logo,s['campaign_id'],s['company_id']))
                 except integrity_errors():return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'client_admin_company_update','campaign',s['campaign_id'],details=f'plan={plan}',ip_address=self._ip());return self.send_json({'ok':True})
+            if path == '/api/client-admin/subscription/cancel-renewal':
+                if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                password=str(payload.get('password') or '')
+                u=conn.execute('SELECT password_hash FROM users WHERE id=?',(s['user_id'],)).fetchone()
+                if not u or not verify_password(password,u['password_hash']):return self.send_json({'ok':False,'error':'invalid_password'},403)
+                c=conn.execute('SELECT * FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone()
+                if not c or normalize_plan(c['plan'])=='beginner' or not c['subscription_id']:return self.send_json({'ok':False,'error':'no_paid_subscription'},409)
+                if c['subscription_cancel_at_period_end']:
+                    option=normalize_billing_option(c['plan'],c['billing_option'])
+                    access_until=int((c['commitment_until'] if option in ('annual_monthly','annual_upfront') else c['subscription_current_period_end']) or 0)
+                    return self.send_json({'ok':True,'already_cancelled':True,'billing_option':option,'access_until':access_until,'subscription_status':c['subscription_status']})
+                option=normalize_billing_option(c['plan'],c['billing_option'])
+                now=now_ts(); next_ts=int(c['subscription_next_payment_at'] or 0)
+                try:
+                    sub=mp_request('GET','/preapproval/'+urllib.parse.quote(str(c['subscription_id']),safe=''))
+                    next_ts=_mp_timestamp(sub.get('next_payment_date')) or next_ts
+                except Exception as exc:
+                    print('[BILLING] cancel renewal preapproval read failed type=%s' % type(exc).__name__,flush=True)
+                    return self.send_json({'ok':False,'error':'billing_provider_unavailable'},503)
+                if option=='monthly':
+                    if not next_ts:return self.send_json({'ok':False,'error':'billing_period_unknown'},409)
+                    if not _best_effort_cancel_subscription(c['subscription_id']):return self.send_json({'ok':False,'error':'billing_cancel_failed'},503)
+                    access_until=next_ts
+                    conn.execute("UPDATE campaigns SET subscription_cancel_at_period_end=1,renewal_cancelled_at=?,subscription_status='non_renewing',subscription_current_period_end=?,subscription_next_payment_at=NULL,subscription_status_updated_at=? WHERE id=?",(now,access_until,now,c['id']))
+                elif option=='annual_upfront':
+                    access_until=int(c['commitment_until'] or 0)
+                    if not access_until:return self.send_json({'ok':False,'error':'billing_period_unknown'},409)
+                    if not _best_effort_cancel_subscription(c['subscription_id']):return self.send_json({'ok':False,'error':'billing_cancel_failed'},503)
+                    conn.execute("UPDATE campaigns SET subscription_cancel_at_period_end=1,renewal_cancelled_at=?,subscription_status='non_renewing',subscription_next_payment_at=NULL,subscription_status_updated_at=? WHERE id=?",(now,now,c['id']))
+                else:
+                    access_until=int(c['commitment_until'] or 0)
+                    if not access_until:return self.send_json({'ok':False,'error':'billing_period_unknown'},409)
+                    paid=_approved_subscription_invoice_count(c['subscription_id'])
+                    if paid is not None and paid>=12:
+                        if not _best_effort_cancel_subscription(c['subscription_id']):return self.send_json({'ok':False,'error':'billing_cancel_failed'},503)
+                    conn.execute('UPDATE campaigns SET subscription_cancel_at_period_end=1,renewal_cancelled_at=?,subscription_status_updated_at=? WHERE id=?',(now,now,c['id']))
+                audit(conn,s['company_id'],s['user_id'],'subscription_renewal_cancelled','campaign',c['id'],details=option,ip_address=self._ip())
+                return self.send_json({'ok':True,'billing_option':option,'access_until':access_until,'subscription_status':'non_renewing' if option!='annual_monthly' else 'active'})
+
             if path == '/api/client-admin/account/delete':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
                 password=str(payload.get('password') or '')
                 u=conn.execute('SELECT password_hash FROM users WHERE id=?',(s['user_id'],)).fetchone()
                 if not u or not verify_password(password,u['password_hash']):return self.send_json({'ok':False,'error':'invalid_password'},403)
-                c=conn.execute('SELECT subscription_id FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone(); sid=c['subscription_id'] if c else None
-                conn.execute('UPDATE campaigns SET active=0,subscription_status=? WHERE id=?',('cancelled',s['campaign_id']))
+                c=conn.execute('SELECT * FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone()
+                now=now_ts(); option=normalize_billing_option(c['plan'],c['billing_option']) if c else 'free'; commitment=int(c['commitment_until'] or 0) if c else 0
+                # No anual parcelado, excluir a conta no meio do compromisso retiraria o acesso
+                # enquanto as parcelas continuariam vencendo. Por isso a exclusão fica disponível
+                # após o término do compromisso; o cliente pode cancelar a renovação imediatamente.
+                if c and option=='annual_monthly' and commitment and commitment>now:
+                    return self.send_json({'ok':False,'error':'annual_commitment_delete_blocked','commitment_until':commitment,'renewal_cancelled':bool(c['subscription_cancel_at_period_end'])},409)
+                # Antes de apagar acessos, garantimos que não ficará nenhuma assinatura/checkout
+                # remoto cobrando a empresa. Se o provedor falhar, não concluímos a exclusão.
+                ids=[]
+                if c:
+                    for key in ('subscription_id','pending_subscription_id','previous_subscription_id'):
+                        sid=c[key]
+                        if sid and sid not in ids:ids.append(sid)
+                for sid in ids:
+                    if not _best_effort_cancel_subscription(sid):return self.send_json({'ok':False,'error':'billing_cancel_failed'},503)
+                conn.execute('UPDATE campaigns SET active=0,subscription_status=?,subscription_cancel_at_period_end=1,renewal_cancelled_at=COALESCE(renewal_cancelled_at,?),subscription_next_payment_at=NULL WHERE id=?',('cancelled',now,s['campaign_id']))
                 # Encerra os acessos e libera os e-mails para um cadastro futuro sem apagar
                 # os IDs históricos usados por auditoria/transações. O endereço original não
                 # permanece na tabela users e, portanto, não bloqueia a restrição UNIQUE(email).
-                deleted_at=now_ts()
+                deleted_at=now
                 campaign_users=conn.execute('SELECT id FROM users WHERE campaign_id=?',(s['campaign_id'],)).fetchall()
                 for deleted_user in campaign_users:
                     uid=int(deleted_user['id'])
                     tombstone=f'deleted-{uid}-{deleted_at}-{secrets.token_hex(4)}@deleted.invalid'
                     conn.execute('UPDATE users SET active=0,email=?,password_hash=? WHERE id=?',(tombstone,hash_password(secrets.token_urlsafe(32)),uid))
                     conn.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
-                audit(conn,s['company_id'],s['user_id'],'client_admin_account_delete','campaign',s['campaign_id'],details='emails_released',ip_address=self._ip())
-                if sid:_best_effort_cancel_subscription(sid)
+                audit(conn,s['company_id'],s['user_id'],'client_admin_account_delete','campaign',s['campaign_id'],details='billing_cancelled;emails_released;billing_option='+option,ip_address=self._ip())
                 return self.send_json({'ok':True})
             if path == '/api/client-admin/staff/create':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
