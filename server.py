@@ -39,7 +39,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v117'
+VERSION='v118'
 
 
 def jdump(obj):
@@ -492,11 +492,15 @@ def plan_allows(conn,campaign_id,feature):
 PLAN_PRICES={'beginner':0.0,'intermediate':49.90,'pro':99.90}
 
 
-def mp_request(method,path,payload=None):
+def mp_request(method,path,payload=None,extra_headers=None):
     token=os.environ.get('MERCADOPAGO_ACCESS_TOKEN','').strip()
     if not token: raise RuntimeError('mercadopago_not_configured')
     data=json.dumps(payload).encode() if payload is not None else None
-    req=urllib.request.Request('https://api.mercadopago.com'+path,data=data,method=method,headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+    headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'}
+    if extra_headers:
+        for key,value in dict(extra_headers).items():
+            if value is not None and str(value).strip(): headers[str(key)]=str(value).strip()
+    req=urllib.request.Request('https://api.mercadopago.com'+path,data=data,method=method,headers=headers)
     try:
         with urllib.request.urlopen(req,timeout=20) as r:return json.loads(r.read().decode() or '{}')
     except urllib.error.HTTPError as e:
@@ -532,7 +536,7 @@ def _mp_subscription_diagnostic(sub, event='MP_SUBSCRIPTION'):
     return safe
 
 
-def create_mp_subscription(email,plan,reference):
+def create_mp_subscription(email,plan,reference,device_id=None):
     amount=PLAN_PRICES[plan]; base=(os.environ.get('PUBLIC_BASE_URL') or 'https://app.fidelizae.com.br').rstrip('/')
     # O payer de teste só pode substituir o e-mail real fora de produção.
     # Isso evita que MERCADOPAGO_TEST_PAYER_EMAIL, deixado por engano no Railway,
@@ -546,7 +550,10 @@ def create_mp_subscription(email,plan,reference):
         payer_email=str(email or '').strip()
         if test_payer and environment not in test_environments:
             print(f'[BILLING] TEST_PAYER_IGNORED environment={environment}')
-    sub=mp_request('POST','/preapproval',{'reason':f'Fidelizaê! {plan.title()}','external_reference':reference,'payer_email':payer_email,'auto_recurring':{'frequency':1,'frequency_type':'months','transaction_amount':amount,'currency_id':'BRL'},'back_url':base+'/signup/payment-return','status':'pending'})
+    # O Device ID é coletado no navegador pelo security.js oficial do Mercado Pago e
+    # encaminhado somente como header de risco. Nunca é persistido nem registrado em log.
+    risk_headers={'X-meli-session-id':str(device_id or '').strip()} if str(device_id or '').strip() else None
+    sub=mp_request('POST','/preapproval',{'reason':f'Fidelizaê! {plan.title()}','external_reference':reference,'payer_email':payer_email,'auto_recurring':{'frequency':1,'frequency_type':'months','transaction_amount':amount,'currency_id':'BRL'},'back_url':base+'/signup/payment-return','status':'pending'},extra_headers=risk_headers)
     _mp_subscription_diagnostic(sub,'MP_CREATE_RESPONSE')
     # Uma leitura imediata do recurso ajuda a identificar diferenças entre a resposta do POST
     # e o estado efetivamente persistido pelo Mercado Pago. Falhas aqui não quebram o checkout.
@@ -1220,7 +1227,20 @@ class Handler(BaseHTTPRequestHandler):
                     provision_signup(conn,signup,sub)
                     print('[BILLING] MP_POLL_ACTIVATED preapproval_id=%s' % preapproval_id, flush=True)
                     return self.send_json({'ok':True,'active':True,'status':status,'redirect':'/login?subscription=active'})
-            return self.send_json({'ok':True,'active':False,'status':status or 'pending'})
+            rejection_code=None; retry_attempt=None; next_retry_date=None
+            if status in ('pending','paused','cancelled'):
+                try:
+                    invoices=mp_request('GET','/authorized_payments/search?preapproval_id='+urllib.parse.quote(preapproval_id,safe=''))
+                    results=invoices.get('results') if isinstance(invoices,dict) else []
+                    if isinstance(results,list) and results:
+                        latest=sorted(results,key=lambda x:str(x.get('last_modified') or x.get('date_created') or ''),reverse=True)[0]
+                        rejection_code=str(latest.get('rejection_code') or '').strip().lower() or None
+                        retry_attempt=latest.get('retry_attempt'); next_retry_date=latest.get('next_retry_date')
+                        if not rejection_code and isinstance(latest.get('payment'),dict):
+                            rejection_code=str(latest['payment'].get('status_detail') or '').strip().lower() or None
+                except Exception as exc:
+                    print('[BILLING] MP_STATUS_INVOICE_UNAVAILABLE type=%s' % type(exc).__name__,flush=True)
+            return self.send_json({'ok':True,'active':False,'status':status or 'pending','rejection_code':rejection_code,'retry_attempt':retry_attempt,'next_retry_date':next_retry_date})
         if path == '/signup': return self.send_text((STATIC/'signup.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION))
         if path == '/auth/meta/callback':
             code=(qs.get('code') or [''])[0].strip()
@@ -1944,7 +1964,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_redirect('/login?error=1' if path == '/login' else '/join?error=1')
             return self.send_json({'ok':False,'error':'invalid_json'},400)
         if path=='/api/public/signup':
-            name=str(payload.get('responsible_name') or '').strip()[:100]; company=str(payload.get('company_name') or '').strip()[:120]; email=normalize_email(payload.get('email')); phone=str(payload.get('phone') or '').strip()[:40]; document=str(payload.get('document') or '').strip()[:30]; password=str(payload.get('password') or ''); plan=normalize_plan(payload.get('plan')); loyalty=str(payload.get('loyalty_type') or 'stamps').lower()
+            name=str(payload.get('responsible_name') or '').strip()[:100]; company=str(payload.get('company_name') or '').strip()[:120]; email=normalize_email(payload.get('email')); phone=str(payload.get('phone') or '').strip()[:40]; document=str(payload.get('document') or '').strip()[:30]; password=str(payload.get('password') or ''); plan=normalize_plan(payload.get('plan')); loyalty=str(payload.get('loyalty_type') or 'stamps').lower(); device_id=str(payload.get('mp_device_id') or '').strip()[:240]
             if not name or not company or not email or len(password)<10 or plan not in PLAN_PRICES:return self.send_json({'ok':False,'error':'invalid_signup'},400)
             try: logo_image=validate_logo_data(payload.get('logo_image'))
             except ValueError as exc:return self.send_json({'ok':False,'error':str(exc)},400)
@@ -1952,11 +1972,24 @@ class Handler(BaseHTTPRequestHandler):
             if plan=='beginner': loyalty='stamps'
             with connect(DB_PATH) as conn:
                 if conn.execute('SELECT id FROM users WHERE lower(email)=lower(?)',(email,)).fetchone():return self.send_json({'ok':False,'error':'email_exists'},409)
+                # Evita gerar várias assinaturas pendentes idênticas em sequência. Se houver
+                # uma tentativa recente ainda válida no MP, reutilizamos o checkout existente.
+                if plan!='beginner':
+                    cutoff=now_ts()-15*60
+                    recent=conn.execute("SELECT * FROM subscription_signups WHERE lower(email)=lower(?) AND plan=? AND status='pending' AND subscription_id IS NOT NULL AND created_at>=? ORDER BY id DESC LIMIT 1",(email,plan,cutoff)).fetchone()
+                    if recent:
+                        try:
+                            existing=mp_request('GET','/preapproval/'+urllib.parse.quote(str(recent['subscription_id']),safe=''))
+                            if str(existing.get('status') or '').lower()=='pending' and existing.get('init_point'):
+                                print('[BILLING] MP_REUSE_PENDING subscription_id=%s' % recent['subscription_id'],flush=True)
+                                return self.send_json({'ok':True,'active':False,'checkout_url':existing.get('init_point'),'reused':True})
+                        except Exception as exc:
+                            print('[BILLING] MP_REUSE_CHECK_UNAVAILABLE type=%s' % type(exc).__name__,flush=True)
                 token=secrets.token_urlsafe(24); sid=insert_id(conn,'INSERT INTO subscription_signups(token,company_name,responsible_name,email,phone,document,password_hash,plan,loyalty_type,status,created_at,logo_image) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(token,company,name,email,phone,document,hash_password(password),plan,loyalty,'pending',now_ts(),logo_image))
                 row=conn.execute('SELECT * FROM subscription_signups WHERE id=?',(sid,)).fetchone()
                 if plan=='beginner':
                     provision_signup(conn,row); return self.send_json({'ok':True,'active':True,'redirect':'/login'})
-                try: sub=create_mp_subscription(email,plan,'signup:'+token)
+                try: sub=create_mp_subscription(email,plan,'signup:'+token,device_id=device_id)
                 except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
                 conn.execute('UPDATE subscription_signups SET subscription_id=? WHERE id=?',(sub.get('id'),sid))
                 return self.send_json({'ok':True,'active':False,'checkout_url':sub.get('init_point')})
@@ -1968,6 +2001,31 @@ class Handler(BaseHTTPRequestHandler):
                 print('[BILLING] webhook signature rejected')
                 return self.send_json({'ok':False,'error':'invalid_signature'},401)
             data=payload.get('data') or {}; sub_id=str(data.get('id') or payload.get('id') or '').strip(); typ=str(payload.get('type') or payload.get('topic') or '')
+            if typ=='subscription_authorized_payment' and sub_id:
+                try:
+                    ap=mp_request('GET','/authorized_payments/'+urllib.parse.quote(sub_id,safe=''))
+                    safe_ap={
+                        'id':str(ap.get('id') or '') or None,
+                        'preapproval_id':str(ap.get('preapproval_id') or '') or None,
+                        'status':str(ap.get('status') or '') or None,
+                        'rejection_code':str(ap.get('rejection_code') or '') or None,
+                        'retry_attempt':ap.get('retry_attempt'),
+                        'next_retry_date':ap.get('next_retry_date'),
+                        'payment_method_id':str(ap.get('payment_method_id') or '') or None,
+                    }
+                    print('[BILLING] MP_AUTHORIZED_PAYMENT '+json.dumps(safe_ap,ensure_ascii=False,default=str),flush=True)
+                    pre_id=str(ap.get('preapproval_id') or '').strip()
+                    rejection=str(ap.get('rejection_code') or '').strip().lower()
+                    if pre_id and rejection:
+                        with connect(DB_PATH) as conn:
+                            signup=conn.execute('SELECT * FROM subscription_signups WHERE subscription_id=?',(pre_id,)).fetchone()
+                            if signup and signup['status']!='active':
+                                # Mantemos pending enquanto o MP estiver em recycling, mas
+                                # registramos a recusa para diagnóstico sem expor dados sensíveis.
+                                print('[BILLING] MP_SIGNUP_PAYMENT_REJECTED subscription_id=%s code=%s' % (pre_id,rejection),flush=True)
+                except Exception as exc:
+                    print('[BILLING] MP_AUTHORIZED_PAYMENT_UNAVAILABLE type=%s' % type(exc).__name__,flush=True)
+                return self.send_json({'ok':True})
             if not sub_id or ('preapproval' not in typ and typ not in ('subscription_preapproval','')): return self.send_json({'ok':True})
             try: sub=mp_request('GET','/preapproval/'+urllib.parse.quote(sub_id,safe=''))
             except Exception:return self.send_json({'ok':True})

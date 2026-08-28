@@ -1,9 +1,17 @@
-# Fidelizaê! v117
+# Fidelizaê! v118
 
-**Versão atual:** v117
+## v118 — aprovação Mercado Pago e proteção contra tentativas duplicadas
+
+- Adicionada coleta do Device ID pelo script oficial de segurança do Mercado Pago na tela de cadastro/checkout.
+- O Device ID é encaminhado ao Mercado Pago via header `X-meli-session-id` e não é persistido nem exibido em logs.
+- Tentativas de assinatura pendentes criadas nos últimos 15 minutos podem reutilizar o checkout existente, evitando múltiplas assinaturas idênticas em sequência.
+- Webhooks `subscription_authorized_payment` agora são consultados na API e registram apenas metadados seguros de status/rejeição para diagnóstico.
+- Mantido o fluxo oficial de assinatura `preapproval` pendente e todos os ajustes visuais da v117.
+
+**Versão atual:** v118
 
 
-## Novidades da v117
+## Novidades da v118
 
 - Landing page atualizada com as novas imagens reais fornecidas para o celular do hero e para a seção de experiência; os ajustes mobile da v116 foram preservados.
 
