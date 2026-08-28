@@ -1,7 +1,14 @@
-# Fidelizaê! v115
+# Fidelizaê! v116
 
-**Versão atual:** v115
+**Versão atual:** v116
 
+
+## Novidades da v116
+
+- Painel mobile reorganizado: botões de ação do administrador passam a uma grade de duas colunas com dimensões consistentes.
+- Menu interno cinza (Escanear QR, Clientes cadastrados, Aniversariantes, Visão Geral e Comunicação) oculto apenas em telas pequenas.
+- Automações redesenhadas no mobile como cards verticais: título, Canal/Ativa lado a lado, mensagem em largura total e botão Salvar dentro do card.
+- Layout desktop das automações também recebeu colunas mais estáveis para evitar que controles e mensagens disputem espaço.
 
 ## Novidades da v115
 
