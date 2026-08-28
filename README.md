@@ -1,9 +1,11 @@
-# Fidelizaê! v116
+# Fidelizaê! v117
 
-**Versão atual:** v116
+**Versão atual:** v117
 
 
-## Novidades da v116
+## Novidades da v117
+
+- Landing page atualizada com as novas imagens reais fornecidas para o celular do hero e para a seção de experiência; os ajustes mobile da v116 foram preservados.
 
 - Painel mobile reorganizado: botões de ação do administrador passam a uma grade de duas colunas com dimensões consistentes.
 - Menu interno cinza (Escanear QR, Clientes cadastrados, Aniversariantes, Visão Geral e Comunicação) oculto apenas em telas pequenas.
