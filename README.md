@@ -1,5 +1,18 @@
-# Fidelizaê! v120
+# Fidelizaê! v122
 
+## v122
+- Auditoria completa dos recursos por plano e proteção também no backend.
+- Iniciante: Relatório/CSV Básico liberado com campos essenciais.
+- Intermediário: Relatório/CSV Completo e cupons; sem recursos exclusivos PRO.
+- PRO: NPS, Níveis VIP, aceleradores, vale-presente, automações, comunicação, área do cliente e relatórios avançados.
+- Endpoints de recursos exclusivos agora retornam `plan_feature_not_available` quando o plano não permite acesso.
+- Cartão do cliente só expõe NPS, nível VIP e cupons quando o plano contratado inclui cada recurso.
+
+
+
+## v121
+- Tabela de comparação da landing page: “Relatórios / CSV” do plano Intermediário agora aparece como **Completo** em vez de ✓.
+- Auditoria funcional dos recursos anunciados nos planos realizada para identificar divergências entre a tabela comercial e as restrições efetivas do backend.
 ## v120 — cancelamento de renovação e encerramento seguro da conta
 
 - Perfil > Plano e cobrança mostra modalidade, valor, próxima cobrança, compromisso e situação da renovação.
@@ -20,7 +33,7 @@
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v120
+**Versão atual:** v122
 
 
 ## Novidades da v117
