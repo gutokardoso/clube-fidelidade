@@ -4,6 +4,7 @@ import binascii
 import html
 import hmac
 import io
+import ipaddress
 import json
 import os
 import re
@@ -29,17 +30,18 @@ import secrets
 import qrcode
 
 from db import DEFAULT_DB, init_db, ensure_configured_staff, connect, create_session, get_session, audit, insert_id, begin_write, integrity_errors, fetchone_for_update
-from security import verify_password, hash_password, random_token, now_ts
+from security import verify_password, hash_password, random_token, now_ts, password_is_strong, generate_totp_secret, verify_totp
 from antifraud import validate_stamp, FraudError
 from wallet import wallet_status, apple_pass_link, google_wallet_link, build_apple_pkpass, google_save_url, google_update_object, apple_auth_token, apple_push_update
-from platform_features import has_permission, session_permissions, active_multiplier, add_point_lot, consume_point_lots, expire_points_once, record_purchase, RATE_LIMITER
+from platform_features import has_permission, session_permissions, active_multiplier, add_point_lot, consume_point_lots, expire_points_once, record_purchase
 from integrations import platform_order
 
 BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v122'
+VERSION='v123'
+DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
 def jdump(obj):
@@ -51,6 +53,88 @@ def rowdict(row):
 
 def now_iso():
     return datetime.now(ZoneInfo('America/Sao_Paulo')).isoformat(timespec='seconds')
+
+
+def _safe_ip(value, fallback='0.0.0.0'):
+    try:
+        return str(ipaddress.ip_address(str(value or '').strip()))
+    except ValueError:
+        try: return str(ipaddress.ip_address(str(fallback or '').strip()))
+        except ValueError: return '0.0.0.0'
+
+
+def _email_tag(email):
+    normalized=str(email or '').strip().lower()
+    return hashlib.sha256(normalized.encode('utf-8')).hexdigest()[:12] if normalized else 'none'
+
+
+def persistent_rate_allow(rate_key, limit, window, block_seconds=None):
+    """Rate limit compartilhado por todas as instâncias e preservado em restarts."""
+    ts=now_ts(); limit=max(1,int(limit)); window=max(1,int(window)); block_seconds=max(window,int(block_seconds or window))
+    with connect(DB_PATH) as conn:
+        begin_write(conn)
+        # Cria o estado de forma idempotente antes de bloquear a linha; evita corrida entre instâncias.
+        conn.execute('INSERT INTO security_rate_limits(rate_key,window_start,count,blocked_until,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(rate_key) DO NOTHING',(rate_key,ts,0,0,ts))
+        row=fetchone_for_update(conn,'SELECT rate_key,window_start,count,blocked_until FROM security_rate_limits WHERE rate_key=?',(rate_key,))
+        if int(row['blocked_until'] or 0)>ts:
+            return False, int(row['blocked_until'])-ts
+        if ts-int(row['window_start'] or 0)>=window:
+            conn.execute('UPDATE security_rate_limits SET window_start=?,count=1,blocked_until=0,updated_at=? WHERE rate_key=?',(ts,ts,rate_key))
+            return True, 0
+        count=int(row['count'] or 0)+1
+        if count>limit:
+            blocked_until=ts+block_seconds
+            conn.execute('UPDATE security_rate_limits SET count=?,blocked_until=?,updated_at=? WHERE rate_key=?',(count,blocked_until,ts,rate_key))
+            return False, block_seconds
+        conn.execute('UPDATE security_rate_limits SET count=?,updated_at=? WHERE rate_key=?',(count,ts,rate_key))
+        return True, 0
+
+
+def persistent_rate_reset(rate_key):
+    try:
+        with connect(DB_PATH) as conn: conn.execute('DELETE FROM security_rate_limits WHERE rate_key=?',(rate_key,))
+    except Exception: pass
+
+
+def _cookie_secure():
+    default_secure = '1' if (str(DB_PATH).startswith(('postgres://','postgresql://')) or (os.environ.get('APP_ENV') or '').lower()=='production') else '0'
+    return os.environ.get('CLUBE_SECURE_COOKIE',default_secure)=='1'
+
+
+def _session_cookie(token,max_age=28800):
+    value=f'{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={int(max_age)}'
+    if _cookie_secure(): value+='; Secure'
+    return value
+
+
+def _challenge_cookie(raw,max_age=300):
+    value=f'clube_2fa_challenge={raw}; Path=/; HttpOnly; SameSite=Strict; Max-Age={int(max_age)}'
+    if _cookie_secure(): value+='; Secure'
+    return value
+
+
+def _clear_cookie(name):
+    value=f'{name}=deleted; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'
+    if _cookie_secure(): value+='; Secure'
+    return value
+
+
+def create_2fa_challenge(conn,user_id,ttl=300):
+    raw=random_token(32); th=hashlib.sha256(raw.encode()).hexdigest(); ts=now_ts()
+    conn.execute('DELETE FROM auth_challenges WHERE user_id=? OR expires_at<?',(user_id,ts))
+    conn.execute('INSERT INTO auth_challenges(token_hash,user_id,expires_at,attempts,created_at) VALUES(?,?,?,?,?)',(th,user_id,ts+ttl,0,ts))
+    return raw
+
+
+def _totp_uri(secret,email):
+    label=urllib.parse.quote(f'Fidelizaê!:{email}',safe='')
+    issuer=urllib.parse.quote('Fidelizaê!',safe='')
+    return f'otpauth://totp/{label}?secret={urllib.parse.quote(secret)}&issuer={issuer}&algorithm=SHA1&digits=6&period=30'
+
+
+def _totp_qr_data(uri):
+    img=qrcode.make(uri); out=BytesIO(); img.save(out,format='PNG')
+    return 'data:image/png;base64,'+base64.b64encode(out.getvalue()).decode('ascii')
 
 
 def current_branch_id(conn, user_id, campaign_id=None):
@@ -802,7 +886,7 @@ def send_customer_welcome_email(name, email, client_name, public_id, campaign, e
     return result
 
 
-def send_attendant_welcome_email(name, email, password, client_name, smtp_config=None):
+def send_attendant_welcome_email(name, email, client_name, smtp_config=None):
     if not email_configured(smtp_config):
         return {'sent':False,'reason':'smtp_not_configured'}
     login_url=os.environ.get('CLUBE_LOGIN_URL','https://app.fidelizae.com.br/login').strip()
@@ -813,12 +897,12 @@ def send_attendant_welcome_email(name, email, password, client_name, smtp_config
         'Cadastro realizado com sucesso! Agora é só acessar o link abaixo, inserir seu e-mail e senha para ter acesso ao painel do seu Clube Fidelidade.\n\n'
         f'{login_url}\n\n'
         f'E-mail: {email}\n'
-        f'Senha: {password}\n'
+        'Use a senha inicial fornecida pelo administrador. Por segurança, ela não é enviada por e-mail.\n'
         f'Cliente: {client_name}\n'
     )
     result=send_email_message(msg, smtp_config)
     if not result.get('sent'):
-        print(f'[EMAIL] ATTENDANT_WELCOME_FAILED email={email} reason={result.get("reason")}')
+        print(f'[EMAIL] ATTENDANT_WELCOME_FAILED user={_email_tag(email)} reason={result.get("reason")}')
     return result
 
 
@@ -956,7 +1040,7 @@ def _queue_send(item, conn):
             return {'sent':True,'message_id':((response.get('messages') or [{}])[0]).get('id')}
         except Exception as exc:return {'sent':False,'reason':str(exc)[:500]}
     if kind=='attendant_welcome':
-        return send_attendant_welcome_email(payload['name'],item['recipient'],payload['password'],payload['client_name'],global_email_config())
+        return send_attendant_welcome_email(payload['name'],item['recipient'],payload['client_name'],global_email_config())
     if kind=='password_recovery':
         return send_password_recovery_email(item['recipient'],payload['token'],global_email_config())
     return {'sent':False,'reason':'unknown_queue_kind'}
@@ -1110,12 +1194,14 @@ class Handler(BaseHTTPRequestHandler):
         if has_permission(rowdict(sess),key): return True
         self.send_json({'ok':False,'error':'permission_denied','permission':key},403); return False
 
-    def _rate_ok(self,bucket,limit,window):
-        key=f'{bucket}:{self._ip()}'
-        if RATE_LIMITER.allow(key,limit,window): return True
-        self.send_json({'ok':False,'error':'rate_limited'},429); return False
+    def _rate_ok(self,bucket,limit,window,subject=None,block_seconds=None):
+        subject=str(subject or self._ip()).strip().lower()[:180]
+        digest=hashlib.sha256(subject.encode('utf-8')).hexdigest()[:32]
+        ok,retry=persistent_rate_allow(f'{bucket}:{digest}',limit,window,block_seconds)
+        if ok: return True
+        self.send_json({'ok':False,'error':'rate_limited','retry_after':retry},429,{'Retry-After':str(max(1,retry))}); return False
 
-    server_version = 'Fidelizae/19.0'
+    server_version = 'Fidelizae/20.0'
 
     def log_message(self, fmt, *args):
         print(f'[{self.log_date_time_string()}] {self.address_string()} - {fmt % args}')
@@ -1152,17 +1238,35 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError('multipart_not_supported')
         return json.loads(raw.decode('utf-8') or '{}'), 'json'
 
+    def _security_headers(self, html_response=False):
+        self.send_header('X-Content-Type-Options','nosniff')
+        self.send_header('X-Frame-Options','DENY')
+        self.send_header('Referrer-Policy','strict-origin-when-cross-origin')
+        self.send_header('Permissions-Policy','camera=(self), microphone=(), geolocation=(), payment=()')
+        self.send_header('X-Permitted-Cross-Domain-Policies','none')
+        if _cookie_secure():
+            self.send_header('Strict-Transport-Security','max-age=31536000; includeSubDomains')
+        if html_response:
+            self.send_header('Content-Security-Policy', "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' https://www.mercadopago.com https://cdn.jsdelivr.net https://connect.facebook.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://api.mercadopago.com https://graph.facebook.com https://www.facebook.com; frame-src https://www.facebook.com https://web.facebook.com; upgrade-insecure-requests")
+
     def send_redirect(self, location, status=303, headers=None):
         self.send_response(status)
         self.send_header('Location', location)
         self.send_header('Cache-Control', 'no-store')
+        self._security_headers(False)
         if headers:
             for k, v in headers.items():
-                self.send_header(k, v)
+                if isinstance(v,(list,tuple)):
+                    for item in v:self.send_header(k,str(item))
+                else:self.send_header(k,str(v))
         self.end_headers()
 
     def _ip(self):
-        return self.headers.get('X-Forwarded-For', self.client_address[0]).split(',')[0].strip()
+        direct=_safe_ip(self.client_address[0])
+        trust_proxy=os.environ.get('CLUBE_TRUST_PROXY','1' if os.environ.get('RAILWAY_ENVIRONMENT_NAME') or os.environ.get('RAILWAY_PROJECT_ID') else '0')=='1'
+        if not trust_proxy:return direct
+        forwarded=(self.headers.get('X-Forwarded-For') or '').split(',')[0].strip()
+        return _safe_ip(forwarded,direct)
 
     def send_json(self, obj, status=200, headers=None):
         data = jdump(obj)
@@ -1170,10 +1274,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'no-store')
-        self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('X-Frame-Options', 'DENY')
+        self._security_headers(False)
         if headers:
-            for k,v in headers.items(): self.send_header(k,v)
+            for k,v in headers.items():
+                if isinstance(v,(list,tuple)):
+                    for item in v:self.send_header(k,str(item))
+                else:self.send_header(k,str(v))
         self.end_headers(); self.wfile.write(data)
 
     def send_text(self, text, status=200, ctype='text/html; charset=utf-8'):
@@ -1182,14 +1288,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'no-store')
-        self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Referrer-Policy', 'same-origin')
+        self._security_headers(ctype.startswith('text/html'))
         self.end_headers(); self.wfile.write(data)
 
     def send_bytes(self, data, ctype='application/octet-stream', status=200, headers=None):
-        self.send_response(status); self.send_header('Content-Type',ctype); self.send_header('Content-Length',str(len(data))); self.send_header('Cache-Control','no-store')
+        self.send_response(status); self.send_header('Content-Type',ctype); self.send_header('Content-Length',str(len(data))); self.send_header('Cache-Control','no-store'); self._security_headers(str(ctype).startswith('text/html'))
         if headers:
-            for k,v in headers.items(): self.send_header(k,v)
+            for k,v in headers.items():
+                if isinstance(v,(list,tuple)):
+                    for item in v:self.send_header(k,str(item))
+                else:self.send_header(k,str(v))
         self.end_headers(); self.wfile.write(data)
 
     def _require_auth(self, conn, role=None):
@@ -1202,14 +1310,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def _require_csrf(self, session, payload):
         token = self.headers.get('X-CSRF-Token') or payload.get('csrf')
-        return bool(token and session and token == session['csrf'])
+        return bool(token and session and hmac.compare_digest(str(token),str(session['csrf'])))
 
     def csrf_ok(self):
         token=self.headers.get('X-CSRF-Token')
         if not token:return False
         with connect(DB_PATH) as conn:
             session=self._session(conn)
-            return bool(session and token==session['csrf'])
+            return bool(session and hmac.compare_digest(str(token),str(session['csrf'])))
 
     def do_GET(self):
         p = urllib.parse.urlparse(self.path)
@@ -1344,6 +1452,12 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 template=template.replace('{{LOGO_BLOCK}}','<div class="brand campaign-logo-fallback">CLUBE</div>').replace('{{CAMPAIGN_NAME}}','Cliente não encontrado').replace('<form id="f" class="form" method="post" action="/join">','<form id="f" class="form hidden" method="post" action="/join">')
             return self.send_text(template)
+        if path == '/security':
+            return self.send_text((STATIC/'security.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION))
+        if path == '/login/2fa':
+            template=(STATIC/'two-factor.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION)
+            if (qs.get('error') or [''])[0]: template=template.replace('<div id="msg"></div>','<div id="msg"><div class="notice error">Código inválido ou expirado.</div></div>')
+            return self.send_text(template)
         if path in ['/login','/manager','/attendant','/card','/rewards','/loyalty360']:
             name = path.strip('/') + '.html'
             template=(STATIC/name).read_text(encoding='utf-8').replace('{{VERSION}}',VERSION)
@@ -1372,7 +1486,13 @@ class Handler(BaseHTTPRequestHandler):
                     reconcile_campaign_billing(conn,s['campaign_id'])
                     s=self._session(conn)
                     if not s:return self.send_json({'ok':False,'authenticated':False,'error':'subscription_expired'},401)
-                return self.send_json({'ok':True,'authenticated':True,'user':{'id':s['user_id'],'name':s['name'],'email':s['email'],'role':s['role'],'campaign_id':s['campaign_id'],'client_name':s['client_name'],'client_logo_image':s['client_logo_image'],'client_plan':normalize_plan(s['client_plan']),'subscription_status':s['subscription_status'] or 'manual','subscription_next_payment_at':s['subscription_next_payment_at'],'subscription_current_period_end':s['subscription_current_period_end'],'subscription_cancel_at_period_end':bool(s['subscription_cancel_at_period_end']),'billing_option':s['billing_option'],'billing_amount':s['billing_amount'],'commitment_until':s['commitment_until'],'renewal_cancelled_at':s['renewal_cancelled_at'],'pending_plan':s['pending_plan'],'is_client_admin':bool(s['is_client_admin']),'permissions':session_permissions(rowdict(s))},'csrf':s['csrf']})
+                return self.send_json({'ok':True,'authenticated':True,'user':{'id':s['user_id'],'name':s['name'],'email':s['email'],'role':s['role'],'campaign_id':s['campaign_id'],'client_name':s['client_name'],'client_logo_image':s['client_logo_image'],'client_plan':normalize_plan(s['client_plan']),'subscription_status':s['subscription_status'] or 'manual','subscription_next_payment_at':s['subscription_next_payment_at'],'subscription_current_period_end':s['subscription_current_period_end'],'subscription_cancel_at_period_end':bool(s['subscription_cancel_at_period_end']),'billing_option':s['billing_option'],'billing_amount':s['billing_amount'],'commitment_until':s['commitment_until'],'renewal_cancelled_at':s['renewal_cancelled_at'],'pending_plan':s['pending_plan'],'is_client_admin':bool(s['is_client_admin']),'permissions':session_permissions(rowdict(s)),'two_factor_enabled':bool(s['totp_enabled'])},'csrf':s['csrf']})
+        if path == '/api/security/sessions':
+            with connect(DB_PATH) as conn:
+                s=self._require_auth(conn)
+                if not s:return
+                n=conn.execute('SELECT COUNT(*) n FROM sessions WHERE user_id=? AND expires_at>=?',(s['user_id'],now_ts())).fetchone()['n']
+                return self.send_json({'ok':True,'active_sessions':int(n or 0)})
         if path == '/api/wallet/status': return self.send_json({'ok':True,**wallet_status()})
         if path == '/api/campaign/public':
             code=(qs.get('code') or [''])[0].upper().strip()
@@ -1406,7 +1526,7 @@ class Handler(BaseHTTPRequestHandler):
             if not value or len(value)>300: return self.send_text('bad qr data',400,'text/plain')
             img=qrcode.make(value)
             bio=io.BytesIO(); img.save(bio,format='PNG'); data=bio.getvalue()
-            self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(data))); self.send_header('Cache-Control','no-store'); self.end_headers(); self.wfile.write(data); return
+            self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(data))); self.send_header('Cache-Control','no-store'); self._security_headers(False); self.end_headers(); self.wfile.write(data); return
         if path == '/api/card/qr-token':
             public_id=(qs.get('id') or [''])[0].strip()
             with connect(DB_PATH) as conn:
@@ -2052,7 +2172,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({'ok':False,'error':'invalid_json'},400)
         if path=='/api/public/signup':
             name=str(payload.get('responsible_name') or '').strip()[:100]; company=str(payload.get('company_name') or '').strip()[:120]; email=normalize_email(payload.get('email')); phone=str(payload.get('phone') or '').strip()[:40]; document=str(payload.get('document') or '').strip()[:30]; password=str(payload.get('password') or ''); plan=normalize_plan(payload.get('plan')); loyalty=str(payload.get('loyalty_type') or 'stamps').lower(); device_id=str(payload.get('mp_device_id') or '').strip()[:240]; billing_option=normalize_billing_option(plan,payload.get('billing_option'))
-            if not name or not company or not email or len(password)<10 or plan not in PLAN_PRICES:return self.send_json({'ok':False,'error':'invalid_signup'},400)
+            if not name or not company or not email or not password_is_strong(password,12) or plan not in PLAN_PRICES:return self.send_json({'ok':False,'error':'invalid_signup'},400)
             try: logo_image=validate_logo_data(payload.get('logo_image'))
             except ValueError as exc:return self.send_json({'ok':False,'error':str(exc)},400)
             if not logo_image:return self.send_json({'ok':False,'error':'logo_required'},400)
@@ -2269,53 +2389,81 @@ class Handler(BaseHTTPRequestHandler):
                 audit(conn,c['company_id'],None,'ecommerce_reward_reversed','membership',member['public_id'],details=f'{platform};pedido={info["order_id"]};recompensa=-{reward}',ip_address=self._ip()); notify_wallet_updates(conn,member['public_id'])
                 return self.send_json({'ok':True,'reversed':True,'order_id':info['order_id'],'reward_reversed':reward,'loyalty_type':c['loyalty_type']})
 
-        if path in ['/api/login','/login']:
-            if not self._rate_ok('login',10,300): return
-            email=str(payload.get('email','')).lower().strip(); password=str(payload.get('password','')).strip()
+        if path in ['/api/login/2fa','/login/2fa']:
+            code=str(payload.get('code') or '').strip()
+            challenge_cookie=self._cookies().get('clube_2fa_challenge')
+            raw=challenge_cookie.value if challenge_cookie else ''
+            if not raw or not self._rate_ok('login-2fa-ip',10,600,self._ip(),1800): return
+            th=hashlib.sha256(raw.encode()).hexdigest()
             with connect(DB_PATH) as conn:
-                u=conn.execute('SELECT * FROM users WHERE email=? AND active=1',(email,)).fetchone()
-                password_ok = bool(u) and verify_password(password,u['password_hash'])
-                # O administrador configurado no Railway é a identidade reservada do Painel Taboo.
-                # Se a senha digitada coincidir com CLUBE_ADMIN_PASSWORD, o perfil é restaurado para
-                # manager mesmo que o banco tenha ficado legado/inconsistente como attendant.
+                row=fetchone_for_update(conn,"SELECT ac.token_hash,ac.user_id,ac.expires_at,ac.attempts,u.* FROM auth_challenges ac JOIN users u ON u.id=ac.user_id WHERE ac.token_hash=?",(th,))
+                if not row or int(row['expires_at'] or 0)<now_ts() or int(row['attempts'] or 0)>=6 or not row['active']:
+                    if row: conn.execute('DELETE FROM auth_challenges WHERE token_hash=?',(th,))
+                    if path=='/login/2fa': return self.send_redirect('/login?error=2fa_expired',303,{'Set-Cookie':_clear_cookie('clube_2fa_challenge')})
+                    return self.send_json({'ok':False,'error':'two_factor_challenge_invalid'},401,{'Set-Cookie':_clear_cookie('clube_2fa_challenge')})
+                secret=decrypt_secret(row['totp_secret_enc']) if row['totp_secret_enc'] else ''
+                if not row['totp_enabled'] or not verify_totp(secret,code):
+                    conn.execute('UPDATE auth_challenges SET attempts=attempts+1 WHERE token_hash=?',(th,))
+                    audit(conn,row['company_id'],row['id'],'login_2fa_failed',details='totp',ip_address=self._ip())
+                    if path=='/login/2fa': return self.send_redirect('/login/2fa?error=1')
+                    return self.send_json({'ok':False,'error':'two_factor_invalid'},401)
+                conn.execute('DELETE FROM auth_challenges WHERE token_hash=?',(th,))
+                token,csrf=create_session(conn,row['id'])
+                persistent_rate_reset('login-account:'+hashlib.sha256(str(row['email']).lower().encode()).hexdigest()[:32])
+                audit(conn,row['company_id'],row['id'],'login_success','user',row['id'],details='2fa',ip_address=self._ip())
+                auth_cookies=[_session_cookie(token),_clear_cookie('clube_2fa_challenge')]
+                if path=='/login/2fa': return self.send_redirect('/manager' if row['role']=='manager' else '/attendant',303,{'Set-Cookie':auth_cookies})
+                return self.send_json({'ok':True,'role':row['role'],'csrf':csrf},200,{'Set-Cookie':auth_cookies})
+
+        if path in ['/api/login','/login']:
+            email=normalize_email(payload.get('email')) or str(payload.get('email','')).lower().strip()[:160]
+            password=str(payload.get('password',''))
+            if not self._rate_ok('login-ip',12,300,self._ip(),900): return
+            if not self._rate_ok('login-account',6,900,email or 'invalid',1800): return
+            with connect(DB_PATH) as conn:
+                u=conn.execute('SELECT * FROM users WHERE email=? AND active=1',(email,)).fetchone() if email else None
+                password_ok=verify_password(password,u['password_hash'] if u else DUMMY_PASSWORD_HASH)
                 admin_email=os.environ.get('CLUBE_ADMIN_EMAIL','').strip().lower()
                 admin_password=os.environ.get('CLUBE_ADMIN_PASSWORD','').strip()
-                admin_login = bool(u and admin_email and admin_password and email == admin_email and hmac.compare_digest(password,admin_password))
+                allow_repair=os.environ.get('CLUBE_ALLOW_ADMIN_REPAIR','0' if (os.environ.get('APP_ENV') or '').lower()=='production' else '1')=='1'
+                admin_login=bool(allow_repair and u and admin_email and admin_password and email==admin_email and hmac.compare_digest(password,admin_password))
                 if admin_login:
-                    needs_repair = (u['role'] != 'manager') or (not password_ok) or (u['campaign_id'] is not None)
+                    needs_repair=(u['role']!='manager') or (not password_ok) or (u['campaign_id'] is not None)
                     if needs_repair:
                         conn.execute("UPDATE users SET password_hash=?,role='manager',campaign_id=NULL,active=1 WHERE id=?",(hash_password(admin_password),u['id']))
-                        u=conn.execute('SELECT * FROM users WHERE id=?',(u['id'],)).fetchone()
-                        print(f'[AUTH] ADMIN_LOGIN_REPAIRED email={email} previous_role_repaired=True')
-                    password_ok=True
+                        u=conn.execute('SELECT * FROM users WHERE id=?',(u['id'],)).fetchone(); password_ok=True
+                        print(f'[AUTH] ADMIN_LOGIN_REPAIRED user={_email_tag(email)}')
                 if not u or not password_ok:
-                    print(f'[AUTH] LOGIN_FAILED email={email} user_found={bool(u)} password_length={len(password)}')
-                    audit(conn,u['company_id'] if u else None,u['id'] if u else None,'login_failed',details=email,ip_address=self._ip())
-                    if path == '/login':
-                        return self.send_redirect('/login?error=1')
+                    print(f'[AUTH] LOGIN_FAILED user={_email_tag(email)}')
+                    audit(conn,u['company_id'] if u else None,u['id'] if u else None,'login_failed',details='credential_rejected',ip_address=self._ip())
+                    if path=='/login': return self.send_redirect('/login?error=1')
                     return self.send_json({'ok':False,'error':'invalid_credentials'},401)
                 if u['role']=='attendant' and u['campaign_id']:
                     reconcile_campaign_billing(conn,u['campaign_id'])
                     camp=conn.execute('SELECT active,subscription_status FROM campaigns WHERE id=?',(u['campaign_id'],)).fetchone()
                     if not camp or not camp['active']:
-                        if path=='/login':return self.send_redirect('/login?error=subscription_expired')
+                        if path=='/login': return self.send_redirect('/login?error=subscription_expired')
                         return self.send_json({'ok':False,'error':'subscription_expired'},403)
-                token,csrf=create_session(conn,u['id']); audit(conn,u['company_id'],u['id'],'login_success',ip_address=self._ip())
-                print(f'[AUTH] LOGIN_SUCCESS email={email} role={u["role"]}')
-                cookie=f'{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=28800'
-                if os.environ.get('CLUBE_SECURE_COOKIE', '1' if str(DB_PATH).startswith(('postgres://','postgresql://')) else '0')=='1': cookie+='; Secure'
-                if path == '/login':
-                    return self.send_redirect('/manager' if u['role']=='manager' else '/attendant',303,{'Set-Cookie':cookie})
+                # 2FA é exigido quando foi ativado pelo administrador/cliente-admin.
+                if u['totp_enabled']:
+                    challenge=create_2fa_challenge(conn,u['id'])
+                    audit(conn,u['company_id'],u['id'],'login_2fa_challenge','user',u['id'],ip_address=self._ip())
+                    if path=='/login': return self.send_redirect('/login/2fa',303,{'Set-Cookie':_challenge_cookie(challenge)})
+                    return self.send_json({'ok':True,'requires_2fa':True},202,{'Set-Cookie':_challenge_cookie(challenge)})
+                persistent_rate_reset('login-account:'+hashlib.sha256(str(email).lower().encode()).hexdigest()[:32])
+                token,csrf=create_session(conn,u['id']); audit(conn,u['company_id'],u['id'],'login_success','user',u['id'],details='password',ip_address=self._ip())
+                print(f'[AUTH] LOGIN_SUCCESS user={_email_tag(email)} role={u["role"]}')
+                cookie=_session_cookie(token)
+                if path=='/login': return self.send_redirect('/manager' if u['role']=='manager' else '/attendant',303,{'Set-Cookie':cookie})
                 return self.send_json({'ok':True,'role':u['role'],'csrf':csrf},200,{'Set-Cookie':cookie})
         if path == '/api/logout':
             with connect(DB_PATH) as conn:
                 token=self._session_token(); s=self._session(conn)
                 if token: conn.execute('DELETE FROM sessions WHERE token=?',(token,))
                 if s: audit(conn,s['company_id'],s['user_id'],'logout',ip_address=self._ip())
-            return self.send_json({'ok':True},200,{'Set-Cookie':f'{SESSION_COOKIE}=deleted; Path=/; Max-Age=0; HttpOnly; SameSite=Strict'})
+            return self.send_json({'ok':True},200,{'Set-Cookie':[_clear_cookie(SESSION_COOKIE),_clear_cookie('clube_2fa_challenge')]})
         if path in ['/api/join','/join']:
-            if not RATE_LIMITER.allow(f'join:{self._ip()}',12,600):
-                return self.send_redirect('/join?campaign='+urllib.parse.quote(str(payload.get('campaign_code','') or 'CAFE5'))+'&error=rate_limited') if path=='/join' else self.send_json({'ok':False,'error':'rate_limited'},429)
+            if not self._rate_ok('join',12,600,self._ip(),900): return
             code=str(payload.get('campaign_code','')).upper().strip()
             name=str(payload.get('name','')).strip()[:80]
             email=normalize_email(payload.get('email'))
@@ -2362,8 +2510,9 @@ class Handler(BaseHTTPRequestHandler):
                     audit(conn,c['company_id'],None,'customer_welcome_queued','membership',public_id,details=email,ip_address=self._ip())
                 return self.send_redirect('/card?id='+urllib.parse.quote(public_id)) if path=='/join' else self.send_json({'ok':True,'public_id':public_id,'existing':False,'welcome_email':welcome_result})
         if path == '/api/forgot-password':
-            if not self._rate_ok('forgot-password',5,900): return
             email=normalize_email(payload.get('email'))
+            if not self._rate_ok('forgot-password-ip',5,900,self._ip(),1800): return
+            if email and not self._rate_ok('forgot-password-account',3,1800,email,3600): return
             if not email:
                 return self.send_json({'ok':False,'error':'invalid_email'},400)
             with connect(DB_PATH) as conn:
@@ -2372,17 +2521,19 @@ class Handler(BaseHTTPRequestHandler):
                 if u and u['role']=='attendant':
                     raw=random_token(32); token_hash=hashlib.sha256(raw.encode()).hexdigest(); ts=now_ts()
                     smtp_cfg=global_email_config()
-                    if not email_configured(smtp_cfg): return self.send_json({'ok':False,'error':'email_provider_not_configured'},503)
-                    conn.execute('DELETE FROM password_reset_tokens WHERE user_id=? OR expires_at<?',(u['id'],ts))
-                    conn.execute('INSERT INTO password_reset_tokens(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)',(token_hash,u['id'],ts+1800,ts))
-                    qid=enqueue_message(conn,None,'password_recovery',email,{'token':raw,'user_id':u['id']})
-                    audit(conn,u['company_id'],u['id'],'password_recovery_queued','user',u['id'],details=f'queue={qid}',ip_address=self._ip())
+                    if email_configured(smtp_cfg):
+                        conn.execute('DELETE FROM password_reset_tokens WHERE user_id=? OR expires_at<?',(u['id'],ts))
+                        conn.execute('INSERT INTO password_reset_tokens(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)',(token_hash,u['id'],ts+1800,ts))
+                        qid=enqueue_message(conn,None,'password_recovery',email,{'token':raw,'user_id':u['id']})
+                        audit(conn,u['company_id'],u['id'],'password_recovery_queued','user',u['id'],details=f'queue={qid}',ip_address=self._ip())
+                    else:
+                        print('[AUTH] PASSWORD_RECOVERY_PROVIDER_UNAVAILABLE user=%s' % _email_tag(email))
                 return self.send_json({'ok':True,'message':'Se o e-mail estiver cadastrado, enviaremos um link de redefinição.'})
 
         if path == '/api/reset-password':
             if not self._rate_ok('reset-password',6,900): return
             token=str(payload.get('token') or ''); password=str(payload.get('password') or '').strip()
-            if len(password)<10:return self.send_json({'ok':False,'error':'invalid_new_password'},400)
+            if not password_is_strong(password,12):return self.send_json({'ok':False,'error':'invalid_new_password'},400)
             th=hashlib.sha256(token.encode()).hexdigest()
             with connect(DB_PATH) as conn:
                 r=conn.execute('SELECT * FROM password_reset_tokens WHERE token_hash=? AND used_at IS NULL AND expires_at>=?',(th,now_ts())).fetchone()
@@ -2452,6 +2603,45 @@ class Handler(BaseHTTPRequestHandler):
             s=self._require_auth(conn)
             if not s: return
             if not self._require_csrf(s,payload): return self.send_json({'ok':False,'error':'csrf_failed'},403)
+            if path == '/api/security/sessions/revoke-other':
+                current_token=self._session_token()
+                before=conn.execute('SELECT COUNT(*) n FROM sessions WHERE user_id=? AND token<>?',(s['user_id'],current_token or '')).fetchone()['n']
+                conn.execute('DELETE FROM sessions WHERE user_id=? AND token<>?',(s['user_id'],current_token or ''))
+                audit(conn,s['company_id'],s['user_id'],'sessions_revoked','user',s['user_id'],details=f'other_sessions={int(before or 0)}',ip_address=self._ip())
+                return self.send_json({'ok':True,'revoked':int(before or 0)})
+            if path == '/api/security/2fa/setup':
+                if not (s['role']=='manager' or bool(s['is_client_admin'])):return self.send_json({'ok':False,'error':'forbidden'},403)
+                password=str(payload.get('password') or '')
+                u=conn.execute('SELECT id,email,password_hash,totp_enabled FROM users WHERE id=?',(s['user_id'],)).fetchone()
+                if not u or not verify_password(password,u['password_hash']):return self.send_json({'ok':False,'error':'invalid_password'},403)
+                if u['totp_enabled']:return self.send_json({'ok':False,'error':'two_factor_already_enabled'},409)
+                secret=generate_totp_secret(); uri=_totp_uri(secret,u['email'])
+                try: encrypted_secret=encrypt_secret(secret)
+                except RuntimeError: return self.send_json({'ok':False,'error':'security_key_not_configured'},503)
+                conn.execute('UPDATE users SET totp_secret_enc=?,totp_enabled=0,totp_confirmed_at=NULL WHERE id=?',(encrypted_secret,u['id']))
+                audit(conn,s['company_id'],s['user_id'],'two_factor_setup_started','user',s['user_id'],ip_address=self._ip())
+                return self.send_json({'ok':True,'secret':secret,'qr_data':_totp_qr_data(uri)})
+            if path == '/api/security/2fa/confirm':
+                if not (s['role']=='manager' or bool(s['is_client_admin'])):return self.send_json({'ok':False,'error':'forbidden'},403)
+                code=str(payload.get('code') or '')
+                u=conn.execute('SELECT id,totp_secret_enc,totp_enabled FROM users WHERE id=?',(s['user_id'],)).fetchone()
+                secret=decrypt_secret(u['totp_secret_enc']) if u and u['totp_secret_enc'] else ''
+                if not secret or not verify_totp(secret,code):return self.send_json({'ok':False,'error':'two_factor_invalid'},400)
+                conn.execute('UPDATE users SET totp_enabled=1,totp_confirmed_at=? WHERE id=?',(now_ts(),s['user_id']))
+                conn.execute('DELETE FROM auth_challenges WHERE user_id=?',(s['user_id'],))
+                audit(conn,s['company_id'],s['user_id'],'two_factor_enabled','user',s['user_id'],ip_address=self._ip())
+                return self.send_json({'ok':True})
+            if path == '/api/security/2fa/disable':
+                if not (s['role']=='manager' or bool(s['is_client_admin'])):return self.send_json({'ok':False,'error':'forbidden'},403)
+                password=str(payload.get('password') or ''); code=str(payload.get('code') or '')
+                u=conn.execute('SELECT id,password_hash,totp_secret_enc,totp_enabled FROM users WHERE id=?',(s['user_id'],)).fetchone()
+                secret=decrypt_secret(u['totp_secret_enc']) if u and u['totp_secret_enc'] else ''
+                if not u or not verify_password(password,u['password_hash']):return self.send_json({'ok':False,'error':'invalid_password'},403)
+                if not u['totp_enabled'] or not verify_totp(secret,code):return self.send_json({'ok':False,'error':'two_factor_invalid'},400)
+                conn.execute('UPDATE users SET totp_secret_enc=NULL,totp_enabled=0,totp_confirmed_at=NULL WHERE id=?',(s['user_id'],))
+                conn.execute('DELETE FROM auth_challenges WHERE user_id=?',(s['user_id'],))
+                audit(conn,s['company_id'],s['user_id'],'two_factor_disabled','user',s['user_id'],ip_address=self._ip())
+                return self.send_json({'ok':True})
             if path == '/api/admin/loyalty360/settings':
                 s=self._require_auth(conn,'attendant')
                 if not s:return
@@ -2608,14 +2798,16 @@ class Handler(BaseHTTPRequestHandler):
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
                 current_password=str(payload.get('current_password',''))
                 new_password=str(payload.get('new_password','')).strip()
-                if len(new_password)<10: return self.send_json({'ok':False,'error':'invalid_new_password'},400)
+                if not password_is_strong(new_password,12): return self.send_json({'ok':False,'error':'invalid_new_password'},400)
                 u=conn.execute('SELECT id,password_hash FROM users WHERE id=? AND role=\'attendant\' AND active=1',(s['user_id'],)).fetchone()
                 if not u or not verify_password(current_password,u['password_hash']): return self.send_json({'ok':False,'error':'invalid_current_password'},401)
                 if verify_password(new_password,u['password_hash']): return self.send_json({'ok':False,'error':'same_password'},409)
                 conn.execute('UPDATE users SET password_hash=? WHERE id=?',(hash_password(new_password),s['user_id']))
-                audit(conn,s['company_id'],s['user_id'],'password_change','user',s['user_id'],ip_address=self._ip())
-                print(f'[AUTH] ATTENDANT_PASSWORD_CHANGED user_id={s["user_id"]}')
-                return self.send_json({'ok':True})
+                conn.execute('DELETE FROM sessions WHERE user_id=?',(s['user_id'],))
+                new_token,new_csrf=create_session(conn,s['user_id'])
+                audit(conn,s['company_id'],s['user_id'],'password_change','user',s['user_id'],details='sessions_revoked',ip_address=self._ip())
+                print(f'[AUTH] ATTENDANT_PASSWORD_CHANGED user_id={s["user_id"]} sessions_revoked=True')
+                return self.send_json({'ok':True,'csrf':new_csrf},200,{'Set-Cookie':_session_cookie(new_token)})
             if path == '/api/attendant/customer/update':
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
@@ -3009,7 +3201,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/client-admin/plan':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 reconcile_campaign_billing(conn,s['campaign_id'])
-                plan=normalize_plan(payload.get('plan')); c=conn.execute('SELECT * FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone(); current=normalize_plan(c['plan'])
+                plan=normalize_plan(payload.get('plan')); c=conn.execute('SELECT * FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone(); current=normalize_plan(c['plan'])
                 commitment_until=int(c['commitment_until'] or 0) if 'commitment_until' in c.keys() else 0
                 if commitment_until and commitment_until>now_ts() and plan!=current:
                     return self.send_json({'ok':False,'error':'annual_commitment_active','commitment_until':commitment_until},409)
@@ -3081,7 +3273,7 @@ class Handler(BaseHTTPRequestHandler):
                 password=str(payload.get('password') or '')
                 u=conn.execute('SELECT password_hash FROM users WHERE id=?',(s['user_id'],)).fetchone()
                 if not u or not verify_password(password,u['password_hash']):return self.send_json({'ok':False,'error':'invalid_password'},403)
-                c=conn.execute('SELECT * FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone()
+                c=conn.execute('SELECT * FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
                 if not c or normalize_plan(c['plan'])=='beginner' or not c['subscription_id']:return self.send_json({'ok':False,'error':'no_paid_subscription'},409)
                 if c['subscription_cancel_at_period_end']:
                     option=normalize_billing_option(c['plan'],c['billing_option'])
@@ -3121,7 +3313,7 @@ class Handler(BaseHTTPRequestHandler):
                 password=str(payload.get('password') or '')
                 u=conn.execute('SELECT password_hash FROM users WHERE id=?',(s['user_id'],)).fetchone()
                 if not u or not verify_password(password,u['password_hash']):return self.send_json({'ok':False,'error':'invalid_password'},403)
-                c=conn.execute('SELECT * FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone()
+                c=conn.execute('SELECT * FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
                 now=now_ts(); option=normalize_billing_option(c['plan'],c['billing_option']) if c else 'free'; commitment=int(c['commitment_until'] or 0) if c else 0
                 # No anual parcelado, excluir a conta no meio do compromisso retiraria o acesso
                 # enquanto as parcelas continuariam vencendo. Por isso a exclusão fica disponível
@@ -3157,13 +3349,13 @@ class Handler(BaseHTTPRequestHandler):
                 except (TypeError,ValueError):return self.send_json({'ok':False,'error':'invalid_branch'},400)
                 if branch_id and not conn.execute('SELECT id FROM branches WHERE id=? AND campaign_id=? AND active=1',(branch_id,s['campaign_id'])).fetchone():return self.send_json({'ok':False,'error':'branch_not_found'},404)
                 if conn.execute('SELECT COUNT(*) n FROM branches WHERE campaign_id=? AND active=1',(s['campaign_id'],)).fetchone()['n'] and not branch_id:return self.send_json({'ok':False,'error':'branch_required'},400)
-                if len(name)<2 or not email or len(password)<10:return self.send_json({'ok':False,'error':'invalid_staff'},400)
+                if len(name)<2 or not email or not password_is_strong(password,12):return self.send_json({'ok':False,'error':'invalid_staff'},400)
                 plan=campaign_plan(conn,s['campaign_id']); limit=PLAN_FEATURES[plan]['staff_limit']; current=conn.execute("SELECT COUNT(*) n FROM users WHERE campaign_id=? AND role='attendant' AND active=1 AND is_client_admin=0",(s['campaign_id'],)).fetchone()['n'];
                 if limit and current>=limit:return self.send_json({'ok':False,'error':'plan_staff_limit','limit':limit},403)
                 try:new_id=insert_id(conn,'INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,is_client_admin,branch_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)',(s['company_id'],name,email,hash_password(password),'attendant',s['campaign_id'],0,branch_id,now_ts()))
                 except integrity_errors():return self.send_json({'ok':False,'error':'email_exists'},409)
                 c=conn.execute('SELECT name FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone(); q=None
-                if email_configured(global_email_config()):q=enqueue_message(conn,None,'attendant_welcome',email,{'name':name,'password':password,'client_name':c['name']})
+                if email_configured(global_email_config()):q=enqueue_message(conn,None,'attendant_welcome',email,{'name':name,'client_name':c['name']})
                 audit(conn,s['company_id'],s['user_id'],'client_admin_staff_create','user',new_id,details=f'{email};branch_id={branch_id or "none"}',ip_address=self._ip()); return self.send_json({'ok':True,'user_id':new_id,'queue_id':q})
             if path == '/api/client-admin/staff/update':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
@@ -3172,7 +3364,7 @@ class Handler(BaseHTTPRequestHandler):
                 try: branch_id=int(branch_raw) if branch_raw not in (None,'',0,'0') else None
                 except (TypeError,ValueError):return self.send_json({'ok':False,'error':'invalid_branch'},400)
                 if uid==int(s['user_id']):return self.send_json({'ok':False,'error':'cannot_edit_self'},400)
-                if not name or not email or (password and len(password)<10):return self.send_json({'ok':False,'error':'invalid_staff'},400)
+                if not name or not email or (password and not password_is_strong(password,12)):return self.send_json({'ok':False,'error':'invalid_staff'},400)
                 if branch_id and not conn.execute('SELECT id FROM branches WHERE id=? AND campaign_id=? AND active=1',(branch_id,s['campaign_id'])).fetchone():return self.send_json({'ok':False,'error':'branch_not_found'},404)
                 if conn.execute('SELECT COUNT(*) n FROM branches WHERE campaign_id=? AND active=1',(s['campaign_id'],)).fetchone()['n'] and not branch_id:return self.send_json({'ok':False,'error':'branch_required'},400)
                 u=conn.execute("SELECT id FROM users WHERE id=? AND campaign_id=? AND role='attendant'",(uid,s['campaign_id'])).fetchone()
@@ -3394,8 +3586,8 @@ class Handler(BaseHTTPRequestHandler):
                 is_client_admin=1 if payload.get('is_client_admin') else 0
                 try: campaign_id=int(payload.get('campaign_id',0))
                 except (TypeError,ValueError): campaign_id=0
-                if len(name)<2 or not email or '@' not in email or len(password)<10 or campaign_id<1:
-                    return self.send_json({'ok':False,'error':'invalid_staff','message':'Preencha nome, e-mail, cliente, perfil e uma senha com pelo menos 10 caracteres.'},400)
+                if len(name)<2 or not email or '@' not in email or not password_is_strong(password,12) or campaign_id<1:
+                    return self.send_json({'ok':False,'error':'invalid_staff','message':'Preencha nome, e-mail, cliente, perfil e uma senha com pelo menos 12 caracteres, com maiúscula, minúscula e número.'},400)
                 configured_admin=normalize_email(os.environ.get('CLUBE_ADMIN_EMAIL',''))
                 if configured_admin and email == configured_admin:
                     return self.send_json({
@@ -3418,7 +3610,7 @@ class Handler(BaseHTTPRequestHandler):
                 audit(conn,s['company_id'],s['user_id'],'staff_create','user',new_id,details=f'{email}:attendant:client={campaign_id}',ip_address=self._ip())
                 smtp_cfg=global_email_config(); email_result={'queued':False,'reason':'email_provider_not_configured'}
                 if email_configured(smtp_cfg):
-                    qid=enqueue_message(conn,None,'attendant_welcome',email,{'name':name,'password':password,'client_name':client['name']}); email_result={'queued':True,'queue_id':qid}
+                    qid=enqueue_message(conn,None,'attendant_welcome',email,{'name':name,'client_name':client['name']}); email_result={'queued':True,'queue_id':qid}
                     audit(conn,s['company_id'],s['user_id'],'staff_welcome_queued','user',new_id,details=f'queue={qid}',ip_address=self._ip())
                 return self.send_json({'ok':True,'user_id':new_id,'client_name':client['name'],'welcome_email':email_result})
             if path == '/api/manager/campaign/delete':

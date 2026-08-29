@@ -658,6 +658,39 @@ def init_db(db_path=None, seed=True):
             if not conn.execute('SELECT 1 FROM point_lots WHERE membership_id=? LIMIT 1',(pm['id'],)).fetchone():
                 days=int(pm['points_expiry_days'] or 180); ts0=now_ts(); conn.execute('INSERT INTO point_lots(membership_id,transaction_id,points,remaining_points,expires_at,created_at) VALUES(?,?,?,?,?,?)',(pm['id'],None,pm['points_balance'],pm['points_balance'],ts0+days*86400,ts0))
 
+        # Migração v123: hardening de autenticação, 2FA e rate limit persistente.
+        if _is_postgres(target):
+            conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret_enc TEXT")
+            conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled INTEGER NOT NULL DEFAULT 0")
+            conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_confirmed_at BIGINT")
+            conn.executescript("""CREATE TABLE IF NOT EXISTS auth_challenges (
+              token_hash TEXT PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              expires_at BIGINT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,created_at BIGINT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS security_rate_limits (
+              rate_key TEXT PRIMARY KEY,window_start BIGINT NOT NULL,count INTEGER NOT NULL DEFAULT 0,
+              blocked_until BIGINT NOT NULL DEFAULT 0,updated_at BIGINT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_auth_challenges_expiry ON auth_challenges(expires_at);
+            """)
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v123',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            ucols={r['name'] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+            if 'totp_secret_enc' not in ucols: conn.execute("ALTER TABLE users ADD COLUMN totp_secret_enc TEXT")
+            if 'totp_enabled' not in ucols: conn.execute("ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0")
+            if 'totp_confirmed_at' not in ucols: conn.execute("ALTER TABLE users ADD COLUMN totp_confirmed_at INTEGER")
+            conn.executescript("""CREATE TABLE IF NOT EXISTS auth_challenges (
+              token_hash TEXT PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              expires_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS security_rate_limits (
+              rate_key TEXT PRIMARY KEY,window_start INTEGER NOT NULL,count INTEGER NOT NULL DEFAULT 0,
+              blocked_until INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_auth_challenges_expiry ON auth_challenges(expires_at);
+            """)
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v123',?)",(now_ts(),))
+
         # Migração v10: todo atendente pode ser vinculado a um cliente (campaign_id).
         if _is_postgres(target):
             conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS campaign_id BIGINT REFERENCES campaigns(id) ON DELETE SET NULL')
@@ -800,7 +833,7 @@ def create_session(conn, user_id: int, ttl=8*60*60):
 def get_session(conn, token: str):
     if not token:
         return None
-    row = conn.execute('''SELECT s.token,s.csrf,s.expires_at,u.id user_id,u.company_id,u.campaign_id,u.name,u.email,u.role,u.active,u.is_client_admin,u.permissions_json,c.name client_name,c.logo_image client_logo_image,c.plan client_plan,c.active client_active,c.subscription_status,c.subscription_next_payment_at,c.subscription_current_period_end,c.pending_plan,c.subscription_cancel_at_period_end,c.billing_option,c.billing_amount,c.commitment_until,c.renewal_cancelled_at
+    row = conn.execute('''SELECT s.token,s.csrf,s.expires_at,u.id user_id,u.company_id,u.campaign_id,u.name,u.email,u.role,u.active,u.is_client_admin,u.permissions_json,u.totp_enabled,c.name client_name,c.logo_image client_logo_image,c.plan client_plan,c.active client_active,c.subscription_status,c.subscription_next_payment_at,c.subscription_current_period_end,c.pending_plan,c.subscription_cancel_at_period_end,c.billing_option,c.billing_amount,c.commitment_until,c.renewal_cancelled_at
                           FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN campaigns c ON c.id=u.campaign_id WHERE s.token=?''',(token,)).fetchone()
     if not row or row['expires_at'] < now_ts() or not row['active']:
         return None

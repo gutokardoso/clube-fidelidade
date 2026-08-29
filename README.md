@@ -1,4 +1,30 @@
-# Fidelizaê! v122
+# Fidelizaê! v123
+
+## v123 — hardening de segurança
+- Cookies de sessão com `HttpOnly`, `SameSite=Strict` e `Secure` automaticamente em produção.
+- HSTS, Content-Security-Policy, X-Frame-Options, nosniff, Referrer-Policy e Permissions-Policy aplicados às respostas.
+- Rate limit de autenticação/recuperação persistente no banco: funciona entre restarts e múltiplas instâncias; limites separados por IP e por conta.
+- Login com proteção de timing, logs sem e-mail em claro e bloqueio progressivo de tentativas repetidas.
+- Recuperação de senha deixa de revelar indiretamente a existência da conta quando o provedor de e-mail está indisponível.
+- Senhas novas passam a usar PBKDF2-SHA256 com 600 mil iterações; hashes antigos continuam compatíveis. Política de novas senhas administrativas: mínimo 12 caracteres, maiúscula, minúscula e número.
+- Troca/redefinição de senha revoga sessões antigas; a tela Segurança permite encerrar outras sessões manualmente.
+- 2FA/TOTP opcional para o Administrador Geral e administradores de empresas, compatível com Google Authenticator, Microsoft Authenticator, 1Password e similares. O segredo TOTP é criptografado com `CLUBE_ENCRYPTION_KEY`.
+- Fluxo 2FA usa desafio descartável de 5 minutos, limite de tentativas e código temporário de 6 dígitos.
+- E-mails de boas-vindas de equipe não transportam nem armazenam mais a senha inicial na fila de mensagens.
+- CSRF comparado em tempo constante e consultas críticas de empresa reforçadas com escopo `company_id`.
+- IP de proxy só é aceito como origem quando o ambiente Railway é reconhecido ou `CLUBE_TRUST_PROXY=1`; o valor é validado como IP.
+- `data.sqlite3` foi removido do pacote de deploy; produção continua usando PostgreSQL via `DATABASE_URL`.
+
+### Variáveis de segurança recomendadas no Railway
+```
+APP_ENV=production
+CLUBE_ENCRYPTION_KEY=<chave longa, aleatória e exclusiva>
+CLUBE_SECURE_COOKIE=1
+CLUBE_TRUST_PROXY=1
+CLUBE_ALLOW_ADMIN_REPAIR=0
+```
+
+> Não troque `CLUBE_ENCRYPTION_KEY` sem um plano de migração: ela protege segredos de integrações e também o segredo do 2FA.
 
 ## v122
 - Auditoria completa dos recursos por plano e proteção também no backend.
@@ -33,7 +59,7 @@
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v122
+**Versão atual:** v123
 
 
 ## Novidades da v117
