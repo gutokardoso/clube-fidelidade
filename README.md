@@ -1,4 +1,13 @@
-# Fidelizaê! v123
+# Fidelizaê! v124
+
+
+## v124 — auditoria integral, correções de confiabilidade e isolamento
+
+Revisão completa de backend, banco, rotas HTTP, permissões, frontend e fluxos críticos. Foram corrigidos dois defeitos reais que impediam o resgate de recompensa e o bloqueio/desbloqueio pelo gerente, removida a exposição pública da linha completa de campanhas, reforçado o isolamento da Central de Auditoria por `campaign_id`, restringida a edição/exclusão de clientes ao administrador do cliente, tornada a fila de mensagens segura para múltiplas instâncias, e tornada a expiração de pontos idempotente.
+
+Também foram revisados os ciclos de cobrança anual e os valores em upgrade/downgrade, corrigido o e-mail de boas-vindas para refletir a modalidade contratada, eliminados helpers sem uso, reduzida a exposição de campos internos em APIs, removida a versão do Python do header HTTP, endurecido o segredo do QR dinâmico para falhar de forma segura em produção e atualizado o branding residual.
+
+Validações executadas nesta versão: compilação Python completa, sintaxe de JavaScript externo e inline, IDs HTML duplicados, referências de endpoints do frontend, inicialização/migração de banco limpo, login real local, cadastro de cliente, crédito/resgate, bloqueio/desbloqueio, permissões de atendente, isolamento entre dois tenants, ausência de segredos na API pública, fila concorrente com dois workers e expiração idempotente de pontos.
 
 ## v123 — hardening de segurança
 - Cookies de sessão com `HttpOnly`, `SameSite=Strict` e `Secure` automaticamente em produção.
@@ -59,7 +68,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v123
+**Versão atual:** v124
 
 
 ## Novidades da v117

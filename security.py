@@ -31,10 +31,6 @@ def random_token(nbytes: int = 32) -> str:
     return secrets.token_urlsafe(nbytes)
 
 
-def csrf_token() -> str:
-    return random_token(24)
-
-
 def now_ts() -> int:
     return int(time.time())
 

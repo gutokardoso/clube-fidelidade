@@ -40,7 +40,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v123'
+VERSION='v124'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
@@ -278,19 +278,10 @@ def global_smtp_config():
         'user':os.environ.get('CLUBE_SMTP_USER','').strip(),
         'password':os.environ.get('CLUBE_SMTP_PASSWORD',''),
         'from_addr':os.environ.get('CLUBE_SMTP_FROM','').strip(),
-        'from_name':os.environ.get('CLUBE_SMTP_FROM_NAME','Clube Fidelidade').strip(),
+        'from_name':os.environ.get('CLUBE_SMTP_FROM_NAME','Fidelizaê!').strip(),
         'security':os.environ.get('CLUBE_SMTP_SECURITY','starttls').strip().lower(),
         'source':'global'
     }
-
-def smtp_config_for_client(conn=None,campaign_id=None):
-    if conn is not None and campaign_id:
-        x=client_integrations(conn,campaign_id)
-        if x and x.get('smtp_host') and x.get('smtp_from'):
-            return {'host':x['smtp_host'],'port':str(x.get('smtp_port') or 587),'user':x.get('smtp_user') or '',
-                    'password':x.get('smtp_password') or '','from_addr':x['smtp_from'],'from_name':x.get('smtp_from_name') or '',
-                    'security':x.get('smtp_security') or 'starttls','source':'client'}
-    return global_smtp_config()
 
 def email_config_for_client(conn=None,campaign_id=None):
     # Integração promocional sempre isolada por cliente, sem fallback global da Taboo.
@@ -319,7 +310,7 @@ def brevo_api_config():
     return {
         'api_key':os.environ.get('BREVO_API_KEY','').strip(),
         'sender_email':os.environ.get('BREVO_SENDER_EMAIL','').strip(),
-        'sender_name':os.environ.get('BREVO_SENDER_NAME','Clube Fidelidade').strip(),
+        'sender_name':os.environ.get('BREVO_SENDER_NAME','Fidelizaê!').strip(),
         'reply_to':os.environ.get('BREVO_REPLY_TO','').strip(),
     }
 
@@ -368,12 +359,12 @@ def _brevo_payload_from_message(msg, cfg=None):
         if ctype=='text/html': html_content=content
         else: text=content
     payload={
-        'sender':{'name':cfg.get('sender_name') or 'Clube Fidelidade','email':cfg['sender_email']},
+        'sender':{'name':cfg.get('sender_name') or 'Fidelizaê!','email':cfg['sender_email']},
         'to':to,
-        'subject':str(msg.get('Subject') or 'Clube Fidelidade'),
+        'subject':str(msg.get('Subject') or 'Fidelizaê!'),
     }
     if html_content: payload['htmlContent']=html_content
-    else: payload['textContent']=text or 'Clube Fidelidade'
+    else: payload['textContent']=text or 'Fidelizaê!'
     if attachments: payload['attachment']=attachments
     # Respeita o Reply-To específico da mensagem (ex.: formulário comercial).
     # Só usa o Reply-To global como fallback.
@@ -531,13 +522,13 @@ def decode_image_data(value, max_bytes=700_000):
     return raw, subtype
 
 
-def send_campaign_email(to_email, to_name, message, image_data=None, subject='Mensagem do Clube Fidelidade', smtp_config=None):
+def send_campaign_email(to_email, to_name, message, image_data=None, subject='Mensagem do Fidelizaê!', smtp_config=None):
     if not email_configured(smtp_config):
         return {'sent':False,'reason':'smtp_not_configured'}
     msg=EmailMessage()
     msg['Subject']=subject
     msg['To']=to_email
-    text=(str(message or '').strip() or 'Você recebeu uma nova mensagem do seu Clube Fidelidade.')
+    text=(str(message or '').strip() or 'Você recebeu uma nova mensagem do seu programa de fidelidade.')
     msg.set_content(text)
     if image_data:
         raw,subtype=decode_image_data(image_data)
@@ -714,13 +705,15 @@ def validate_mp_webhook_signature(headers,query):
     return hmac.compare_digest(expected,received)
 
 
-def send_subscription_welcome(name,email,company,plan):
+def send_subscription_welcome(name,email,company,plan,billing_option=None):
     cfg=global_email_config()
     if not email_configured(cfg): return {'sent':False,'reason':'email_not_configured'}
     base=(os.environ.get('PUBLIC_BASE_URL') or 'https://app.fidelizae.com.br').rstrip('/')
-    labels={'beginner':'Iniciante — Grátis','intermediate':'Intermediário — R$ 49,90/mês','pro':'PRO — R$ 99,90/mês'}
+    _,bcfg=billing_config(plan,billing_option or ('free' if normalize_plan(plan)=='beginner' else 'monthly'))
+    plan_name={'beginner':'Iniciante','intermediate':'Intermediário','pro':'PRO'}.get(normalize_plan(plan),str(plan))
+    label=f'{plan_name} — {bcfg["label"]}'
     msg=EmailMessage();msg['Subject']='Seu Fidelizaê! está pronto 🎉';msg['To']=email
-    msg.set_content(f'Olá, {name}!\n\nA empresa {company} foi ativada no plano {labels.get(plan,plan)}.\nAcesse: {base}/login\nUsuário: {email}\nUse a senha criada no cadastro.\n\nFidelizaê! — Fidelidade que marca pontos.')
+    msg.set_content(f'Olá, {name}!\n\nA empresa {company} foi ativada no plano {label}.\nAcesse: {base}/login\nUsuário: {email}\nUse a senha criada no cadastro.\n\nFidelizaê! — Fidelidade que marca pontos.')
     return send_email_message(msg,cfg)
 
 
@@ -737,7 +730,7 @@ def provision_signup(conn,row,subscription=None):
     uid=insert_id(conn,"INSERT INTO users(company_id,name,email,password_hash,role,active,is_client_admin,campaign_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(company_id,row['responsible_name'],row['email'],row['password_hash'],'attendant',1,1,cid,now))
     conn.execute("UPDATE subscription_signups SET status='active',provisioned_at=? WHERE id=?",(now,row['id']))
     audit(conn,company_id,uid,'subscription_signup','campaign',cid,details=plan)
-    try: send_subscription_welcome(row['responsible_name'],row['email'],row['company_name'],plan)
+    try: send_subscription_welcome(row['responsible_name'],row['email'],row['company_name'],plan,billing_option)
     except Exception as exc: print('[BILLING] welcome email failed',exc)
     return cid
 
@@ -765,6 +758,21 @@ def _approved_subscription_invoice_count(subscription_id):
         payment=invoice.get('payment') if isinstance(invoice,dict) else None
         if isinstance(payment,dict) and str(payment.get('status') or '').lower()=='approved':count+=1
     return count
+
+
+def _refresh_annual_commitment_after_payment(conn,campaign):
+    """Abre um novo compromisso anual somente após uma cobrança aprovada já no novo ciclo."""
+    if not campaign or campaign['subscription_cancel_at_period_end']: return False
+    option=normalize_billing_option(campaign['plan'],campaign['billing_option'])
+    if option not in ('annual_monthly','annual_upfront'): return False
+    end=int(campaign['commitment_until'] or 0)
+    now=now_ts()
+    if not end or now < end: return False
+    new_end=end
+    while new_end<=now: new_end+=365*86400
+    conn.execute('UPDATE campaigns SET commitment_until=?,subscription_status_updated_at=? WHERE id=?',(new_end,now,campaign['id']))
+    audit(conn,campaign['company_id'],None,'subscription_annual_renewed','campaign',campaign['id'],details=f'{option};commitment_until={new_end}')
+    return True
 
 
 def _expire_non_renewing_campaign(conn,campaign_id):
@@ -857,13 +865,13 @@ def send_customer_welcome_email(name, email, client_name, public_id, campaign, e
     if google: wallet_buttons.append(f'<a href="{html.escape(base_url+google,quote=True)}" style="display:inline-block;padding:11px 16px;margin:4px;background:#231a16;color:#fff;text-decoration:none;border-radius:10px;font-weight:700">Google Wallet</a>')
     if not wallet_buttons:
         wallet_buttons.append(f'<a href="{safe_card_url}" style="display:inline-block;padding:11px 16px;margin:4px;background:#231a16;color:#fff;text-decoration:none;border-radius:10px;font-weight:700">Abrir cartão / Wallet</a>')
-    text=(f'Agora você faz parte do Clube de Fidelidade {client_name}.\n'
+    text=(f'Agora você faz parte do programa de fidelidade {client_name}.\n'
           'Para ter acesso às nossas vantagens, apresente o seu cartão com o QR code aos nossos atendentes toda vez que vier efetuar uma compra.\n\n'
           f'Link de acesso: {card_url}\nCódigo do cartão: {card_code}\n')
     html_body=(
         '<!doctype html><html><body style="margin:0;background:#f7f3ef;font-family:Arial,sans-serif;color:#231a16">'
         '<div style="max-width:620px;margin:0 auto;padding:28px 18px">'
-        f'<h2 style="margin:0 0 12px">Agora você faz parte do Clube de Fidelidade {client}.</h2>'
+        f'<h2 style="margin:0 0 12px">Agora você faz parte do programa de fidelidade {client}.</h2>'
         '<p style="line-height:1.55;margin:0 0 24px">Para ter acesso às nossas vantagens, apresente o seu cartão com o QR code aos nossos atendentes toda vez que vier efetuar uma compra.</p>'
         f'<div style="background:linear-gradient(145deg,{theme_start},{theme_end});color:#fff;border-radius:26px;padding:26px;text-align:center">'
         '<div style="font-weight:900;letter-spacing:.08em;font-size:14px">CLUBE DE FIDELIDADE</div>'
@@ -876,7 +884,7 @@ def send_customer_welcome_email(name, email, client_name, public_id, campaign, e
         f'<p style="line-height:1.55"><strong>Código do cartão:</strong><br>{safe_code}</p></div></body></html>'
     )
     msg=EmailMessage()
-    msg['Subject']=f'Bem-vindo ao Clube de Fidelidade {client_name}'
+    msg['Subject']=f'Bem-vindo ao programa de fidelidade {client_name}'
     msg['To']=email
     msg.set_content(text)
     msg.add_alternative(html_body, subtype='html')
@@ -891,10 +899,10 @@ def send_attendant_welcome_email(name, email, client_name, smtp_config=None):
         return {'sent':False,'reason':'smtp_not_configured'}
     login_url=os.environ.get('CLUBE_LOGIN_URL','https://app.fidelizae.com.br/login').strip()
     msg=EmailMessage()
-    msg['Subject']='Acesso ao Clube Fidelidade'
+    msg['Subject']='Acesso ao Fidelizaê!'
     msg['To']=email
     msg.set_content(
-        'Cadastro realizado com sucesso! Agora é só acessar o link abaixo, inserir seu e-mail e senha para ter acesso ao painel do seu Clube Fidelidade.\n\n'
+        'Cadastro realizado com sucesso! Agora é só acessar o link abaixo, inserir seu e-mail e senha para ter acesso ao painel do seu Fidelizaê!.\n\n'
         f'{login_url}\n\n'
         f'E-mail: {email}\n'
         'Use a senha inicial fornecida pelo administrador. Por segurança, ela não é enviada por e-mail.\n'
@@ -904,10 +912,6 @@ def send_attendant_welcome_email(name, email, client_name, smtp_config=None):
     if not result.get('sent'):
         print(f'[EMAIL] ATTENDANT_WELCOME_FAILED user={_email_tag(email)} reason={result.get("reason")}')
     return result
-
-
-def whatsapp_link(phone, message):
-    return 'https://wa.me/' + str(phone) + '?text=' + urllib.parse.quote(str(message), safe='')
 
 
 def whatsapp_config_for_client(conn=None,campaign_id=None):
@@ -1000,7 +1004,12 @@ def meta_phone_details(phone_id,token):
 
 
 def _qr_secret():
-    return (os.environ.get('CLUBE_QR_SECRET') or os.environ.get('CLUBE_ENCRYPTION_KEY') or 'development-only-change-me').encode('utf-8')
+    secret=(os.environ.get('CLUBE_QR_SECRET') or os.environ.get('CLUBE_ENCRYPTION_KEY') or '').strip()
+    env=(os.environ.get('APP_ENV') or 'production').strip().lower()
+    if not secret:
+        if env in {'development','dev','test','testing','staging','sandbox'}: secret='development-only-change-me'
+        else: raise RuntimeError('qr_secret_not_configured')
+    return secret.encode('utf-8')
 
 def make_dynamic_qr(public_id, ttl=60):
     exp=now_ts()+max(30,min(int(ttl),120)); nonce=secrets.token_urlsafe(6)
@@ -1033,7 +1042,7 @@ def _queue_send(item, conn):
         c=conn.execute('SELECT * FROM campaigns WHERE id=?',(campaign_id,)).fetchone();
         return send_customer_welcome_email(payload['name'],payload['email'],c['name'],payload['public_id'],rowdict(c),email_config_for_client(conn,campaign_id))
     if kind=='campaign_email':
-        return send_campaign_email(item['recipient'],payload.get('name',''),payload.get('message',''),payload.get('image_data'),payload.get('subject','Mensagem do Clube Fidelidade'),email_config_for_client(conn,campaign_id))
+        return send_campaign_email(item['recipient'],payload.get('name',''),payload.get('message',''),payload.get('image_data'),payload.get('subject','Mensagem do Fidelizaê!'),email_config_for_client(conn,campaign_id))
     if kind=='whatsapp':
         try:
             response=send_whatsapp_cloud(item['recipient'],payload.get('message',''),whatsapp_config_for_client(conn,campaign_id))
@@ -1047,18 +1056,25 @@ def _queue_send(item, conn):
 
 def process_message_queue_once(limit=15):
     with connect(DB_PATH) as conn:
-        # Se o processo caiu enquanto um item estava em 'processing', devolve-o à fila.
-        conn.execute("UPDATE message_queue SET status='retry',available_at=? WHERE status='processing' AND available_at<?",(now_ts(),now_ts()-120))
-        rows=conn.execute("SELECT * FROM message_queue WHERE status IN ('pending','retry') AND available_at<=? ORDER BY id LIMIT ?",(now_ts(),limit)).fetchall()
-        for row in rows:
-            item=rowdict(row); conn.execute("UPDATE message_queue SET status='processing',attempts=attempts+1 WHERE id=?",(item['id'],)); conn.commit()
+        now=now_ts()
+        conn.execute("UPDATE message_queue SET status='retry',available_at=? WHERE status='processing' AND available_at<=?",(now,now))
+        rows=conn.execute("SELECT id FROM message_queue WHERE status IN ('pending','retry') AND available_at<=? ORDER BY id LIMIT ?",(now,limit)).fetchall()
+        for candidate in rows:
+            item_id=candidate['id']; lease_until=now_ts()+120
+            cur=conn.execute("UPDATE message_queue SET status='processing',attempts=attempts+1,available_at=? WHERE id=? AND status IN ('pending','retry') AND available_at<=?",(lease_until,item_id,now_ts()))
+            if getattr(cur,'rowcount',0)!=1:
+                conn.rollback(); continue
+            conn.commit()
+            row=conn.execute('SELECT * FROM message_queue WHERE id=?',(item_id,)).fetchone()
+            if not row: continue
+            item=rowdict(row)
             try: result=_queue_send(item,conn)
             except Exception as exc: result={'sent':False,'reason':type(exc).__name__+':'+str(exc)[:300]}
             if result.get('sent'):
-                conn.execute("UPDATE message_queue SET status='sent',sent_at=?,last_error=NULL WHERE id=?",(now_ts(),item['id']))
+                conn.execute("UPDATE message_queue SET status='sent',sent_at=?,last_error=NULL WHERE id=? AND status='processing'",(now_ts(),item_id))
             else:
-                attempts=int(item.get('attempts') or 0)+1; status='failed' if attempts>=4 else 'retry'; delay=min(900,30*(2**max(0,attempts-1)))
-                conn.execute("UPDATE message_queue SET status=?,last_error=?,available_at=? WHERE id=?",(status,result.get('reason','failed'),now_ts()+delay,item['id']))
+                attempts=int(item.get('attempts') or 0); status='failed' if attempts>=4 else 'retry'; delay=min(900,30*(2**max(0,attempts-1)))
+                conn.execute("UPDATE message_queue SET status=?,last_error=?,available_at=? WHERE id=? AND status='processing'",(status,result.get('reason','failed'),now_ts()+delay,item_id))
             conn.commit()
 
 def customer_segment(last_activity,created_at,visits,reward_ready,almost_reward,now=None):
@@ -1190,6 +1206,7 @@ def notify_wallet_updates(conn,public_id):
         except Exception: pass
 
 class Handler(BaseHTTPRequestHandler):
+    sys_version = ''
     def _need_permission(self,sess,key):
         if has_permission(rowdict(sess),key): return True
         self.send_json({'ok':False,'error':'permission_denied','permission':key},403); return False
@@ -1417,7 +1434,7 @@ class Handler(BaseHTTPRequestHandler):
             code=(qs.get('code') or [''])[0].strip()
             error=(qs.get('error_description') or qs.get('error_message') or qs.get('error') or [''])[0].strip()
             payload=json.dumps({'type':'CLUBE_META_OAUTH_CALLBACK','code':code,'error':error},ensure_ascii=False).replace('</','<\\/')
-            page=f'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Conexão Meta • Clube Fidelidade</title><style>body{{font-family:Arial,sans-serif;background:#f7f4ef;color:#1e1713;display:grid;place-items:center;min-height:100vh;margin:0}}main{{max-width:520px;background:#fff;padding:32px;border-radius:22px;box-shadow:0 16px 50px #0002;text-align:center}}h1{{font-size:24px}}p{{line-height:1.5;color:#655b54}}</style></head><body><main><h1>{'Autorização recebida' if code else 'Não foi possível concluir'}</h1><p>{'Você pode voltar ao Clube Fidelidade. Esta janela será fechada automaticamente.' if code else html.escape(error or 'A Meta não retornou uma autorização válida.')}</p></main><script>(function(){{const data={payload};try{{if(window.opener&&!window.opener.closed)window.opener.postMessage(data,window.location.origin)}}catch(e){{}}setTimeout(function(){{try{{window.close()}}catch(e){{}}}},900)}})();</script></body></html>'''
+            page=f'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Conexão Meta • Fidelizaê!</title><style>body{{font-family:Arial,sans-serif;background:#f7f4ef;color:#1e1713;display:grid;place-items:center;min-height:100vh;margin:0}}main{{max-width:520px;background:#fff;padding:32px;border-radius:22px;box-shadow:0 16px 50px #0002;text-align:center}}h1{{font-size:24px}}p{{line-height:1.5;color:#655b54}}</style></head><body><main><h1>{'Autorização recebida' if code else 'Não foi possível concluir'}</h1><p>{'Você pode voltar ao Fidelizaê!. Esta janela será fechada automaticamente.' if code else html.escape(error or 'A Meta não retornou uma autorização válida.')}</p></main><script>(function(){{const data={payload};try{{if(window.opener&&!window.opener.closed)window.opener.postMessage(data,window.location.origin)}}catch(e){{}}setTimeout(function(){{try{{window.close()}}catch(e){{}}}},900)}})();</script></body></html>'''
             return self.send_text(page)
         if path.startswith('/empresa/'):
             code=path.split('/empresa/',1)[1].strip().upper()
@@ -1497,7 +1514,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/campaign/public':
             code=(qs.get('code') or [''])[0].upper().strip()
             with connect(DB_PATH) as conn:
-                c=conn.execute('''SELECT c.*,co.name company_name,co.primary_color,co.logo_text FROM campaigns c JOIN companies co ON co.id=c.company_id WHERE c.code=? AND c.active=1''',(code,)).fetchone()
+                c=conn.execute('''SELECT c.code,c.name,c.reward_name,c.goal,c.icon,c.logo_image,c.card_theme,c.loyalty_type,c.points_spend_cents,c.plan,co.name company_name,co.primary_color,co.logo_text FROM campaigns c JOIN companies co ON co.id=c.company_id WHERE c.code=? AND c.active=1''',(code,)).fetchone()
                 if not c:
                     return self.send_redirect('/join?campaign='+urllib.parse.quote(code or 'CAFE5')+'&error=1') if path=='/join' else self.send_json({'ok':False,'error':'campaign_not_found'},404)
                 return self.send_json({'ok':True,'campaign':rowdict(c)})
@@ -1531,7 +1548,8 @@ class Handler(BaseHTTPRequestHandler):
             public_id=(qs.get('id') or [''])[0].strip()
             with connect(DB_PATH) as conn:
                 if not conn.execute('SELECT id FROM memberships WHERE public_id=? AND status=?',(public_id,'active')).fetchone(): return self.send_json({'ok':False,'error':'membership_not_found'},404)
-            token,exp=make_dynamic_qr(public_id,60)
+            try: token,exp=make_dynamic_qr(public_id,60)
+            except RuntimeError: return self.send_json({'ok':False,'error':'qr_security_not_configured'},503)
             return self.send_json({'ok':True,'token':token,'expires_at':exp})
         if path.startswith('/api/wallet/logo-v62/') or path.startswith('/api/wallet/logo/'):
             if path.startswith('/api/wallet/logo-v62/'):
@@ -1910,7 +1928,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess:return
                 if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 cid=sess['campaign_id']; now=now_ts()
-                camp=rowdict(conn.execute("SELECT * FROM campaigns WHERE id=?",(cid,)).fetchone())
+                camp=rowdict(conn.execute("SELECT id,code,name,reward_name,goal,icon,card_theme,plan,loyalty_type,points_spend_cents,cashback_percent,points_expiry_days,logo_image,billing_option,billing_amount,commitment_until,subscription_status,subscription_next_payment_at,subscription_current_period_end,subscription_cancel_at_period_end FROM campaigns WHERE id=?",(cid,)).fetchone())
                 plan=normalize_plan(camp.get('plan'))
                 tiers=[rowdict(x) for x in conn.execute("SELECT * FROM loyalty_tiers WHERE campaign_id=? ORDER BY min_points",(cid,)).fetchall()] if PLAN_FEATURES[plan]['vip_tiers'] else []
                 mult=[rowdict(x) for x in conn.execute("SELECT * FROM point_multipliers WHERE campaign_id=? ORDER BY id DESC",(cid,)).fetchall()] if PLAN_FEATURES[plan]['multipliers'] else []
@@ -1940,7 +1958,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/card/history360':
             public_id=(qs.get('id') or [''])[0].strip()
             with connect(DB_PATH) as conn:
-                m=conn.execute("SELECT m.*,c.name campaign_name,c.loyalty_type,c.cashback_percent,c.points_expiry_days FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=?",(public_id,)).fetchone()
+                m=conn.execute("SELECT m.id,m.public_id,m.campaign_id,m.progress,m.points_balance,m.cashback_balance_cents,m.rewards_available,m.status,m.created_at,c.name campaign_name,c.loyalty_type,c.cashback_percent,c.points_expiry_days FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=?",(public_id,)).fetchone()
                 if not m:return self.send_json({'ok':False,'error':'card_not_found'},404)
                 hist=[rowdict(x) for x in conn.execute("SELECT type,value,note,created_at FROM transactions WHERE membership_id=? ORDER BY id DESC LIMIT 100",(m['id'],)).fetchall()]
                 tier=conn.execute("SELECT name FROM loyalty_tiers WHERE campaign_id=? AND min_points<=? ORDER BY min_points DESC LIMIT 1",(m['campaign_id'],m['points_balance'])).fetchone()
@@ -1971,6 +1989,7 @@ class Handler(BaseHTTPRequestHandler):
                 payload['transactions']=[rowdict(r) for r in conn.execute('''SELECT t.id,t.membership_id,t.user_id,t.type,t.value,t.previous_progress,t.new_progress,t.rewards_delta,t.note,t.created_at FROM transactions t JOIN memberships m ON m.id=t.membership_id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? ORDER BY t.id''',(cid,)).fetchall()]
                 data=json.dumps(payload,ensure_ascii=False,indent=2).encode('utf-8'); return self.send_bytes(data,'application/json; charset=utf-8',headers={'Content-Disposition':f'attachment; filename="clube-backup-{datetime.now().strftime("%Y%m%d-%H%M")}.json"'})
         if path == '/api/privacy/export':
+            if not self._rate_ok('privacy-export',8,900,self._ip(),1800): return
             public_id=(qs.get('id') or [''])[0].strip(); cpf=normalize_cpf((qs.get('cpf') or [''])[0])
             if not cpf:return self.send_json({'ok':False,'error':'invalid_cpf'},400)
             with connect(DB_PATH) as conn:
@@ -2005,6 +2024,7 @@ class Handler(BaseHTTPRequestHandler):
                     c['ecommerce_configured']=bool(c['ecommerce_platform']!='none' and c.get('ecommerce_webhook_secret'))
                     public_base=os.environ.get('PUBLIC_BASE_URL','').rstrip('/')
                     c['ecommerce_webhook_url']=(public_base+f"/api/integrations/ecommerce/{c['id']}/{c.get('ecommerce_webhook_secret')}") if (public_base and c.get('ecommerce_webhook_secret')) else ''
+                    c['ecommerce_webhook_secret']=None
                     c['email_configured']=bool(c['brevo_configured'] if c['email_provider']=='brevo' else c['smtp_configured']); c['reward_catalog_count']=conn.execute("SELECT COUNT(*) n FROM reward_catalog WHERE campaign_id=? AND active=1",(c['id'],)).fetchone()['n']; c['wallet_google']=wallet_status()['google']['ready']; c['wallet_apple']=wallet_status()['apple']['ready']
                     c['smtp_password_enc']=None
                     c['brevo_api_key_enc']=None
@@ -2106,7 +2126,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess:return
                 if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 action=(qs.get('action') or [''])[0].strip(); user_id=(qs.get('user_id') or [''])[0].strip(); branch_id=(qs.get('branch_id') or [''])[0].strip()
-                params=[sess['company_id']]; where=['a.company_id=?']
+                params=[sess['campaign_id']]; where=['a.campaign_id=?']
                 if action: where.append('a.action=?'); params.append(action)
                 if user_id:
                     try: uid=int(user_id)
@@ -2120,7 +2140,7 @@ class Handler(BaseHTTPRequestHandler):
                     where.append('COALESCE(a.branch_id,u.branch_id)=?'); params.append(bid)
                 rows=[rowdict(r) for r in conn.execute('SELECT a.*,u.name user_name,COALESCE(b.name,\'Sem unidade\') branch_name,b.code branch_code FROM audit_log a LEFT JOIN users u ON u.id=a.user_id LEFT JOIN branches b ON b.id=COALESCE(a.branch_id,u.branch_id) WHERE '+ ' AND '.join(where)+' ORDER BY a.id DESC LIMIT 250',tuple(params)).fetchall()]
                 users=[rowdict(r) for r in conn.execute("SELECT u.id,u.name,u.email,u.branch_id,b.name branch_name FROM users u LEFT JOIN branches b ON b.id=u.branch_id WHERE u.company_id=? AND u.active=1 AND (u.campaign_id=? OR u.id=?) ORDER BY u.name,u.email",(sess['company_id'],sess['campaign_id'],sess['user_id'])).fetchall()]
-                actions=[r['action'] for r in conn.execute('SELECT DISTINCT action FROM audit_log WHERE company_id=? ORDER BY action',(sess['company_id'],)).fetchall()]
+                actions=[r['action'] for r in conn.execute('SELECT DISTINCT action FROM audit_log WHERE campaign_id=? ORDER BY action',(sess['campaign_id'],)).fetchall()]
                 branches=[rowdict(r) for r in conn.execute('SELECT id,name,code FROM branches WHERE campaign_id=? AND active=1 ORDER BY name',(sess['campaign_id'],)).fetchall()]
                 return self.send_json({'ok':True,'audit':rows,'users':users,'actions':actions,'branches':branches})
         if path == '/api/admin/commercial-report':
@@ -2233,6 +2253,9 @@ class Handler(BaseHTTPRequestHandler):
                                 # registramos a recusa para diagnóstico sem expor dados sensíveis.
                                 print('[BILLING] MP_SIGNUP_PAYMENT_REJECTED subscription_id=%s code=%s' % (pre_id,rejection),flush=True)
                             camp=conn.execute('SELECT * FROM campaigns WHERE subscription_id=?',(pre_id,)).fetchone()
+                            if approved and camp and not camp['subscription_cancel_at_period_end']:
+                                _refresh_annual_commitment_after_payment(conn,camp)
+                                camp=conn.execute('SELECT * FROM campaigns WHERE id=?',(camp['id'],)).fetchone()
                             if approved and camp and camp['subscription_cancel_at_period_end'] and normalize_billing_option(camp['plan'],camp['billing_option'])=='annual_monthly':
                                 paid=_approved_subscription_invoice_count(pre_id)
                                 if paid is not None and paid>=12 and _best_effort_cancel_subscription(pre_id):
@@ -2254,8 +2277,9 @@ class Handler(BaseHTTPRequestHandler):
                         # Upgrade: libera o novo plano somente depois da nova assinatura ser autorizada.
                         if mapped=='active' and camp['pending_plan']:
                             old_id=camp['subscription_id']; new_plan=normalize_plan(camp['pending_plan'])
-                            conn.execute("UPDATE campaigns SET plan=?,subscription_provider='mercadopago',subscription_id=?,pending_subscription_id=NULL,pending_plan=NULL,previous_subscription_id=?,subscription_status='active',subscription_started_at=COALESCE(subscription_started_at,?),subscription_current_period_end=?,subscription_next_payment_at=?,subscription_status_updated_at=?,subscription_cancel_at_period_end=0 WHERE id=?",
-                                (new_plan,sub_id,old_id,now,next_ts,next_ts,now,camp['id']))
+                            new_option,new_cfg=billing_config(new_plan,normalize_billing_option(new_plan,camp['billing_option']))
+                            conn.execute("UPDATE campaigns SET plan=?,billing_option=?,billing_amount=?,subscription_provider='mercadopago',subscription_id=?,pending_subscription_id=NULL,pending_plan=NULL,previous_subscription_id=?,subscription_status='active',subscription_started_at=COALESCE(subscription_started_at,?),subscription_current_period_end=?,subscription_next_payment_at=?,subscription_status_updated_at=?,subscription_cancel_at_period_end=0 WHERE id=?",
+                                (new_plan,new_option,new_cfg['amount'],sub_id,old_id,now,next_ts,next_ts,now,camp['id']))
                             if old_id and old_id!=sub_id and _best_effort_cancel_subscription(old_id):
                                 conn.execute('UPDATE campaigns SET previous_subscription_id=NULL WHERE id=?',(camp['id'],))
                             audit(conn,camp['company_id'],None,'plan_upgrade_confirmed','campaign',camp['id'],details=new_plan)
@@ -2276,7 +2300,8 @@ class Handler(BaseHTTPRequestHandler):
                                 reconcile_campaign_billing(conn,camp['id'],allow_remote=False)
                             elif mapped=='active' and next_ts and next_ts>effective:
                                 # A próxima cobrança já ocorreu no novo valor: troca os recursos agora.
-                                conn.execute('UPDATE campaigns SET plan=?,pending_plan=NULL,subscription_cancel_at_period_end=0,subscription_current_period_end=?,subscription_next_payment_at=?,subscription_change_requested_at=NULL WHERE id=?',(pending,next_ts,next_ts,camp['id']))
+                                new_option,new_cfg=billing_config(pending,normalize_billing_option(pending,camp['billing_option']))
+                                conn.execute('UPDATE campaigns SET plan=?,billing_option=?,billing_amount=?,pending_plan=NULL,subscription_cancel_at_period_end=0,subscription_current_period_end=?,subscription_next_payment_at=?,subscription_change_requested_at=NULL WHERE id=?',(pending,new_option,new_cfg['amount'],next_ts,next_ts,camp['id']))
                                 audit(conn,camp['company_id'],None,'plan_downgrade_confirmed','campaign',camp['id'],details=pending)
                         elif not pending and next_ts:
                             conn.execute('UPDATE campaigns SET subscription_current_period_end=? WHERE id=?',(next_ts,camp['id']))
@@ -2809,7 +2834,7 @@ class Handler(BaseHTTPRequestHandler):
                 print(f'[AUTH] ATTENDANT_PASSWORD_CHANGED user_id={s["user_id"]} sessions_revoked=True')
                 return self.send_json({'ok':True,'csrf':new_csrf},200,{'Set-Cookie':_session_cookie(new_token)})
             if path == '/api/attendant/customer/update':
-                if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
+                if s['role']!='attendant' or not s['is_client_admin']: return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
                 try: customer_id=int(payload.get('customer_id',0))
                 except (TypeError,ValueError): customer_id=0
@@ -2831,7 +2856,7 @@ class Handler(BaseHTTPRequestHandler):
                 audit(conn,s['company_id'],s['user_id'],'customer_update','customer',customer_id,details=member['public_id'],ip_address=self._ip())
                 return self.send_json({'ok':True,'customer_id':customer_id})
             if path == '/api/attendant/customer/delete':
-                if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
+                if s['role']!='attendant' or not s['is_client_admin']: return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
                 try: customer_id=int(payload.get('customer_id',0))
                 except (TypeError,ValueError): customer_id=0
@@ -2902,7 +2927,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not rows: return self.send_json({'ok':False,'error':'no_recipients'},404)
                 results=[]
                 for r in rows:
-                    qid=enqueue_message(conn,s['campaign_id'],'campaign_email',r['email'],{'name':r['name'],'message':message,'image_data':image_data,'subject':f'Clube Fidelidade • {s["client_name"] or "Mensagem"}'})
+                    qid=enqueue_message(conn,s['campaign_id'],'campaign_email',r['email'],{'name':r['name'],'message':message,'image_data':image_data,'subject':f'Fidelizaê! • {s["client_name"] or "Mensagem"}'})
                     results.append({'customer_id':r['id'],'name':r['name'],'email':r['email'],'queued':True,'queue_id':qid})
                     audit(conn,s['company_id'],s['user_id'],'email_queued','customer',r['id'],details=f'queue={qid}',ip_address=self._ip())
                 return self.send_json({'ok':True,'results':results,'queued_count':len(results)})
@@ -3129,7 +3154,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/attendant/redeem':
                 if not self._need_permission(s,'redeem_reward'): return
                 token,token_error=resolve_member_token(payload.get('token'));
-                if token_error:return self.send_json({'ok':False,'error':token_error},410 if token_error=='qr_expired' else 400); idem=str(payload.get('idempotency_key','')).strip()[:100] or random_token(12)
+                if token_error:return self.send_json({'ok':False,'error':token_error},410 if token_error=='qr_expired' else 400)
+                idem=str(payload.get('idempotency_key','')).strip()[:100] or random_token(12)
                 begin_write(conn)
                 if conn.execute('SELECT id FROM transactions WHERE idempotency_key=?',(idem,)).fetchone(): return self.send_json({'ok':True,'duplicate':True})
                 m=fetchone_for_update(conn,'''SELECT m.*,c.company_id,cu.name customer_name FROM memberships m JOIN campaigns c ON c.id=m.campaign_id JOIN customers cu ON cu.id=m.customer_id WHERE (m.public_id=? OR m.qr_token=?) AND c.company_id=? AND c.id=?''',(token,token,s['company_id'],s['campaign_id']))
@@ -3215,7 +3241,7 @@ class Handler(BaseHTTPRequestHandler):
                 if plan==current:
                     if c['pending_plan']:
                         if c['subscription_id'] and current!='beginner':
-                            try: mp_request('PUT','/preapproval/'+urllib.parse.quote(c['subscription_id'],safe=''),{'auto_recurring':{'transaction_amount':PLAN_PRICES[current],'currency_id':'BRL'}})
+                            try: mp_request('PUT','/preapproval/'+urllib.parse.quote(c['subscription_id'],safe=''),{'auto_recurring':{'transaction_amount':billing_config(current,c['billing_option'])[1]['amount'],'currency_id':'BRL'}})
                             except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
                         conn.execute('UPDATE campaigns SET pending_plan=NULL,subscription_current_period_end=subscription_next_payment_at,subscription_cancel_at_period_end=0,subscription_change_requested_at=NULL WHERE id=?',(s['campaign_id'],))
                         audit(conn,s['company_id'],s['user_id'],'plan_change_cancelled','campaign',s['campaign_id'],details=current,ip_address=self._ip())
@@ -3226,7 +3252,7 @@ class Handler(BaseHTTPRequestHandler):
                 if order[plan]>order[current]:
                     # Todo upgrade pago usa uma nova assinatura; o plano atual fica intacto até o webhook.
                     token='upgrade:'+str(s['campaign_id'])+':'+plan+':'+secrets.token_urlsafe(8)
-                    try: sub=create_mp_subscription(s['email'],plan,token)
+                    try: sub=create_mp_subscription(s['email'],plan,token,billing_option=normalize_billing_option(plan,c['billing_option']))
                     except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
                     conn.execute('UPDATE campaigns SET pending_plan=?,pending_subscription_id=?,subscription_change_requested_at=? WHERE id=?',(plan,sub.get('id'),now_ts(),s['campaign_id']))
                     audit(conn,s['company_id'],s['user_id'],'plan_upgrade_requested','campaign',s['campaign_id'],details=plan,ip_address=self._ip())
@@ -3235,7 +3261,7 @@ class Handler(BaseHTTPRequestHandler):
                 period_end=c['subscription_next_payment_at'] or c['subscription_current_period_end'] or (now_ts()+30*86400)
                 if c['subscription_id'] and plan!='beginner':
                     # O novo preço vale na próxima recorrência; os recursos só mudam após confirmação do novo ciclo.
-                    try: mp_request('PUT','/preapproval/'+urllib.parse.quote(c['subscription_id'],safe=''),{'auto_recurring':{'transaction_amount':PLAN_PRICES[plan],'currency_id':'BRL'}})
+                    try: mp_request('PUT','/preapproval/'+urllib.parse.quote(c['subscription_id'],safe=''),{'auto_recurring':{'transaction_amount':billing_config(plan,normalize_billing_option(plan,c['billing_option']))[1]['amount'],'currency_id':'BRL'}})
                     except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
                 if c['subscription_id'] and plan=='beginner':
                     # Cancela cobranças futuras agora, preservando acesso local até period_end.
@@ -3530,7 +3556,7 @@ class Handler(BaseHTTPRequestHandler):
                 cfg=email_config_for_client(conn,campaign_id)
                 target=normalize_email(payload.get('email') or s['email'])
                 if not target or not email_configured(cfg): return self.send_json({'ok':False,'error':'email_provider_not_configured'},503)
-                msg=EmailMessage(); msg['Subject']='Teste de e-mail • Clube Fidelidade'; msg['To']=target; msg.set_content('Configuração SMTP testada com sucesso.')
+                msg=EmailMessage(); msg['Subject']='Teste de e-mail • Fidelizaê!'; msg['To']=target; msg.set_content('Configuração SMTP testada com sucesso.')
                 result=send_email_message(msg,cfg)
                 return self.send_json({'ok':bool(result.get('sent')),'result':result},200 if result.get('sent') else 502)
             if path == '/api/manager/integration/whatsapp/embedded-complete':
@@ -3556,7 +3582,7 @@ class Handler(BaseHTTPRequestHandler):
                 phone=normalize_phone(payload.get('phone'))
                 cfg=whatsapp_config_for_client(conn,campaign_id)
                 if not phone or not whatsapp_cloud_configured(cfg): return self.send_json({'ok':False,'error':'whatsapp_not_configured'},503)
-                try: response=send_whatsapp_cloud(phone,'Teste de integração • Clube Fidelidade',cfg)
+                try: response=send_whatsapp_cloud(phone,'Teste de integração • Fidelizaê!',cfg)
                 except Exception as exc: return self.send_json({'ok':False,'error':'whatsapp_test_failed','detail':str(exc)[:500]},502)
                 return self.send_json({'ok':True,'message_id':((response.get('messages') or [{}])[0]).get('id')})
             if path == '/api/manager/staff/check-email':
@@ -3650,7 +3676,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/manager/block':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 token,token_error=resolve_member_token(payload.get('token'));
-                if token_error:return self.send_json({'ok':False,'error':token_error},410 if token_error=='qr_expired' else 400); status='blocked' if payload.get('blocked',True) else 'active'
+                if token_error:return self.send_json({'ok':False,'error':token_error},410 if token_error=='qr_expired' else 400)
+                status='blocked' if payload.get('blocked',True) else 'active'
                 m=conn.execute('''SELECT m.* FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE (m.public_id=? OR m.qr_token=?) AND c.company_id=?''',(token,token,s['company_id'])).fetchone()
                 if not m: return self.send_json({'ok':False,'error':'membership_not_found'},404)
                 conn.execute('UPDATE memberships SET status=? WHERE id=?',(status,m['id']))

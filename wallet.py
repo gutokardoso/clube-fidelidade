@@ -128,7 +128,7 @@ def _google_class_object(card):
     klass={
       'id':class_id,
       'issuerName':card.get('campaign_name') or 'Fidelizaê!',
-      'programName':'Clube de Fidelidade',
+      'programName':'Fidelizaê!',
       'reviewStatus':'UNDER_REVIEW',
       'hexBackgroundColor':_theme_hex(card.get('card_theme')),
       'accountNameLabel':'Empresa',

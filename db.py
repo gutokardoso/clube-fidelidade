@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   company_id INTEGER,
+  campaign_id INTEGER,
   user_id INTEGER,
   action TEXT NOT NULL,
   entity_type TEXT,
@@ -222,6 +223,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS audit_log (
   id BIGSERIAL PRIMARY KEY,
   company_id BIGINT,
+  campaign_id BIGINT,
   user_id BIGINT,
   action TEXT NOT NULL,
   entity_type TEXT,
@@ -255,10 +257,6 @@ CREATE INDEX IF NOT EXISTS idx_reward_catalog_campaign ON reward_catalog(campaig
 def _is_postgres(db_path=None):
     target = (db_path or DATABASE_URL or '').lower()
     return target.startswith('postgres://') or target.startswith('postgresql://')
-
-
-def using_postgres(db_path=None):
-    return _is_postgres(db_path)
 
 
 class PgConnection:
@@ -698,6 +696,30 @@ def init_db(db_path=None, seed=True):
             user_cols = [r['name'] for r in conn.execute('PRAGMA table_info(users)').fetchall()]
             if 'campaign_id' not in user_cols:
                 conn.execute('ALTER TABLE users ADD COLUMN campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL')
+        # Migração v124: isolamento multiempresa real da Central de Auditoria.
+        if _is_postgres(target):
+            conn.execute('ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS campaign_id BIGINT')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_audit_campaign_time ON audit_log(campaign_id,created_at DESC)')
+            conn.execute('''UPDATE audit_log a SET campaign_id=u.campaign_id FROM users u
+                            WHERE a.campaign_id IS NULL AND a.user_id=u.id AND u.campaign_id IS NOT NULL''')
+            conn.execute('''UPDATE audit_log SET campaign_id=CAST(entity_id AS BIGINT)
+                            WHERE campaign_id IS NULL AND entity_type='campaign' AND entity_id ~ '^[0-9]+$'
+                              AND EXISTS(SELECT 1 FROM campaigns c WHERE c.id=CAST(audit_log.entity_id AS BIGINT))''')
+        else:
+            acols={r['name'] for r in conn.execute('PRAGMA table_info(audit_log)').fetchall()}
+            if 'campaign_id' not in acols: conn.execute('ALTER TABLE audit_log ADD COLUMN campaign_id INTEGER')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_audit_campaign_time ON audit_log(campaign_id,created_at DESC)')
+            conn.execute('''UPDATE audit_log SET campaign_id=(SELECT u.campaign_id FROM users u WHERE u.id=audit_log.user_id)
+                            WHERE campaign_id IS NULL AND user_id IS NOT NULL
+                              AND EXISTS(SELECT 1 FROM users u WHERE u.id=audit_log.user_id AND u.campaign_id IS NOT NULL)''')
+            conn.execute('''UPDATE audit_log SET campaign_id=CAST(entity_id AS INTEGER)
+                            WHERE campaign_id IS NULL AND entity_type='campaign' AND entity_id GLOB '[0-9]*'
+                              AND EXISTS(SELECT 1 FROM campaigns c WHERE c.id=CAST(audit_log.entity_id AS INTEGER))''')
+        if _is_postgres(target):
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v124',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v124',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:
@@ -722,7 +744,7 @@ def init_db(db_path=None, seed=True):
             attendant_email = 'atendente@demo.local'
             attendant_password = 'Atendente123!'
         else:
-            company_name = os.environ.get('CLUBE_COMPANY_NAME', 'Clube Fidelidade').strip()
+            company_name = os.environ.get('CLUBE_COMPANY_NAME', 'Fidelizaê!').strip()
             company_slug = os.environ.get('CLUBE_COMPANY_SLUG', 'clube-fidelidade').strip()
             manager_name = os.environ.get('CLUBE_ADMIN_NAME', 'Administrador').strip()
             manager_email = os.environ.get('CLUBE_ADMIN_EMAIL', '').strip().lower()
@@ -842,22 +864,36 @@ def get_session(conn, token: str):
     return row
 
 
-def audit(conn, company_id, user_id, action, entity_type=None, entity_id=None, details=None, ip_address=None, branch_id=None):
-    # A unidade é registrada junto ao evento. Se o chamador não informar, usamos
-    # a unidade atualmente vinculada ao usuário. Isso preserva o contexto da filial
-    # no histórico mesmo que o usuário seja transferido depois.
-    if branch_id is None and user_id is not None:
+def audit(conn, company_id, user_id, action, entity_type=None, entity_id=None, details=None, ip_address=None, branch_id=None, campaign_id=None):
+    # company_id identifica a empresa-base; campaign_id é o isolamento real entre clientes.
+    if user_id is not None and (branch_id is None or campaign_id is None):
         try:
-            u=conn.execute('SELECT branch_id FROM users WHERE id=?',(user_id,)).fetchone()
-            branch_id=u['branch_id'] if u else None
+            u=conn.execute('SELECT branch_id,campaign_id FROM users WHERE id=?',(user_id,)).fetchone()
+            if u:
+                if branch_id is None: branch_id=u['branch_id']
+                if campaign_id is None: campaign_id=u['campaign_id']
         except Exception:
-            branch_id=None
+            pass
+    if campaign_id is None and entity_type=='campaign' and entity_id is not None:
+        try:
+            cid=int(entity_id)
+            if conn.execute('SELECT 1 FROM campaigns WHERE id=?',(cid,)).fetchone(): campaign_id=cid
+        except (TypeError,ValueError):
+            pass
+    if campaign_id is None and entity_type in ('membership','customer') and entity_id is not None:
+        try:
+            if entity_type=='membership':
+                m=conn.execute('SELECT campaign_id FROM memberships WHERE public_id=? OR CAST(id AS TEXT)=?',(str(entity_id),str(entity_id))).fetchone()
+            else:
+                m=conn.execute('SELECT campaign_id FROM memberships WHERE customer_id=? ORDER BY id LIMIT 1',(int(entity_id),)).fetchone()
+            if m: campaign_id=m['campaign_id']
+        except Exception:
+            pass
     try:
-        conn.execute('''INSERT INTO audit_log(company_id,user_id,branch_id,action,entity_type,entity_id,details,ip_address,created_at)
-                        VALUES(?,?,?,?,?,?,?,?,?)''',
-                     (company_id,user_id,branch_id,action,entity_type,str(entity_id) if entity_id is not None else None,details,ip_address,now_ts()))
+        conn.execute('INSERT INTO audit_log(company_id,campaign_id,user_id,branch_id,action,entity_type,entity_id,details,ip_address,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                     (company_id,campaign_id,user_id,branch_id,action,entity_type,str(entity_id) if entity_id is not None else None,details,ip_address,now_ts()))
     except Exception:
-        # Compatibilidade defensiva durante deploys em que a migração ainda não tenha sido aplicada.
-        conn.execute('''INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,details,ip_address,created_at)
-                        VALUES(?,?,?,?,?,?,?,?)''',
-                     (company_id,user_id,action,entity_type,str(entity_id) if entity_id is not None else None,details,ip_address,now_ts()))
+        # Compatibilidade defensiva durante rolling deploy antes da migração.
+        conn.execute('INSERT INTO audit_log(company_id,user_id,branch_id,action,entity_type,entity_id,details,ip_address,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
+                     (company_id,user_id,branch_id,action,entity_type,str(entity_id) if entity_id is not None else None,details,ip_address,now_ts()))
+

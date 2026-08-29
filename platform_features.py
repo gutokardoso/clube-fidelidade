@@ -52,18 +52,28 @@ def consume_point_lots(conn,membership_id,points):
     return consumed
 
 def expire_points_once(conn,now_ts):
-    rows=conn.execute("SELECT pl.id,pl.membership_id,pl.remaining_points,m.points_balance FROM point_lots pl JOIN memberships m ON m.id=pl.membership_id WHERE pl.remaining_points>0 AND pl.expires_at IS NOT NULL AND pl.expires_at<=? ORDER BY pl.expires_at,pl.id",(now_ts,)).fetchall()
+    # Expiração idempotente e segura para múltiplas instâncias: a atualização condicional
+    # do lote funciona como claim. Só a instância que zerar o lote ajusta o saldo.
+    rows=conn.execute("SELECT pl.id,pl.membership_id,pl.remaining_points FROM point_lots pl WHERE pl.remaining_points>0 AND pl.expires_at IS NOT NULL AND pl.expires_at<=? ORDER BY pl.expires_at,pl.id",(now_ts,)).fetchall()
     expired=0
     for r in rows:
-        pts=min(int(r['remaining_points'] or 0),int(r['points_balance'] or 0))
-        conn.execute("UPDATE point_lots SET remaining_points=0 WHERE id=?",(r['id'],))
-        if pts<=0:continue
-        prev=int(r['points_balance'] or 0); new=max(0,prev-pts)
+        original=max(0,int(r['remaining_points'] or 0))
+        if not original: continue
+        cur=conn.execute("UPDATE point_lots SET remaining_points=0 WHERE id=? AND remaining_points=? AND remaining_points>0",(r['id'],original))
+        if getattr(cur,'rowcount',0)!=1: continue
+        m=conn.execute('SELECT points_balance FROM memberships WHERE id=?',(r['membership_id'],)).fetchone()
+        if not m: continue
+        prev=max(0,int(m['points_balance'] or 0)); pts=min(original,prev); new=max(0,prev-pts)
+        if pts<=0: continue
+        idem=f'points-expiry:{r["id"]}'
         try:
-            conn.execute("INSERT INTO transactions(membership_id,user_id,branch_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(r['membership_id'],None,None,'adjustment',-pts,prev,new,0,f'points-expiry:{r["id"]}',None,'Expiração automática de pontos',now_ts))
+            conn.execute("INSERT INTO transactions(membership_id,user_id,branch_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(r['membership_id'],None,None,'adjustment',-pts,prev,new,0,idem,None,'Expiração automática de pontos',now_ts))
         except Exception:
-            pass
-        conn.execute("UPDATE memberships SET points_balance=? WHERE id=?",(new,r['membership_id']))
+            # Se outra execução já registrou esta expiração, não debita o saldo novamente.
+            existing=conn.execute('SELECT id FROM transactions WHERE idempotency_key=?',(idem,)).fetchone()
+            if existing: continue
+            raise
+        conn.execute("UPDATE memberships SET points_balance=CASE WHEN points_balance>=? THEN points_balance-? ELSE 0 END WHERE id=?",(pts,pts,r['membership_id']))
         expired+=pts
     return expired
 
@@ -71,13 +81,11 @@ def record_purchase(conn,membership_id,transaction_id,amount_cents,channel='in_s
     amount=max(0,int(amount_cents or 0))
     if amount<=0:return
     created_at=created_at or int(time.time())
-    try: conn.execute("INSERT INTO purchase_records(membership_id,transaction_id,amount_cents,channel,created_at) VALUES(?,?,?,?,?)",(membership_id,transaction_id,amount,channel,created_at))
-    except Exception: pass
+    conn.execute("INSERT INTO purchase_records(membership_id,transaction_id,amount_cents,channel,created_at) VALUES(?,?,?,?,?)",(membership_id,transaction_id,amount,channel,created_at))
     # atribui retorno à campanha mais recente ainda não convertida, em janela de 30 dias
     rec=conn.execute("SELECT mcr.id FROM marketing_campaign_recipients mcr WHERE mcr.membership_id=? AND mcr.returned_at IS NULL AND mcr.sent_at<=? AND mcr.sent_at>=? ORDER BY mcr.sent_at DESC LIMIT 1",(membership_id,created_at,created_at-30*86400)).fetchone()
     if rec:
-        try: conn.execute("UPDATE marketing_campaign_recipients SET returned_at=?,returned_transaction_id=?,attributed_revenue_cents=? WHERE id=?",(created_at,transaction_id,amount,rec['id']))
-        except Exception: pass
+        conn.execute("UPDATE marketing_campaign_recipients SET returned_at=?,returned_transaction_id=?,attributed_revenue_cents=? WHERE id=?",(created_at,transaction_id,amount,rec['id']))
 
 class RateLimiter:
     def __init__(self):
