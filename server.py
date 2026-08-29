@@ -40,7 +40,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v126'
+VERSION='v127'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
