@@ -515,3 +515,6 @@ body:has(#editClientCard.manager-inline-modal:not(.hidden))::before,body:has(#cl
 .landing-resource-icon{margin-bottom:2px}
 .landing-segments article>span.landing-segment-icon{font-size:0;margin-bottom:22px}
 @media(max-width:560px){.landing-step-icon,.landing-resource-icon,.landing-segment-icon{width:48px;height:48px;flex-basis:48px}.landing-step-icon svg,.landing-resource-icon svg,.landing-segment-icon svg{width:25px;height:25px}}
+
+/* v126 — Bootstrap Icons solicitados na landing page */
+.landing-step-icon svg.bi-fill,.landing-resource-icon svg.bi-fill,.landing-segment-icon svg.bi-fill{fill:currentColor;stroke:none}
