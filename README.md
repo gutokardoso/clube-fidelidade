@@ -1,6 +1,9 @@
 # Fidelizaê! v124
 
 
+## v125
+- Landing page: ícones substituídos por SVGs vetoriais embutidos no código; todos agora seguem padrão circular, mesma cor e linguagem visual consistente nas três seções.
+
 ## v124 — auditoria integral, correções de confiabilidade e isolamento
 
 Revisão completa de backend, banco, rotas HTTP, permissões, frontend e fluxos críticos. Foram corrigidos dois defeitos reais que impediam o resgate de recompensa e o bloqueio/desbloqueio pelo gerente, removida a exposição pública da linha completa de campanhas, reforçado o isolamento da Central de Auditoria por `campaign_id`, restringida a edição/exclusão de clientes ao administrador do cliente, tornada a fila de mensagens segura para múltiplas instâncias, e tornada a expiração de pontos idempotente.
