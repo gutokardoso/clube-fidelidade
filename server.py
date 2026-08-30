@@ -40,7 +40,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v128'
+VERSION='v129'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
@@ -1257,14 +1257,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def _security_headers(self, html_response=False):
         self.send_header('X-Content-Type-Options','nosniff')
-        self.send_header('X-Frame-Options','DENY')
+        current_path = urllib.parse.urlparse(getattr(self, 'path', '') or '').path
+        same_origin_embed = current_path in ('/security', '/loyalty360')
+        self.send_header('X-Frame-Options','SAMEORIGIN' if same_origin_embed else 'DENY')
         self.send_header('Referrer-Policy','strict-origin-when-cross-origin')
         self.send_header('Permissions-Policy','camera=(self), microphone=(), geolocation=(), payment=()')
         self.send_header('X-Permitted-Cross-Domain-Policies','none')
         if _cookie_secure():
             self.send_header('Strict-Transport-Security','max-age=31536000; includeSubDomains')
         if html_response:
-            self.send_header('Content-Security-Policy', "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' https://www.mercadopago.com https://cdn.jsdelivr.net https://connect.facebook.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://api.mercadopago.com https://graph.facebook.com https://www.facebook.com; frame-src https://www.facebook.com https://web.facebook.com; upgrade-insecure-requests")
+            frame_ancestors = "'self'" if same_origin_embed else "'none'"
+            self.send_header('Content-Security-Policy', f"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors {frame_ancestors}; form-action 'self'; script-src 'self' 'unsafe-inline' https://www.mercadopago.com https://cdn.jsdelivr.net https://connect.facebook.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://api.mercadopago.com https://graph.facebook.com https://www.facebook.com; frame-src 'self' https://www.facebook.com https://web.facebook.com; upgrade-insecure-requests")
 
     def send_redirect(self, location, status=303, headers=None):
         self.send_response(status)

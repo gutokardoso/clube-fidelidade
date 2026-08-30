@@ -1,10 +1,16 @@
-# Fidelizaê! v124
+# Fidelizaê! v129
 
+## v129
 
-## v128
-
-- Refinamento dos ícones da landing: Postage Heart, Bar Chart, Cup Hot e patinha de Pet shops.
-- Landing page: ícones substituídos por SVGs vetoriais embutidos no código; todos agora seguem padrão circular, mesma cor e linguagem visual consistente nas três seções.
+- Painel Fidelizaê!: Segurança / 2FA abre em modal interno.
+- “Cadastrar nova empresa” e “Cadastrar novo usuário” ficam dentro do submenu “Cadastrar”.
+- Tabelas de Empresas cadastradas e Usuários cadastrados são responsivas no mobile, sem rolagem horizontal.
+- Atualizações da plataforma mostram as 5 atualizações mais recentes e permitem rolagem para as anteriores.
+- Central de notificações mostra 3 notificações por vez e permite rolagem vertical para as demais.
+- Painéis Administrador e Atendente: Programa de Fidelidade abre em modal interno.
+- Tabela de Clientes cadastrados é responsiva no mobile e mantém todas as informações visíveis.
+- “Editar empresa” aparece somente para administradores da empresa.
+- Framing permanece protegido: apenas Segurança / 2FA e Programa de Fidelidade podem ser embutidos pelo próprio domínio.
 
 ## v124 — auditoria integral, correções de confiabilidade e isolamento
 
@@ -421,6 +427,17 @@ Permissões efetivas, validade real de pontos (1–12 meses; padrão 6), acelera
 - E-mail automático de ativação e credenciais.
 - Upgrade/downgrade integrado ao Perfil; downgrade fica agendado para o fim do ciclo.
 - Variável obrigatória: `MERCADOPAGO_ACCESS_TOKEN`. Configure webhook em `/api/webhooks/mercadopago`.
+
+
+## v129 — Painéis, modais e responsividade
+
+- Painel Fidelizaê!: Segurança / 2FA abre em modal interno.
+- Cadastros de empresa e usuário agrupados no submenu “Cadastrar”.
+- Tabelas de empresas, usuários e clientes viram cartões responsivos no mobile, sem rolagem horizontal.
+- Atualizações da plataforma e Central de notificações têm altura limitada com rolagem vertical.
+- Painéis Administrador/Atendente: Programa de Fidelidade abre em modal interno.
+- “Editar empresa” fica visível somente para administrador do cliente.
+- Segurança de framing preservada: apenas `/security` e `/loyalty360` podem ser embutidas pelo mesmo domínio; demais páginas continuam com bloqueio de framing.
 
 ## v128 — Refinamento de ícones da landing
 - Bootstrap Icons oficiais aplicados em Acesse o programa (coin), Registre cada compra e QR Code (qr-code-scan), Relacionamento (whatsapp) e Beleza e bem-estar (scissors).
