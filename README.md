@@ -1,7 +1,7 @@
 # Fidelizaê! v124
 
 
-## v127
+## v128
 
 - Refinamento dos ícones da landing: Postage Heart, Bar Chart, Cup Hot e patinha de Pet shops.
 - Landing page: ícones substituídos por SVGs vetoriais embutidos no código; todos agora seguem padrão circular, mesma cor e linguagem visual consistente nas três seções.
@@ -422,6 +422,6 @@ Permissões efetivas, validade real de pontos (1–12 meses; padrão 6), acelera
 - Upgrade/downgrade integrado ao Perfil; downgrade fica agendado para o fim do ciclo.
 - Variável obrigatória: `MERCADOPAGO_ACCESS_TOKEN`. Configure webhook em `/api/webhooks/mercadopago`.
 
-## v127 — Refinamento de ícones da landing
+## v128 — Refinamento de ícones da landing
 - Bootstrap Icons oficiais aplicados em Acesse o programa (coin), Registre cada compra e QR Code (qr-code-scan), Relacionamento (whatsapp) e Beleza e bem-estar (scissors).
 - Mantido o padrão circular e a cor visual unificada da landing page.

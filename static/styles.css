@@ -518,3 +518,13 @@ body:has(#editClientCard.manager-inline-modal:not(.hidden))::before,body:has(#cl
 
 /* v126 — Bootstrap Icons solicitados na landing page */
 .landing-step-icon svg.bi-fill,.landing-resource-icon svg.bi-fill,.landing-segment-icon svg.bi-fill{fill:currentColor;stroke:none}
+
+/* v128 — normalização do peso visual dos ícones preenchidos da landing */
+/* Bootstrap e Font Awesome preenchidos devem usar o desenho original em fill,
+   em vez de receber o stroke global dos ícones lineares. */
+.landing-step-icon svg.fa-paw-fill,
+.landing-resource-icon svg.fa-paw-fill,
+.landing-segment-icon svg.fa-paw-fill{
+  fill:currentColor;
+  stroke:none;
+}
