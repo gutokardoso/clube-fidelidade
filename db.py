@@ -767,6 +767,22 @@ def init_db(db_path=None, seed=True):
             """)
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v130',?)",(now_ts(),))
 
+        # Migração v131: registro auditável de aceite dos documentos legais.
+        if _is_postgres(target):
+            conn.executescript('''CREATE TABLE IF NOT EXISTS legal_acceptances (
+              id BIGSERIAL PRIMARY KEY, signup_id BIGINT, campaign_id BIGINT, user_id BIGINT,
+              email TEXT, terms_version TEXT NOT NULL, privacy_version TEXT NOT NULL,
+              accepted_at BIGINT NOT NULL, ip_address TEXT
+            ); CREATE INDEX IF NOT EXISTS idx_legal_acceptances_campaign ON legal_acceptances(campaign_id,accepted_at DESC);''')
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v131',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.executescript('''CREATE TABLE IF NOT EXISTS legal_acceptances (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, signup_id INTEGER, campaign_id INTEGER, user_id INTEGER,
+              email TEXT, terms_version TEXT NOT NULL, privacy_version TEXT NOT NULL,
+              accepted_at INTEGER NOT NULL, ip_address TEXT
+            ); CREATE INDEX IF NOT EXISTS idx_legal_acceptances_campaign ON legal_acceptances(campaign_id,accepted_at DESC);''')
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v131',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:

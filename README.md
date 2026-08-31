@@ -1,4 +1,10 @@
-# Fidelizaê! v130
+# Fidelizaê! v131
+
+## v131
+
+- Aceite obrigatório e auditável dos Termos de Uso e Política de Privacidade/LGPD no cadastro público e no cadastro administrativo de empresas.
+- Nova página de Termos de Uso e links legais clicáveis.
+- Área Divulgação redesenhada com link clicável, botão de cópia e QR Code de cadastro funcional.
 
 ## v130
 

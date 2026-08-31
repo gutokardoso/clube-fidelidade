@@ -41,7 +41,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v130'
+VERSION='v131'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
@@ -1564,6 +1564,7 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/empresa/'):
             code=path.split('/empresa/',1)[1].strip().upper()
             return self.send_redirect('/join?campaign='+urllib.parse.quote(code),302)
+        if path == '/terms': return self.send_text((STATIC/'terms.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION))
         if path == '/privacy':
             code=(qs.get('campaign') or [''])[0].upper().strip(); client='seu estabelecimento'
             if code:
@@ -1845,6 +1846,16 @@ class Handler(BaseHTTPRequestHandler):
                 c=conn.execute('SELECT code FROM campaigns WHERE id=? AND company_id=?',(cid,sess['company_id'])).fetchone()
                 if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
                 base=(os.environ.get('CLUBE_PUBLIC_URL') or ('https://'+self.headers.get('Host',''))).rstrip('/')
+                img=qrcode.make(base+'/join?campaign='+urllib.parse.quote(c['code'])); bio=BytesIO(); img.save(bio,format='PNG')
+                return self.send_bytes(bio.getvalue(),'image/png',200,{'Cache-Control':'no-store'})
+        if path == '/api/admin/client-qr':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                c=conn.execute('SELECT code FROM campaigns WHERE id=? AND company_id=? AND active=1',(sess['campaign_id'],sess['company_id'])).fetchone()
+                if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                base=(os.environ.get('PUBLIC_BASE_URL') or ('https://'+self.headers.get('Host',''))).rstrip('/')
                 img=qrcode.make(base+'/join?campaign='+urllib.parse.quote(c['code'])); bio=BytesIO(); img.save(bio,format='PNG')
                 return self.send_bytes(bio.getvalue(),'image/png',200,{'Cache-Control':'no-store'})
         if path == '/api/admin/templates':
@@ -2376,6 +2387,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({'ok':False,'error':'invalid_json'},400)
         if path=='/api/public/signup':
             name=str(payload.get('responsible_name') or '').strip()[:100]; company=str(payload.get('company_name') or '').strip()[:120]; email=normalize_email(payload.get('email')); phone=str(payload.get('phone') or '').strip()[:40]; document=str(payload.get('document') or '').strip()[:30]; password=str(payload.get('password') or ''); plan=normalize_plan(payload.get('plan')); loyalty=str(payload.get('loyalty_type') or 'stamps').lower(); device_id=str(payload.get('mp_device_id') or '').strip()[:240]; billing_option=normalize_billing_option(plan,payload.get('billing_option'))
+            if not payload.get('terms_accepted') or not payload.get('privacy_accepted'):return self.send_json({'ok':False,'error':'legal_acceptance_required'},400)
             if not name or not company or not email or not password_is_strong(password,12) or plan not in PLAN_PRICES:return self.send_json({'ok':False,'error':'invalid_signup'},400)
             try: logo_image=validate_logo_data(payload.get('logo_image'))
             except ValueError as exc:return self.send_json({'ok':False,'error':str(exc)},400)
@@ -2397,6 +2409,7 @@ class Handler(BaseHTTPRequestHandler):
                         except Exception as exc:
                             print('[BILLING] MP_REUSE_CHECK_UNAVAILABLE type=%s' % type(exc).__name__,flush=True)
                 token=secrets.token_urlsafe(24); _,bcfg=billing_config(plan,billing_option); sid=insert_id(conn,'INSERT INTO subscription_signups(token,company_name,responsible_name,email,phone,document,password_hash,plan,loyalty_type,status,created_at,logo_image,billing_option,billing_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(token,company,name,email,phone,document,hash_password(password),plan,loyalty,'pending',now_ts(),logo_image,billing_option,bcfg['amount']))
+                conn.execute('INSERT INTO legal_acceptances(signup_id,email,terms_version,privacy_version,accepted_at,ip_address) VALUES(?,?,?,?,?,?)',(sid,email,'1.0','1.0',now_ts(),self._ip()))
                 row=conn.execute('SELECT * FROM subscription_signups WHERE id=?',(sid,)).fetchone()
                 if plan=='beginner':
                     provision_signup(conn,row); return self.send_json({'ok':True,'active':True,'redirect':'/login'})
@@ -3754,6 +3767,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/manager/campaign':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 name=str(payload.get('name','')).strip()[:80]; reward=str(payload.get('reward_name','')).strip()[:100] or 'Catálogo de recompensas'; code=re.sub(r'[^A-Z0-9_-]','',str(payload.get('code','')).upper())[:24]
+                if not payload.get('terms_accepted') or not payload.get('privacy_accepted'): return self.send_json({'ok':False,'error':'legal_acceptance_required'},400)
                 plan=normalize_plan(payload.get('plan')); loyalty_type=str(payload.get('loyalty_type','stamps')).strip().lower()
                 try: points_spend_cents=int(payload.get('points_spend_cents') or 200)
                 except: points_spend_cents=200
@@ -3808,6 +3822,7 @@ class Handler(BaseHTTPRequestHandler):
                         wa_phone_id,wa_waba_id,wa_token_enc,wa_version,wa_mode,wa_status,
                         ecommerce_platform,ecommerce_store_url,ecommerce_secret,ecommerce_status,now_ts()))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
+                conn.execute('INSERT INTO legal_acceptances(campaign_id,user_id,terms_version,privacy_version,accepted_at,ip_address) VALUES(?,?,?,?,?,?)',(new_id,s['user_id'],'1.0','1.0',now_ts(),self._ip()))
                 audit(conn,s['company_id'],s['user_id'],'campaign_create','campaign',new_id,details=code,ip_address=self._ip())
                 return self.send_json({'ok':True,'campaign_id':new_id})
             if path == '/api/manager/campaign/update':
