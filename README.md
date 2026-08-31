@@ -1,4 +1,11 @@
-# Fidelizaê! v131
+# Fidelizaê! v132
+
+## v132
+
+- Cupons movidos para **Programa de Fidelidade**, logo abaixo de **Vale-presente**.
+- **Segurança / 2FA** passa a abrir em modal também no painel do administrador da empresa.
+- Área **DIVULGAÇÃO** simplificada, removendo título e subtítulo redundantes.
+- Navegação interna recebe **Central de Campanhas** e **Divulgação** após **Visão Geral**.
 
 ## v131
 
