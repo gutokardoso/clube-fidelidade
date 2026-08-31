@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS customers (
   email TEXT,
   phone TEXT,
   birth_date TEXT,
+  gender TEXT,
   cpf TEXT,
   phone_enc TEXT,
   phone_hash TEXT,
@@ -71,6 +72,7 @@ CREATE TABLE IF NOT EXISTS memberships (
   campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
   public_id TEXT NOT NULL UNIQUE,
   qr_token TEXT NOT NULL UNIQUE,
+  last_device_os TEXT,
   progress INTEGER NOT NULL DEFAULT 0,
   points_balance INTEGER NOT NULL DEFAULT 0,
   cashback_balance_cents INTEGER NOT NULL DEFAULT 0,
@@ -181,6 +183,7 @@ CREATE TABLE IF NOT EXISTS customers (
   email TEXT,
   phone TEXT,
   birth_date TEXT,
+  gender TEXT,
   cpf TEXT,
   phone_enc TEXT,
   phone_hash TEXT,
@@ -198,6 +201,7 @@ CREATE TABLE IF NOT EXISTS memberships (
   campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
   public_id TEXT NOT NULL UNIQUE,
   qr_token TEXT NOT NULL UNIQUE,
+  last_device_os TEXT,
   progress INTEGER NOT NULL DEFAULT 0,
   points_balance INTEGER NOT NULL DEFAULT 0,
   cashback_balance_cents INTEGER NOT NULL DEFAULT 0,
@@ -369,12 +373,17 @@ def init_db(db_path=None, seed=True):
             conn.execute('ALTER TABLE customers ADD COLUMN IF NOT EXISTS email TEXT')
             conn.execute('ALTER TABLE customers ADD COLUMN IF NOT EXISTS phone TEXT')
             conn.execute('ALTER TABLE customers ADD COLUMN IF NOT EXISTS birth_date TEXT')
+            conn.execute('ALTER TABLE customers ADD COLUMN IF NOT EXISTS gender TEXT')
+            conn.execute('ALTER TABLE memberships ADD COLUMN IF NOT EXISTS last_device_os TEXT')
             conn.execute('ALTER TABLE customers ADD COLUMN IF NOT EXISTS cpf TEXT')
         else:
             customer_cols = [r['name'] for r in conn.execute('PRAGMA table_info(customers)').fetchall()]
-            for col in ('email','phone','birth_date','cpf'):
+            for col in ('email','phone','birth_date','gender','cpf'):
                 if col not in customer_cols:
                     conn.execute(f'ALTER TABLE customers ADD COLUMN {col} TEXT')
+            membership_cols = [r['name'] for r in conn.execute('PRAGMA table_info(memberships)').fetchall()]
+            if 'last_device_os' not in membership_cols:
+                conn.execute('ALTER TABLE memberships ADD COLUMN last_device_os TEXT')
 
         # Migração v135a: destinatários de WhatsApp na fila também ficam protegidos.
         if _is_postgres(target):

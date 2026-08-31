@@ -1,12 +1,13 @@
-# Fidelizaê! v140
+# Fidelizaê! v141
 
-## v140
+## v141
+- Removida a área duplicada de “Configuração do programa” criada na v140.
+- A área original de checklist “Configuração do programa” foi movida para depois de “Escanear QR”, inclusive no menu cinza.
+- Adicionado espaçamento visual entre “Evolução da retenção” e “Dashboard financeiro”.
+- Adicionados três gráficos lado a lado na Visão Geral: gênero, faixa etária e dispositivo (Android x iOS), alimentados por dados reais.
+- Gênero passa a ser um campo opcional no cadastro/edição do cliente; idade é calculada pela data de nascimento; dispositivo é identificado no acesso ao cartão.
+- Política de Privacidade atualizada para refletir gênero opcional e tipo de dispositivo.
 
-- Todas as janelas modais do Painel Fidelizaê! e dos painéis de Administrador/Atendente passam a fechar também ao clicar na área externa do modal.
-- Painel do Administrador reorganizado para: **Visão Geral → Escanear QR → Configuração do programa → Clientes cadastrados → Divulgação → Aniversariantes → Central de Campanhas → Comunicação**.
-- Nova área **Configuração do programa** abre o modal já existente de Programa de Fidelidade.
-- Menu cinza dos painéis de Administrador e Atendente permanece fixo durante a rolagem, com deslocamento automático pela altura do cabeçalho.
-- Logo da empresa no cartão digital do usuário agora é exibida dentro de um círculo.
 
 ## v139
 
@@ -161,7 +162,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v140
+**Versão atual:** v141
 
 
 ## Novidades da v117
@@ -470,7 +471,7 @@ META_GRAPH_VERSION=v24.0
 
 ## Histórico de versões
 
-- **v140:** Modais fecham ao clicar fora; painel administrativo reorganizado; Configuração do programa adicionada ao fluxo; menus cinza permanecem fixos durante rolagem; logo do cartão do usuário passa a ser circular.
+- **v141:** Corrigida a ordem do painel: removida a configuração duplicada, movido o checklist original para depois do QR e adicionados gráficos de gênero, idade e Android x iOS.
 
 **v88**
 - Implementação das 23 melhorias aprovadas, com cashback reservado para evolução futura e sem alteração do consentimento de comunicação.

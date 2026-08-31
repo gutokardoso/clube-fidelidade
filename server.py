@@ -41,7 +41,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v140'
+VERSION='v141'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
@@ -252,6 +252,12 @@ def normalize_cpf(value):
     d2 = 0 if d2 == 10 else d2
     return digits if nums[9] == d1 and nums[10] == d2 else None
 
+
+def device_os_from_user_agent(user_agent):
+    ua=(user_agent or '').lower()
+    if 'android' in ua: return 'android'
+    if any(x in ua for x in ('iphone','ipad','ipod')): return 'ios'
+    return 'other'
 
 def normalize_birth_date(value):
     value = str(value or '').strip()
@@ -1687,6 +1693,8 @@ class Handler(BaseHTTPRequestHandler):
                                   FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id JOIN companies co ON co.id=c.company_id
                                   WHERE m.public_id=?''',(public_id,)).fetchone()
                 if not m: return self.send_json({'ok':False,'error':'card_not_found'},404)
+                device_os=device_os_from_user_agent(self.headers.get('User-Agent'))
+                conn.execute('UPDATE memberships SET last_device_os=? WHERE id=?',(device_os,m['membership_id']))
                 data=rowdict(m)
                 data['card_code']=f'CLUBE:{m["public_id"]}'
                 data['qr_value']=data['card_code']
@@ -1832,7 +1840,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess:return
                 try: customer_id=int((qs.get('customer_id') or ['0'])[0])
                 except: customer_id=0
-                row=conn.execute("SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.cpf,cu.cpf_enc,cu.created_at,cu.marketing_email,cu.marketing_whatsapp,m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,c.name campaign_name,c.goal,c.reward_name,c.loyalty_type,c.points_spend_cents FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE cu.id=? AND m.campaign_id=?",(customer_id,sess['campaign_id'])).fetchone()
+                row=conn.execute("SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.gender,cu.cpf,cu.cpf_enc,cu.created_at,cu.marketing_email,cu.marketing_whatsapp,m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,c.name campaign_name,c.goal,c.reward_name,c.loyalty_type,c.points_spend_cents FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE cu.id=? AND m.campaign_id=?",(customer_id,sess['campaign_id'])).fetchone()
                 if not row:return self.send_json({'ok':False,'error':'customer_not_found'},404)
                 row=customer_rowdict(row)
                 hist=[rowdict(x) for x in conn.execute("SELECT t.type,t.value,t.previous_progress,t.new_progress,t.rewards_delta,t.note,t.created_at,u.name user_name FROM transactions t LEFT JOIN users u ON u.id=t.user_id WHERE t.membership_id=? ORDER BY t.created_at DESC LIMIT 300",(row['membership_id'],)).fetchall()]
@@ -1859,7 +1867,7 @@ class Handler(BaseHTTPRequestHandler):
                     [w.writerow([r['name'],r['email'],r['phone'],'CLUBE:'+r['public_id'],r['progress'],r['status']]) for r in rows]
                     filename='relatorio-basico-clientes.csv'
                 else:
-                    rows=conn.execute("SELECT cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.cpf,cu.cpf_enc,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? ORDER BY cu.name",(sess['campaign_id'],)).fetchall()
+                    rows=conn.execute("SELECT cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.gender,cu.cpf,cu.cpf_enc,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? ORDER BY cu.name",(sess['campaign_id'],)).fetchall()
                     rows=[customer_rowdict(r) for r in rows]
                     w.writerow(['Nome','E-mail','Celular','Nascimento','CPF','Código','Selos','Pontos','Recompensas','Status'])
                     [w.writerow([r['name'],r['email'],r['phone'],r['birth_date'],r['cpf'],'CLUBE:'+r['public_id'],r['progress'],r['points_balance'],r['rewards_available'],r['status']]) for r in rows]
@@ -2042,6 +2050,25 @@ class Handler(BaseHTTPRequestHandler):
                     rv=conn.execute('SELECT COALESCE(SUM(pr.amount_cents),0) n FROM purchase_records pr JOIN memberships m ON m.id=pr.membership_id WHERE m.campaign_id=? AND pr.created_at>=? AND pr.created_at<?',(cid,st,en)).fetchone()['n']
                     finance.append({'month':f'{mo:02d}/{str(y)[2:]}','revenue_cents':int(rv or 0)})
                 metrics['finance_trend']=finance
+                # Demografia: gênero informado no cadastro, idade calculada pela data de nascimento e dispositivo do último acesso ao cartão.
+                gender_counts={'female':0,'male':0,'other':0,'prefer_not':0,'unknown':0}
+                age_counts={'under18':0,'a18_24':0,'a25_34':0,'a35_44':0,'a45_59':0,'a60plus':0,'unknown':0}
+                device_counts={'android':0,'ios':0,'other':0}
+                demo_rows=conn.execute("SELECT cu.birth_date,cu.gender,m.last_device_os FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND m.status='active'",(cid,)).fetchall()
+                today=datetime.now(ZoneInfo('America/Sao_Paulo')).date()
+                for dr in demo_rows:
+                    g=(dr['gender'] or '').lower(); gender_counts[g if g in gender_counts and g!='unknown' else 'unknown']+=1
+                    try:
+                        bd=datetime.strptime(dr['birth_date'] or '', '%Y-%m-%d').date(); age=today.year-bd.year-((today.month,today.day)<(bd.month,bd.day))
+                        if age<18: age_counts['under18']+=1
+                        elif age<25: age_counts['a18_24']+=1
+                        elif age<35: age_counts['a25_34']+=1
+                        elif age<45: age_counts['a35_44']+=1
+                        elif age<60: age_counts['a45_59']+=1
+                        else: age_counts['a60plus']+=1
+                    except Exception: age_counts['unknown']+=1
+                    dev=(dr['last_device_os'] or 'other').lower(); device_counts[dev if dev in ('android','ios') else 'other']+=1
+                metrics['demographics']={'gender':gender_counts,'age':age_counts,'device':device_counts}
                 return self.send_json({'ok':True,'metrics':metrics})
         if path == '/api/admin/engagement':
             with connect(DB_PATH) as conn:
@@ -2164,7 +2191,7 @@ class Handler(BaseHTTPRequestHandler):
                 cid=sess['company_id']; payload={'generated_at':now_iso(),'version':VERSION,'company_id':cid}
                 payload['campaigns']=[rowdict(r) for r in conn.execute('SELECT id,code,name,reward_name,goal,active,created_at FROM campaigns WHERE company_id=? ORDER BY id',(cid,)).fetchall()]
                 payload['staff']=[rowdict(r) for r in conn.execute("SELECT id,name,email,role,active,is_client_admin,campaign_id,created_at FROM users WHERE company_id=? ORDER BY id",(cid,)).fetchall()]
-                payload['customers']=[customer_rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.cpf,cu.cpf_enc,m.public_id,m.progress,m.rewards_available,m.status,m.campaign_id FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? ORDER BY cu.id''',(cid,)).fetchall()]
+                payload['customers']=[customer_rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.gender,cu.cpf,cu.cpf_enc,m.public_id,m.progress,m.rewards_available,m.status,m.campaign_id FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? ORDER BY cu.id''',(cid,)).fetchall()]
                 payload['transactions']=[rowdict(r) for r in conn.execute('''SELECT t.id,t.membership_id,t.user_id,t.type,t.value,t.previous_progress,t.new_progress,t.rewards_delta,t.note,t.created_at FROM transactions t JOIN memberships m ON m.id=t.membership_id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? ORDER BY t.id''',(cid,)).fetchall()]
                 data=json.dumps(payload,ensure_ascii=False,indent=2).encode('utf-8'); return self.send_bytes(data,'application/json; charset=utf-8',headers={'Content-Disposition':f'attachment; filename="clube-backup-{datetime.now().strftime("%Y%m%d-%H%M")}.json"'})
         if path == '/api/privacy/export':
@@ -2172,7 +2199,7 @@ class Handler(BaseHTTPRequestHandler):
             public_id=(qs.get('id') or [''])[0].strip(); cpf=normalize_cpf((qs.get('cpf') or [''])[0])
             if not cpf:return self.send_json({'ok':False,'error':'invalid_cpf'},400)
             with connect(DB_PATH) as conn:
-                row=conn.execute('''SELECT cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.cpf,cu.cpf_enc,cu.privacy_accepted_at,cu.marketing_email,cu.marketing_whatsapp,m.public_id,m.progress,m.rewards_available,c.name client_name FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=? AND cu.cpf_hash=?''',(public_id,pii_lookup_hash(cpf,'cpf'))).fetchone()
+                row=conn.execute('''SELECT cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.gender,cu.cpf,cu.cpf_enc,cu.privacy_accepted_at,cu.marketing_email,cu.marketing_whatsapp,m.public_id,m.progress,m.rewards_available,c.name client_name FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=? AND cu.cpf_hash=?''',(public_id,pii_lookup_hash(cpf,'cpf'))).fetchone()
                 if not row:return self.send_json({'ok':False,'error':'not_found'},404)
                 tx=[rowdict(r) for r in conn.execute('SELECT type,value,previous_progress,new_progress,rewards_delta,note,created_at FROM transactions WHERE membership_id=(SELECT id FROM memberships WHERE public_id=?) ORDER BY created_at',(public_id,)).fetchall()]
                 return self.send_json({'ok':True,'data':customer_rowdict(row),'history':tx})
@@ -2313,7 +2340,7 @@ class Handler(BaseHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 ctx=self._api_context(conn)
                 if not ctx:return
-                rows=conn.execute("""SELECT cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.cpf,cu.cpf_enc,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,m.created_at
+                rows=conn.execute("""SELECT cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.gender,cu.cpf,cu.cpf_enc,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,m.created_at
                                      FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? ORDER BY cu.name LIMIT 1000""",(ctx['campaign_id'],)).fetchall()
                 out=[]
                 for r in rows:
@@ -2324,7 +2351,7 @@ class Handler(BaseHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 ctx=self._api_context(conn)
                 if not ctx:return
-                r=conn.execute("""SELECT cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.cpf,cu.cpf_enc,m.* FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND m.public_id=?""",(ctx['campaign_id'],public_id)).fetchone()
+                r=conn.execute("""SELECT cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.gender,cu.cpf,cu.cpf_enc,m.* FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND m.public_id=?""",(ctx['campaign_id'],public_id)).fetchone()
                 if not r:return self.send_json({'ok':False,'error':'customer_not_found'},404)
                 d=customer_rowdict(r); d['intelligence']=customer_intelligence(conn,d,{**ctx,'goal':ctx['goal']})
                 return self.send_json({'ok':True,'data':d})
@@ -2333,7 +2360,7 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant')
                 if not s: return
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                customers=[customer_rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.cpf,cu.cpf_enc,cu.created_at,m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,c.loyalty_type,c.goal,
+                customers=[customer_rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.gender,cu.cpf,cu.cpf_enc,cu.created_at,m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,c.loyalty_type,c.goal,
                     COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at) last_activity,
                     (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND ((c.loyalty_type='points' AND t.type='adjustment' AND t.value>0) OR (c.loyalty_type='stamps' AND t.type='stamp' AND t.value>0))) visits,
                     (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND t.type='redeem') redeems
@@ -2775,6 +2802,7 @@ class Handler(BaseHTTPRequestHandler):
             email=normalize_email(payload.get('email'))
             phone=normalize_phone(payload.get('phone'))
             birth_date=normalize_birth_date(payload.get('birth_date'))
+            gender=str(payload.get('gender') or '').strip().lower(); gender=gender if gender in ('female','male','other','prefer_not') else ''
             cpf=normalize_cpf(payload.get('cpf')); privacy_ok=str(payload.get('privacy_consent','')).lower() in ('1','true','on','yes'); marketing_email=str(payload.get('marketing_email','')).lower() in ('1','true','on','yes'); marketing_whatsapp=str(payload.get('marketing_whatsapp','')).lower() in ('1','true','on','yes')
             if len(name)<2 or not email or not phone or not birth_date or not cpf or not privacy_ok:
                 error='invalid_customer_data'
@@ -2797,12 +2825,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_redirect('/join?campaign='+urllib.parse.quote(code)+'&error=duplicate_contact') if path=='/join' else self.send_json({'ok':False,'error':'duplicate_contact'},409)
                 if customer_id is None:
                     pii=protected_customer_pii(phone,cpf)
-                    customer_id=insert_id(conn,'INSERT INTO customers(name,contact,email,phone,phone_enc,phone_hash,birth_date,cpf,cpf_enc,cpf_hash,privacy_accepted_at,marketing_email,marketing_whatsapp,marketing_accepted_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                        (name,email,email,None,pii['phone_enc'],pii['phone_hash'],birth_date,None,pii['cpf_enc'],pii['cpf_hash'],now_ts(),1 if marketing_email else 0,1 if marketing_whatsapp else 0,now_ts() if (marketing_email or marketing_whatsapp) else None,now_ts()))
+                    customer_id=insert_id(conn,'INSERT INTO customers(name,contact,email,phone,phone_enc,phone_hash,birth_date,gender,cpf,cpf_enc,cpf_hash,privacy_accepted_at,marketing_email,marketing_whatsapp,marketing_accepted_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                        (name,email,email,None,pii['phone_enc'],pii['phone_hash'],birth_date,gender or None,None,pii['cpf_enc'],pii['cpf_hash'],now_ts(),1 if marketing_email else 0,1 if marketing_whatsapp else 0,now_ts() if (marketing_email or marketing_whatsapp) else None,now_ts()))
                 else:
                     pii=protected_customer_pii(phone,cpf)
-                    conn.execute('UPDATE customers SET name=?,contact=?,email=?,phone=NULL,phone_enc=?,phone_hash=?,birth_date=?,cpf=NULL,cpf_enc=?,cpf_hash=?,privacy_accepted_at=COALESCE(privacy_accepted_at,?),marketing_email=?,marketing_whatsapp=?,marketing_accepted_at=? WHERE id=?',
-                        (name,email,email,pii['phone_enc'],pii['phone_hash'],birth_date,pii['cpf_enc'],pii['cpf_hash'],now_ts(),1 if marketing_email else 0,1 if marketing_whatsapp else 0,now_ts() if (marketing_email or marketing_whatsapp) else None,customer_id))
+                    conn.execute('UPDATE customers SET name=?,contact=?,email=?,phone=NULL,phone_enc=?,phone_hash=?,birth_date=?,gender=?,cpf=NULL,cpf_enc=?,cpf_hash=?,privacy_accepted_at=COALESCE(privacy_accepted_at,?),marketing_email=?,marketing_whatsapp=?,marketing_accepted_at=? WHERE id=?',
+                        (name,email,email,pii['phone_enc'],pii['phone_hash'],birth_date,gender or None,pii['cpf_enc'],pii['cpf_hash'],now_ts(),1 if marketing_email else 0,1 if marketing_whatsapp else 0,now_ts() if (marketing_email or marketing_whatsapp) else None,customer_id))
                 existing=conn.execute('SELECT public_id FROM memberships WHERE customer_id=? AND campaign_id=?',(customer_id,c['id'])).fetchone()
                 if existing:
                     return self.send_redirect('/card?id='+urllib.parse.quote(existing['public_id'])) if path=='/join' else self.send_json({'ok':True,'public_id':existing['public_id'],'existing':True})
@@ -3286,6 +3314,7 @@ class Handler(BaseHTTPRequestHandler):
                 email=normalize_email(payload.get('email'))
                 phone=normalize_phone(payload.get('phone'))
                 birth_date=normalize_birth_date(payload.get('birth_date'))
+                gender=str(payload.get('gender') or '').strip().lower(); gender=gender if gender in ('female','male','other','prefer_not') else ''
                 cpf=normalize_cpf(payload.get('cpf'))
                 if customer_id<1 or len(name)<2 or not email or not phone or not birth_date or not cpf:
                     return self.send_json({'ok':False,'error':'invalid_customer_data'},400)
@@ -3296,8 +3325,8 @@ class Handler(BaseHTTPRequestHandler):
                     WHERE m.campaign_id=? AND cu.cpf_hash=? AND cu.id<>? LIMIT 1""",(s['campaign_id'],pii_lookup_hash(cpf,'cpf'),customer_id)).fetchone()
                 if duplicate: return self.send_json({'ok':False,'error':'cpf_exists'},409)
                 pii=protected_customer_pii(phone,cpf)
-                conn.execute('UPDATE customers SET name=?,contact=?,email=?,phone=NULL,phone_enc=?,phone_hash=?,birth_date=?,cpf=NULL,cpf_enc=?,cpf_hash=? WHERE id=?',
-                    (name,email,email,pii['phone_enc'],pii['phone_hash'],birth_date,pii['cpf_enc'],pii['cpf_hash'],customer_id))
+                conn.execute('UPDATE customers SET name=?,contact=?,email=?,phone=NULL,phone_enc=?,phone_hash=?,birth_date=?,gender=?,cpf=NULL,cpf_enc=?,cpf_hash=? WHERE id=?',
+                    (name,email,email,pii['phone_enc'],pii['phone_hash'],birth_date,gender or None,pii['cpf_enc'],pii['cpf_hash'],customer_id))
                 audit(conn,s['company_id'],s['user_id'],'customer_update','customer',customer_id,details=member['public_id'],ip_address=self._ip())
                 return self.send_json({'ok':True,'customer_id':customer_id})
             if path == '/api/attendant/customer/delete':
