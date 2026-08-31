@@ -1,7 +1,7 @@
 import os
 import sqlite3
 from contextlib import contextmanager
-from security import hash_password, verify_password, random_token, now_ts
+from security import hash_password, verify_password, random_token, now_ts, encrypt_pii, pii_lookup_hash, pii_key_configured, decrypt_pii
 
 DEFAULT_DB = os.environ.get('CLUBE_DB_PATH', os.path.join(os.path.dirname(__file__), 'data.sqlite3'))
 DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
@@ -55,6 +55,10 @@ CREATE TABLE IF NOT EXISTS customers (
   phone TEXT,
   birth_date TEXT,
   cpf TEXT,
+  phone_enc TEXT,
+  phone_hash TEXT,
+  cpf_enc TEXT,
+  cpf_hash TEXT,
   privacy_accepted_at INTEGER,
   marketing_email INTEGER NOT NULL DEFAULT 0,
   marketing_whatsapp INTEGER NOT NULL DEFAULT 0,
@@ -110,7 +114,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS message_queue (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE, kind TEXT NOT NULL, recipient TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, available_at INTEGER NOT NULL, created_at INTEGER NOT NULL, sent_at INTEGER
+  id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE, kind TEXT NOT NULL, recipient TEXT NOT NULL, recipient_hash TEXT, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, available_at INTEGER NOT NULL, created_at INTEGER NOT NULL, sent_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS automation_rules (
   id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, rule_type TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'email', enabled INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(campaign_id,rule_type)
@@ -178,6 +182,10 @@ CREATE TABLE IF NOT EXISTS customers (
   phone TEXT,
   birth_date TEXT,
   cpf TEXT,
+  phone_enc TEXT,
+  phone_hash TEXT,
+  cpf_enc TEXT,
+  cpf_hash TEXT,
   privacy_accepted_at BIGINT,
   marketing_email INTEGER NOT NULL DEFAULT 0,
   marketing_whatsapp INTEGER NOT NULL DEFAULT 0,
@@ -233,7 +241,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS message_queue (
-  id BIGSERIAL PRIMARY KEY, campaign_id BIGINT REFERENCES campaigns(id) ON DELETE CASCADE, kind TEXT NOT NULL, recipient TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, available_at BIGINT NOT NULL, created_at BIGINT NOT NULL, sent_at BIGINT
+  id BIGSERIAL PRIMARY KEY, campaign_id BIGINT REFERENCES campaigns(id) ON DELETE CASCADE, kind TEXT NOT NULL, recipient TEXT NOT NULL, recipient_hash TEXT, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, available_at BIGINT NOT NULL, created_at BIGINT NOT NULL, sent_at BIGINT
 );
 CREATE TABLE IF NOT EXISTS automation_rules (
   id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, rule_type TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'email', enabled INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(campaign_id,rule_type)
@@ -368,6 +376,49 @@ def init_db(db_path=None, seed=True):
                 if col not in customer_cols:
                     conn.execute(f'ALTER TABLE customers ADD COLUMN {col} TEXT')
 
+        # Migração v135a: destinatários de WhatsApp na fila também ficam protegidos.
+        if _is_postgres(target):
+            conn.execute("ALTER TABLE message_queue ADD COLUMN IF NOT EXISTS recipient_hash TEXT")
+        else:
+            mqcols={r['name'] for r in conn.execute("PRAGMA table_info(message_queue)").fetchall()}
+            if 'recipient_hash' not in mqcols: conn.execute("ALTER TABLE message_queue ADD COLUMN recipient_hash TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_message_queue_recipient_hash ON message_queue(campaign_id,recipient_hash)")
+        if pii_key_configured():
+            wa_rows=conn.execute("SELECT id,recipient,recipient_hash FROM message_queue WHERE kind='whatsapp'").fetchall()
+            for r in wa_rows:
+                raw=str(r['recipient'] or '')
+                plain=decrypt_pii(raw,'phone') if raw.startswith('enc:v1:') else raw
+                if plain:
+                    enc=raw if raw.startswith('enc:v1:') else encrypt_pii(plain,'phone')
+                    rh=r['recipient_hash'] or pii_lookup_hash(plain,'phone')
+                    if enc!=raw or not r['recipient_hash']:
+                        conn.execute("UPDATE message_queue SET recipient=?,recipient_hash=? WHERE id=?",(enc,rh,r['id']))
+
+        # Migração v135: CPF e telefone protegidos em repouso no nível da aplicação.
+        pii_cols = [("phone_enc","TEXT"),("phone_hash","TEXT"),("cpf_enc","TEXT"),("cpf_hash","TEXT")]
+        if _is_postgres(target):
+            for col,typ in pii_cols:
+                conn.execute(f"ALTER TABLE customers ADD COLUMN IF NOT EXISTS {col} {typ}")
+        else:
+            ccols={r['name'] for r in conn.execute("PRAGMA table_info(customers)").fetchall()}
+            for col,typ in pii_cols:
+                if col not in ccols: conn.execute(f"ALTER TABLE customers ADD COLUMN {col} {typ}")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_customers_phone_hash ON customers(phone_hash)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_customers_cpf_hash ON customers(cpf_hash)")
+        # Migra registros legados somente quando a chave está configurada. Em produção,
+        # CLUBE_ENCRYPTION_KEY é obrigatória para novos cadastros com CPF/telefone.
+        if pii_key_configured():
+            legacy_rows=conn.execute("SELECT id,phone,cpf,phone_enc,phone_hash,cpf_enc,cpf_hash FROM customers").fetchall()
+            for r in legacy_rows:
+                phone_plain = decrypt_pii(r['phone_enc'],'phone') if r['phone_enc'] else str(r['phone'] or '')
+                cpf_plain = decrypt_pii(r['cpf_enc'],'cpf') if r['cpf_enc'] else str(r['cpf'] or '')
+                phone_enc = r['phone_enc'] or (encrypt_pii(phone_plain,'phone') if phone_plain else None)
+                cpf_enc = r['cpf_enc'] or (encrypt_pii(cpf_plain,'cpf') if cpf_plain else None)
+                phone_hash = r['phone_hash'] or (pii_lookup_hash(phone_plain,'phone') if phone_plain else None)
+                cpf_hash = r['cpf_hash'] or (pii_lookup_hash(cpf_plain,'cpf') if cpf_plain else None)
+                if phone_enc or cpf_enc or r['phone'] or r['cpf']:
+                    conn.execute("UPDATE customers SET phone_enc=?,phone_hash=?,cpf_enc=?,cpf_hash=?,phone=NULL,cpf=NULL WHERE id=?",(phone_enc,phone_hash,cpf_enc,cpf_hash,r['id']))
+
         # Migração v42: permissões por cliente, LGPD, fila, automações e Wallet.
         if _is_postgres(target):
             conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_client_admin INTEGER NOT NULL DEFAULT 0")
@@ -379,7 +430,7 @@ def init_db(db_path=None, seed=True):
             ccols={r['name'] for r in conn.execute("PRAGMA table_info(customers)").fetchall()}
             for col,typ,default in [('privacy_accepted_at','INTEGER','NULL'),('marketing_email','INTEGER','0'),('marketing_whatsapp','INTEGER','0'),('marketing_accepted_at','INTEGER','NULL')]:
                 if col not in ccols: conn.execute(f"ALTER TABLE customers ADD COLUMN {col} {typ} DEFAULT {default}")
-        conn.executescript("CREATE TABLE IF NOT EXISTS message_queue (\n  id BIGSERIAL PRIMARY KEY, campaign_id BIGINT REFERENCES campaigns(id) ON DELETE CASCADE, kind TEXT NOT NULL, recipient TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, available_at BIGINT NOT NULL, created_at BIGINT NOT NULL, sent_at BIGINT\n);\nCREATE TABLE IF NOT EXISTS automation_rules (\n  id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, rule_type TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'email', enabled INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(campaign_id,rule_type)\n);\nCREATE TABLE IF NOT EXISTS automation_runs (\n  id BIGSERIAL PRIMARY KEY, rule_id BIGINT NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE, membership_id BIGINT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, period_key TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(rule_id,membership_id,period_key)\n);\nCREATE TABLE IF NOT EXISTS wallet_registrations (\n  id BIGSERIAL PRIMARY KEY, membership_id BIGINT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, device_library_id TEXT NOT NULL, push_token TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(membership_id,device_library_id)\n);\n" if _is_postgres(target) else "CREATE TABLE IF NOT EXISTS message_queue (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE, kind TEXT NOT NULL, recipient TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, available_at INTEGER NOT NULL, created_at INTEGER NOT NULL, sent_at INTEGER\n);\nCREATE TABLE IF NOT EXISTS automation_rules (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, rule_type TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'email', enabled INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(campaign_id,rule_type)\n);\nCREATE TABLE IF NOT EXISTS automation_runs (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, rule_id INTEGER NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE, membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, period_key TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(rule_id,membership_id,period_key)\n);\nCREATE TABLE IF NOT EXISTS wallet_registrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, device_library_id TEXT NOT NULL, push_token TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(membership_id,device_library_id)\n);\n")
+        conn.executescript("CREATE TABLE IF NOT EXISTS message_queue (\n  id BIGSERIAL PRIMARY KEY, campaign_id BIGINT REFERENCES campaigns(id) ON DELETE CASCADE, kind TEXT NOT NULL, recipient TEXT NOT NULL, recipient_hash TEXT, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, available_at BIGINT NOT NULL, created_at BIGINT NOT NULL, sent_at BIGINT\n);\nCREATE TABLE IF NOT EXISTS automation_rules (\n  id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, rule_type TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'email', enabled INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(campaign_id,rule_type)\n);\nCREATE TABLE IF NOT EXISTS automation_runs (\n  id BIGSERIAL PRIMARY KEY, rule_id BIGINT NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE, membership_id BIGINT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, period_key TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(rule_id,membership_id,period_key)\n);\nCREATE TABLE IF NOT EXISTS wallet_registrations (\n  id BIGSERIAL PRIMARY KEY, membership_id BIGINT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, device_library_id TEXT NOT NULL, push_token TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE(membership_id,device_library_id)\n);\n" if _is_postgres(target) else "CREATE TABLE IF NOT EXISTS message_queue (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE, kind TEXT NOT NULL, recipient TEXT NOT NULL, recipient_hash TEXT, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, available_at INTEGER NOT NULL, created_at INTEGER NOT NULL, sent_at INTEGER\n);\nCREATE TABLE IF NOT EXISTS automation_rules (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, rule_type TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'email', enabled INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(campaign_id,rule_type)\n);\nCREATE TABLE IF NOT EXISTS automation_runs (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, rule_id INTEGER NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE, membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, period_key TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(rule_id,membership_id,period_key)\n);\nCREATE TABLE IF NOT EXISTS wallet_registrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, membership_id INTEGER NOT NULL REFERENCES memberships(id) ON DELETE CASCADE, device_library_id TEXT NOT NULL, push_token TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(membership_id,device_library_id)\n);\n")
 
         # Migração v42b: templates de comunicação e notificações.
         conn.executescript(("CREATE TABLE IF NOT EXISTS message_templates (id BIGSERIAL PRIMARY KEY, campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, name TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'both', subject TEXT, body TEXT NOT NULL, created_at BIGINT NOT NULL); CREATE TABLE IF NOT EXISTS notifications (id BIGSERIAL PRIMARY KEY, company_id BIGINT, campaign_id BIGINT, kind TEXT NOT NULL, title TEXT NOT NULL, message TEXT NOT NULL, created_at BIGINT NOT NULL);" if _is_postgres(target) else "CREATE TABLE IF NOT EXISTS message_templates (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, name TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'both', subject TEXT, body TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER, campaign_id INTEGER, kind TEXT NOT NULL, title TEXT NOT NULL, message TEXT NOT NULL, created_at INTEGER NOT NULL);"))

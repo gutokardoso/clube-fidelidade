@@ -1,4 +1,13 @@
-# Fidelizaê! v134
+# Fidelizaê! v135
+
+## v135
+
+- CPF e celular dos clientes são armazenados criptografados no nível da aplicação usando Fernet, derivados de `CLUBE_ENCRYPTION_KEY`.
+- Buscas por CPF/celular utilizam HMAC-SHA256 separado (`cpf_hash` / `phone_hash`), evitando a necessidade de texto puro no banco.
+- A migração v135 converte automaticamente registros legados quando `CLUBE_ENCRYPTION_KEY` está configurada e limpa os campos antigos em texto puro.
+- Destinatários de WhatsApp mantidos na fila de mensagens também passam a ser criptografados, com hash de pesquisa separado.
+- A Política de Privacidade foi atualizada para refletir as medidas técnicas realmente implementadas.
+- **Importante:** `CLUBE_ENCRYPTION_KEY` deve permanecer estável e protegida em produção; não altere a chave sem um processo controlado de rotação/migração.
 
 ## v134
 

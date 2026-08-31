@@ -557,7 +557,7 @@ body:has(#editClientCard.manager-inline-modal:not(.hidden))::before,body:has(#cl
 @media(max-width:800px){.program-tools-grid{grid-template-columns:1fr}}
 
 
-/* v134 — painel geral com visão consolidada e correções do menu superior */
+/* v135 — proteção criptográfica de CPF/celular; mantém o painel visual da v134 */
 .topbar .actions>.advanced-menu-wrap>.manager-nav-link{min-height:44px;height:44px;padding:0 16px;border-radius:12px;border:1px solid transparent;display:inline-flex;align-items:center;justify-content:center;font:inherit;font-weight:800;line-height:1;text-decoration:none;white-space:nowrap;box-shadow:none;transition:background-color .16s ease,color .16s ease,border-color .16s ease,transform .16s ease;background:#e27a00;color:#fff}
 .topbar .actions>.advanced-menu-wrap>.manager-nav-link:hover{background:#b85f00!important;color:#fff!important;border-color:#b85f00!important;filter:none!important}
 .notification-button{gap:8px}.notification-button span{margin-left:2px}

@@ -30,7 +30,7 @@ import secrets
 import qrcode
 
 from db import DEFAULT_DB, init_db, ensure_configured_staff, connect, create_session, get_session, audit, insert_id, begin_write, integrity_errors, fetchone_for_update
-from security import verify_password, hash_password, random_token, now_ts, password_is_strong, generate_totp_secret, verify_totp
+from security import verify_password, hash_password, random_token, now_ts, password_is_strong, generate_totp_secret, verify_totp, encrypt_pii, decrypt_pii, pii_lookup_hash, pii_key_configured
 from antifraud import validate_stamp, FraudError
 from wallet import wallet_status, apple_pass_link, google_wallet_link, build_apple_pkpass, google_save_url, google_update_object, apple_auth_token, apple_push_update
 from platform_features import has_permission, session_permissions, active_multiplier, add_point_lot, consume_point_lots, expire_points_once, record_purchase
@@ -41,7 +41,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v134'
+VERSION='v135'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
@@ -51,6 +51,34 @@ def jdump(obj):
 
 def rowdict(row):
     return dict(row) if row else None
+
+def customer_rowdict(row):
+    """Converte linha de cliente para saída segura, descriptografando CPF/telefone só em memória."""
+    d=rowdict(row)
+    if not d:
+        return d
+    if 'phone_enc' in d:
+        d['phone']=decrypt_pii(d.get('phone_enc'),'phone') or str(d.get('phone') or '')
+    if 'cpf_enc' in d:
+        d['cpf']=decrypt_pii(d.get('cpf_enc'),'cpf') or str(d.get('cpf') or '')
+    d.pop('phone_enc',None); d.pop('cpf_enc',None); d.pop('phone_hash',None); d.pop('cpf_hash',None)
+    return d
+
+def protected_customer_pii(phone='', cpf=''):
+    """Retorna ciphertext + HMAC pesquisável. Exige CLUBE_ENCRYPTION_KEY quando houver PII."""
+    return {
+        'phone_enc': encrypt_pii(phone,'phone') if phone else None,
+        'phone_hash': pii_lookup_hash(phone,'phone') if phone else None,
+        'cpf_enc': encrypt_pii(cpf,'cpf') if cpf else None,
+        'cpf_hash': pii_lookup_hash(cpf,'cpf') if cpf else None,
+    }
+
+def queue_rowdict(row):
+    d=rowdict(row)
+    if d and d.get('kind')=='whatsapp':
+        d['recipient']=decrypt_pii(d.get('recipient'),'phone')
+    if d: d.pop('recipient_hash',None)
+    return d
 
 def now_iso():
     return datetime.now(ZoneInfo('America/Sao_Paulo')).isoformat(timespec='seconds')
@@ -182,13 +210,13 @@ def ecommerce_extract(payload, platform):
 def ecommerce_find_membership(conn,campaign_id,info):
     cpf=info.get('cpf'); email=info.get('email'); phone=info.get('phone')
     if cpf:
-        row=conn.execute('SELECT m.*,cu.name customer_name FROM memberships m JOIN customers cu ON cu.id=m.customer_id WHERE m.campaign_id=? AND cu.cpf=? LIMIT 1',(campaign_id,cpf)).fetchone()
+        row=conn.execute('SELECT m.*,cu.name customer_name FROM memberships m JOIN customers cu ON cu.id=m.customer_id WHERE m.campaign_id=? AND cu.cpf_hash=? LIMIT 1',(campaign_id,pii_lookup_hash(cpf,'cpf'))).fetchone()
         if row:return row
     if email:
         row=conn.execute('SELECT m.*,cu.name customer_name FROM memberships m JOIN customers cu ON cu.id=m.customer_id WHERE m.campaign_id=? AND lower(cu.email)=lower(?) LIMIT 1',(campaign_id,email)).fetchone()
         if row:return row
     if phone:
-        row=conn.execute('SELECT m.*,cu.name customer_name FROM memberships m JOIN customers cu ON cu.id=m.customer_id WHERE m.campaign_id=? AND cu.phone=? LIMIT 1',(campaign_id,phone)).fetchone()
+        row=conn.execute('SELECT m.*,cu.name customer_name FROM memberships m JOIN customers cu ON cu.id=m.customer_id WHERE m.campaign_id=? AND cu.phone_hash=? LIMIT 1',(campaign_id,pii_lookup_hash(phone,'phone'))).fetchone()
         if row:return row
     return None
 
@@ -1035,7 +1063,11 @@ def resolve_member_token(raw):
     return token,None
 
 def enqueue_message(conn, campaign_id, kind, recipient, payload, delay=0):
-    return insert_id(conn,"INSERT INTO message_queue(campaign_id,kind,recipient,payload_json,status,attempts,available_at,created_at) VALUES(?,?,?,?,?,?,?,?)",(campaign_id,kind,recipient,json.dumps(payload,ensure_ascii=False),'pending',0,now_ts()+delay,now_ts()))
+    stored_recipient=recipient; recipient_hash=None
+    if kind=='whatsapp' and recipient:
+        stored_recipient=encrypt_pii(recipient,'phone')
+        recipient_hash=pii_lookup_hash(recipient,'phone')
+    return insert_id(conn,"INSERT INTO message_queue(campaign_id,kind,recipient,recipient_hash,payload_json,status,attempts,available_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(campaign_id,kind,stored_recipient,recipient_hash,json.dumps(payload,ensure_ascii=False),'pending',0,now_ts()+delay,now_ts()))
 
 def _queue_send(item, conn):
     payload=json.loads(item['payload_json'] or '{}'); kind=item['kind']; campaign_id=item['campaign_id']
@@ -1093,7 +1125,7 @@ def process_message_queue_once(limit=15):
             conn.commit()
             row=conn.execute('SELECT * FROM message_queue WHERE id=?',(item_id,)).fetchone()
             if not row: continue
-            item=rowdict(row)
+            item=queue_rowdict(row)
             try: result=_queue_send(item,conn)
             except Exception as exc: result={'sent':False,'reason':type(exc).__name__+':'+str(exc)[:300]}
             if result.get('sent'):
@@ -1133,16 +1165,16 @@ def segment_sql(segment,cid,loyalty_type='stamps'):
 def campaign_recipient_rows(conn,cid,segment):
     if segment in ('all','birthdays','inactive60','inactive90'):
         extra,params=segment_sql(segment,cid)
-        return conn.execute("""SELECT m.id membership_id,m.public_id,cu.id customer_id,cu.name,cu.email,cu.phone,cu.marketing_email,cu.marketing_whatsapp
+        return [customer_rowdict(r) for r in conn.execute("""SELECT m.id membership_id,m.public_id,cu.id customer_id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.marketing_email,cu.marketing_whatsapp
           FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id
-          WHERE m.campaign_id=? AND m.status='active' """+extra+' ORDER BY cu.name',(cid,*params)).fetchall()
+          WHERE m.campaign_id=? AND m.status='active' """+extra+' ORDER BY cu.name',(cid,*params)).fetchall()]
     rows=conn.execute("""SELECT m.id membership_id,m.public_id,m.campaign_id,m.created_at,m.progress,m.points_balance,m.rewards_available,
-                               c.goal,c.loyalty_type,cu.id customer_id,cu.name,cu.email,cu.phone,cu.marketing_email,cu.marketing_whatsapp
+                               c.goal,c.loyalty_type,cu.id customer_id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.marketing_email,cu.marketing_whatsapp
                         FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id
                         WHERE m.campaign_id=? AND m.status='active' ORDER BY cu.name""",(cid,)).fetchall()
     out=[]
     for row in rows:
-        d=rowdict(row)
+        d=customer_rowdict(row)
         intel=customer_intelligence(conn,{**d,'id':d['membership_id']},d)
         if intel['segment']==segment:
             out.append(d)
@@ -1194,10 +1226,11 @@ def run_automations_once():
         for c in campaigns: ensure_automation_defaults(conn,c['id'])
         rules=conn.execute('SELECT r.*,c.name client_name,c.loyalty_type FROM automation_rules r JOIN campaigns c ON c.id=r.campaign_id WHERE r.enabled=1 AND c.active=1').fetchall()
         for rule in rules:
-            rows=conn.execute('''SELECT m.id membership_id,m.progress,m.rewards_available,m.public_id,m.created_at membership_created,c.goal,cu.id customer_id,cu.name,cu.email,cu.phone,cu.birth_date,cu.marketing_email,cu.marketing_whatsapp,
+            rows=conn.execute('''SELECT m.id membership_id,m.progress,m.rewards_available,m.public_id,m.created_at membership_created,c.goal,cu.id customer_id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.marketing_email,cu.marketing_whatsapp,
               COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at) last_activity
               FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.campaign_id=? AND m.status='active' ''',(rule['campaign_id'],)).fetchall()
-            for x in rows:
+            for raw_x in rows:
+                x=customer_rowdict(raw_x)
                 match=False; period=''
                 if rule['rule_type']=='birthday' and x['birth_date'] and x['birth_date'][5:10]==today.isoformat()[5:10]: match=True; period=str(today.year)
                 elif rule['rule_type']=='inactive30' and x['last_activity']<=now-30*86400 and x['last_activity']>now-60*86400: match=True; period=today.strftime('%Y-%m')
@@ -1798,13 +1831,14 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess:return
                 try: customer_id=int((qs.get('customer_id') or ['0'])[0])
                 except: customer_id=0
-                row=conn.execute("SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,cu.created_at,cu.marketing_email,cu.marketing_whatsapp,m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,c.name campaign_name,c.goal,c.reward_name,c.loyalty_type,c.points_spend_cents FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE cu.id=? AND m.campaign_id=?",(customer_id,sess['campaign_id'])).fetchone()
+                row=conn.execute("SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.cpf,cu.cpf_enc,cu.created_at,cu.marketing_email,cu.marketing_whatsapp,m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,c.name campaign_name,c.goal,c.reward_name,c.loyalty_type,c.points_spend_cents FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE cu.id=? AND m.campaign_id=?",(customer_id,sess['campaign_id'])).fetchone()
                 if not row:return self.send_json({'ok':False,'error':'customer_not_found'},404)
+                row=customer_rowdict(row)
                 hist=[rowdict(x) for x in conn.execute("SELECT t.type,t.value,t.previous_progress,t.new_progress,t.rewards_delta,t.note,t.created_at,u.name user_name FROM transactions t LEFT JOIN users u ON u.id=t.user_id WHERE t.membership_id=? ORDER BY t.created_at DESC LIMIT 300",(row['membership_id'],)).fetchall()]
                 stats=conn.execute("SELECT COUNT(*) visits,MAX(created_at) last_activity,MIN(created_at) first_activity,COALESCE(SUM(CASE WHEN value>0 THEN value ELSE 0 END),0) total_earned,COALESCE(SUM(CASE WHEN type='redeem' THEN 1 ELSE 0 END),0) total_redeems FROM transactions WHERE membership_id=?",(row['membership_id'],)).fetchone()
                 intelligence=customer_intelligence(conn,{**rowdict(row),'id':row['membership_id'],'campaign_id':sess['campaign_id']},rowdict(row))
                 notes=[rowdict(x) for x in conn.execute("SELECT n.note,n.created_at,u.name user_name FROM customer_notes n LEFT JOIN users u ON u.id=n.user_id WHERE n.membership_id=? ORDER BY n.id DESC LIMIT 30",(row['membership_id'],)).fetchall()]
-                communications=[rowdict(x) for x in conn.execute("SELECT kind,status,created_at,sent_at FROM message_queue WHERE campaign_id=? AND recipient IN (?,?) ORDER BY created_at DESC LIMIT 30",(sess['campaign_id'],row['email'] or '',row['phone'] or '')).fetchall()]
+                communications=[rowdict(x) for x in conn.execute("SELECT kind,status,created_at,sent_at FROM message_queue WHERE campaign_id=? AND (recipient=? OR recipient_hash=?) ORDER BY created_at DESC LIMIT 30",(sess['campaign_id'],row['email'] or '',pii_lookup_hash(row['phone'],'phone') if row['phone'] else None)).fetchall()]
                 coupons=[rowdict(x) for x in conn.execute("SELECT cp.name,cp.code,cr.created_at FROM coupon_redemptions cr JOIN coupons cp ON cp.id=cr.coupon_id WHERE cr.membership_id=? ORDER BY cr.created_at DESC LIMIT 30",(row['membership_id'],)).fetchall()]
                 redemptions=[rowdict(x) for x in conn.execute("SELECT COALESCE(rc.name,'Recompensa') name,rr.points_cost,rr.created_at FROM reward_redemptions rr LEFT JOIN reward_catalog rc ON rc.id=rr.reward_id WHERE rr.membership_id=? ORDER BY rr.created_at DESC LIMIT 30",(row['membership_id'],)).fetchall()]
                 return self.send_json({'ok':True,'customer':rowdict(row),'stats':rowdict(stats),'notes':notes,'communications':communications,'coupons':coupons,'redemptions':redemptions,'history':hist,'intelligence':intelligence})
@@ -1818,12 +1852,14 @@ class Handler(BaseHTTPRequestHandler):
                 import csv
                 b=io.StringIO();w=csv.writer(b)
                 if plan=='beginner':
-                    rows=conn.execute("SELECT cu.name,cu.email,cu.phone,m.public_id,m.progress,m.status FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? ORDER BY cu.name",(sess['campaign_id'],)).fetchall()
+                    rows=conn.execute("SELECT cu.name,cu.email,cu.phone,cu.phone_enc,m.public_id,m.progress,m.status FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? ORDER BY cu.name",(sess['campaign_id'],)).fetchall()
+                    rows=[customer_rowdict(r) for r in rows]
                     w.writerow(['Nome','E-mail','Celular','Código','Selos','Status'])
                     [w.writerow([r['name'],r['email'],r['phone'],'CLUBE:'+r['public_id'],r['progress'],r['status']]) for r in rows]
                     filename='relatorio-basico-clientes.csv'
                 else:
-                    rows=conn.execute("SELECT cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? ORDER BY cu.name",(sess['campaign_id'],)).fetchall()
+                    rows=conn.execute("SELECT cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.cpf,cu.cpf_enc,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? ORDER BY cu.name",(sess['campaign_id'],)).fetchall()
+                    rows=[customer_rowdict(r) for r in rows]
                     w.writerow(['Nome','E-mail','Celular','Nascimento','CPF','Código','Selos','Pontos','Recompensas','Status'])
                     [w.writerow([r['name'],r['email'],r['phone'],r['birth_date'],r['cpf'],'CLUBE:'+r['public_id'],r['progress'],r['points_balance'],r['rewards_available'],r['status']]) for r in rows]
                     filename='relatorio-completo-clientes.csv'
@@ -1832,7 +1868,8 @@ class Handler(BaseHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'manager')
                 if not sess:return
-                rows=conn.execute("SELECT c.name empresa,cu.name cliente,cu.email,cu.phone,m.public_id,m.progress,m.rewards_available,m.status FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? ORDER BY c.name,cu.name",(sess['company_id'],)).fetchall()
+                rows=conn.execute("SELECT c.name empresa,cu.name cliente,cu.email,cu.phone,cu.phone_enc,m.public_id,m.progress,m.rewards_available,m.status FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? ORDER BY c.name,cu.name",(sess['company_id'],)).fetchall()
+                rows=[customer_rowdict(r) for r in rows]
                 import csv
                 b=io.StringIO();w=csv.writer(b);w.writerow(['Empresa','Cliente','E-mail','Celular','Código','Selos','Recompensas','Status'])
                 [w.writerow([r['empresa'],r['cliente'],r['email'],r['phone'],'CLUBE:'+r['public_id'],r['progress'],r['rewards_available'],r['status']]) for r in rows]
@@ -1874,15 +1911,16 @@ class Handler(BaseHTTPRequestHandler):
                 channel='whatsapp' if path.endswith('whatsapp-consented-customers') else str((qs.get('channel') or [''])[0]).strip().lower()
                 if channel not in ('email','whatsapp','both'):return self.send_json({'ok':False,'error':'invalid_test_channel'},400)
                 if channel=='email':
-                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email,cu.phone FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc FROM customers cu JOIN memberships m ON m.customer_id=cu.id
                         WHERE m.campaign_id=? AND cu.marketing_email=1 AND cu.email IS NOT NULL AND cu.email<>? ORDER BY cu.name''',(sess['campaign_id'],'')).fetchall()
                 elif channel=='whatsapp':
-                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email,cu.phone FROM customers cu JOIN memberships m ON m.customer_id=cu.id
-                        WHERE m.campaign_id=? AND cu.marketing_whatsapp=1 AND cu.phone IS NOT NULL AND cu.phone<>? ORDER BY cu.name''',(sess['campaign_id'],'')).fetchall()
+                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                        WHERE m.campaign_id=? AND cu.marketing_whatsapp=1 AND COALESCE(cu.phone_enc,cu.phone) IS NOT NULL AND COALESCE(cu.phone_enc,cu.phone)<>? ORDER BY cu.name''',(sess['campaign_id'],'')).fetchall()
                 else:
-                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email,cu.phone FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc FROM customers cu JOIN memberships m ON m.customer_id=cu.id
                         WHERE m.campaign_id=? AND cu.marketing_email=1 AND cu.marketing_whatsapp=1
-                        AND cu.email IS NOT NULL AND cu.email<>? AND cu.phone IS NOT NULL AND cu.phone<>? ORDER BY cu.name''',(sess['campaign_id'],'','')).fetchall()
+                        AND cu.email IS NOT NULL AND cu.email<>? AND COALESCE(cu.phone_enc,cu.phone) IS NOT NULL AND COALESCE(cu.phone_enc,cu.phone)<>? ORDER BY cu.name''',(sess['campaign_id'],'','')).fetchall()
+                rows=[customer_rowdict(r) for r in rows]
                 wa_mode='not_applicable'
                 wa_available=True
                 if channel in ('whatsapp','both'):
@@ -1895,7 +1933,7 @@ class Handler(BaseHTTPRequestHandler):
                         rows=[r for r in rows if _normalize_phone(r['phone']) in allowed]
                     else:
                         wa_mode='unavailable'; wa_available=False; rows=[]
-                return self.send_json({'ok':True,'channel':channel,'customers':[rowdict(r) for r in rows],
+                return self.send_json({'ok':True,'channel':channel,'customers':[dict(r) for r in rows],
                     'whatsapp_mode':wa_mode,'whatsapp_available':wa_available})
         if path == '/api/manager/notifications':
             with connect(DB_PATH) as conn:
@@ -2117,7 +2155,7 @@ class Handler(BaseHTTPRequestHandler):
                 sess=self._require_auth(conn,'manager')
                 if not sess:return
                 pending=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE status IN ('pending','retry','processing')").fetchone()['n']; failed=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE status='failed'").fetchone()['n']
-                return self.send_json({'ok':True,'version':VERSION,'database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite','wallet':wallet_status(),'queue':{'pending':pending,'failed':failed},'encryption':bool(_secret_box()),'meta':meta_embedded_signup_configured(),'global_email':email_configured(global_email_config()),'public_base_url':os.environ.get('PUBLIC_BASE_URL',''),'environment':os.environ.get('APP_ENV','production'),'backup':'available'})
+                return self.send_json({'ok':True,'version':VERSION,'database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite','wallet':wallet_status(),'queue':{'pending':pending,'failed':failed},'encryption':bool(_secret_box()),'pii_encryption':pii_key_configured(),'meta':meta_embedded_signup_configured(),'global_email':email_configured(global_email_config()),'public_base_url':os.environ.get('PUBLIC_BASE_URL',''),'environment':os.environ.get('APP_ENV','production'),'backup':'available'})
         if path == '/api/manager/backup':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'manager')
@@ -2125,7 +2163,7 @@ class Handler(BaseHTTPRequestHandler):
                 cid=sess['company_id']; payload={'generated_at':now_iso(),'version':VERSION,'company_id':cid}
                 payload['campaigns']=[rowdict(r) for r in conn.execute('SELECT id,code,name,reward_name,goal,active,created_at FROM campaigns WHERE company_id=? ORDER BY id',(cid,)).fetchall()]
                 payload['staff']=[rowdict(r) for r in conn.execute("SELECT id,name,email,role,active,is_client_admin,campaign_id,created_at FROM users WHERE company_id=? ORDER BY id",(cid,)).fetchall()]
-                payload['customers']=[rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,m.public_id,m.progress,m.rewards_available,m.status,m.campaign_id FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? ORDER BY cu.id''',(cid,)).fetchall()]
+                payload['customers']=[customer_rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.cpf,cu.cpf_enc,m.public_id,m.progress,m.rewards_available,m.status,m.campaign_id FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? ORDER BY cu.id''',(cid,)).fetchall()]
                 payload['transactions']=[rowdict(r) for r in conn.execute('''SELECT t.id,t.membership_id,t.user_id,t.type,t.value,t.previous_progress,t.new_progress,t.rewards_delta,t.note,t.created_at FROM transactions t JOIN memberships m ON m.id=t.membership_id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? ORDER BY t.id''',(cid,)).fetchall()]
                 data=json.dumps(payload,ensure_ascii=False,indent=2).encode('utf-8'); return self.send_bytes(data,'application/json; charset=utf-8',headers={'Content-Disposition':f'attachment; filename="clube-backup-{datetime.now().strftime("%Y%m%d-%H%M")}.json"'})
         if path == '/api/privacy/export':
@@ -2133,10 +2171,10 @@ class Handler(BaseHTTPRequestHandler):
             public_id=(qs.get('id') or [''])[0].strip(); cpf=normalize_cpf((qs.get('cpf') or [''])[0])
             if not cpf:return self.send_json({'ok':False,'error':'invalid_cpf'},400)
             with connect(DB_PATH) as conn:
-                row=conn.execute('''SELECT cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,cu.privacy_accepted_at,cu.marketing_email,cu.marketing_whatsapp,m.public_id,m.progress,m.rewards_available,c.name client_name FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=? AND cu.cpf=?''',(public_id,cpf)).fetchone()
+                row=conn.execute('''SELECT cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.cpf,cu.cpf_enc,cu.privacy_accepted_at,cu.marketing_email,cu.marketing_whatsapp,m.public_id,m.progress,m.rewards_available,c.name client_name FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=? AND cu.cpf_hash=?''',(public_id,pii_lookup_hash(cpf,'cpf'))).fetchone()
                 if not row:return self.send_json({'ok':False,'error':'not_found'},404)
                 tx=[rowdict(r) for r in conn.execute('SELECT type,value,previous_progress,new_progress,rewards_delta,note,created_at FROM transactions WHERE membership_id=(SELECT id FROM memberships WHERE public_id=?) ORDER BY created_at',(public_id,)).fetchall()]
-                return self.send_json({'ok':True,'data':rowdict(row),'history':tx})
+                return self.send_json({'ok':True,'data':customer_rowdict(row),'history':tx})
         if path == '/api/manager/overview':
             with connect(DB_PATH) as conn:
                 s=self._require_auth(conn,'manager');
@@ -2229,27 +2267,27 @@ class Handler(BaseHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 ctx=self._api_context(conn)
                 if not ctx:return
-                rows=conn.execute("""SELECT cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,m.created_at
+                rows=conn.execute("""SELECT cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.cpf,cu.cpf_enc,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,m.created_at
                                      FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? ORDER BY cu.name LIMIT 1000""",(ctx['campaign_id'],)).fetchall()
                 out=[]
                 for r in rows:
-                    d=rowdict(r); intel=customer_intelligence(conn,{**d,'id':conn.execute('SELECT id FROM memberships WHERE public_id=?',(d['public_id'],)).fetchone()['id'],'campaign_id':ctx['campaign_id'],'loyalty_type':ctx['loyalty_type'],'goal':ctx['goal']},ctx); d.update(intel); out.append(d)
+                    d=customer_rowdict(r); intel=customer_intelligence(conn,{**d,'id':conn.execute('SELECT id FROM memberships WHERE public_id=?',(d['public_id'],)).fetchone()['id'],'campaign_id':ctx['campaign_id'],'loyalty_type':ctx['loyalty_type'],'goal':ctx['goal']},ctx); d.update(intel); out.append(d)
                 return self.send_json({'ok':True,'data':out})
         if path.startswith('/api/v1/customers/'):
             public_id=urllib.parse.unquote(path.rsplit('/',1)[1])
             with connect(DB_PATH) as conn:
                 ctx=self._api_context(conn)
                 if not ctx:return
-                r=conn.execute("""SELECT cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,m.* FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND m.public_id=?""",(ctx['campaign_id'],public_id)).fetchone()
+                r=conn.execute("""SELECT cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.cpf,cu.cpf_enc,m.* FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND m.public_id=?""",(ctx['campaign_id'],public_id)).fetchone()
                 if not r:return self.send_json({'ok':False,'error':'customer_not_found'},404)
-                d=rowdict(r); d['intelligence']=customer_intelligence(conn,d,{**ctx,'goal':ctx['goal']})
+                d=customer_rowdict(r); d['intelligence']=customer_intelligence(conn,d,{**ctx,'goal':ctx['goal']})
                 return self.send_json({'ok':True,'data':d})
         if path == '/api/attendant/customers':
             with connect(DB_PATH) as conn:
                 s=self._require_auth(conn,'attendant')
                 if not s: return
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                customers=[rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,cu.created_at,m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,c.loyalty_type,c.goal,
+                customers=[customer_rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.cpf,cu.cpf_enc,cu.created_at,m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,c.loyalty_type,c.goal,
                     COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at) last_activity,
                     (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND ((c.loyalty_type='points' AND t.type='adjustment' AND t.value>0) OR (c.loyalty_type='stamps' AND t.type='stamp' AND t.value>0))) visits,
                     (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND t.type='redeem') redeems
@@ -2302,7 +2340,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess:return
                 if not plan_allows(conn,sess['campaign_id'],'communications'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
                 if not sess['campaign_id']:return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                rows=[rowdict(r) for r in conn.execute("SELECT id,kind,recipient,status,attempts,last_error,created_at,sent_at,available_at FROM message_queue WHERE campaign_id=? ORDER BY id DESC LIMIT 30",(sess['campaign_id'],)).fetchall()]
+                rows=[queue_rowdict(r) for r in conn.execute("SELECT id,kind,recipient,recipient_hash,status,attempts,last_error,created_at,sent_at,available_at FROM message_queue WHERE campaign_id=? ORDER BY id DESC LIMIT 30",(sess['campaign_id'],)).fetchall()]
                 return self.send_json({'ok':True,'messages':rows})
         if path == '/api/admin/branches':
             with connect(DB_PATH) as conn:
@@ -2706,17 +2744,19 @@ class Handler(BaseHTTPRequestHandler):
                 if not c:
                     return self.send_redirect('/join?campaign='+urllib.parse.quote(code or 'CAFE5')+'&error=campaign_not_found') if path=='/join' else self.send_json({'ok':False,'error':'campaign_not_found'},404)
                 existing_customer=conn.execute('''SELECT cu.id FROM customers cu JOIN memberships m ON m.customer_id=cu.id
-                    WHERE m.campaign_id=? AND cu.cpf=? LIMIT 1''',(c['id'],cpf)).fetchone()
+                    WHERE m.campaign_id=? AND cu.cpf_hash=? LIMIT 1''',(c['id'],pii_lookup_hash(cpf,'cpf'))).fetchone()
                 customer_id=existing_customer['id'] if existing_customer else None
-                duplicate_contact=conn.execute('''SELECT cu.id,cu.cpf FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND (lower(cu.email)=lower(?) OR cu.phone=?) AND cu.cpf<>? LIMIT 1''',(c['id'],email,phone,cpf)).fetchone()
+                duplicate_contact=conn.execute('''SELECT cu.id FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND (lower(cu.email)=lower(?) OR cu.phone_hash=?) AND (cu.cpf_hash IS NULL OR cu.cpf_hash<>?) LIMIT 1''',(c['id'],email,pii_lookup_hash(phone,'phone'),pii_lookup_hash(cpf,'cpf'))).fetchone()
                 if duplicate_contact:
                     return self.send_redirect('/join?campaign='+urllib.parse.quote(code)+'&error=duplicate_contact') if path=='/join' else self.send_json({'ok':False,'error':'duplicate_contact'},409)
                 if customer_id is None:
-                    customer_id=insert_id(conn,'INSERT INTO customers(name,contact,email,phone,birth_date,cpf,privacy_accepted_at,marketing_email,marketing_whatsapp,marketing_accepted_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-                        (name,email,email,phone,birth_date,cpf,now_ts(),1 if marketing_email else 0,1 if marketing_whatsapp else 0,now_ts() if (marketing_email or marketing_whatsapp) else None,now_ts()))
+                    pii=protected_customer_pii(phone,cpf)
+                    customer_id=insert_id(conn,'INSERT INTO customers(name,contact,email,phone,phone_enc,phone_hash,birth_date,cpf,cpf_enc,cpf_hash,privacy_accepted_at,marketing_email,marketing_whatsapp,marketing_accepted_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                        (name,email,email,None,pii['phone_enc'],pii['phone_hash'],birth_date,None,pii['cpf_enc'],pii['cpf_hash'],now_ts(),1 if marketing_email else 0,1 if marketing_whatsapp else 0,now_ts() if (marketing_email or marketing_whatsapp) else None,now_ts()))
                 else:
-                    conn.execute('UPDATE customers SET name=?,contact=?,email=?,phone=?,birth_date=?,cpf=?,privacy_accepted_at=COALESCE(privacy_accepted_at,?),marketing_email=?,marketing_whatsapp=?,marketing_accepted_at=? WHERE id=?',
-                        (name,email,email,phone,birth_date,cpf,now_ts(),1 if marketing_email else 0,1 if marketing_whatsapp else 0,now_ts() if (marketing_email or marketing_whatsapp) else None,customer_id))
+                    pii=protected_customer_pii(phone,cpf)
+                    conn.execute('UPDATE customers SET name=?,contact=?,email=?,phone=NULL,phone_enc=?,phone_hash=?,birth_date=?,cpf=NULL,cpf_enc=?,cpf_hash=?,privacy_accepted_at=COALESCE(privacy_accepted_at,?),marketing_email=?,marketing_whatsapp=?,marketing_accepted_at=? WHERE id=?',
+                        (name,email,email,pii['phone_enc'],pii['phone_hash'],birth_date,pii['cpf_enc'],pii['cpf_hash'],now_ts(),1 if marketing_email else 0,1 if marketing_whatsapp else 0,now_ts() if (marketing_email or marketing_whatsapp) else None,customer_id))
                 existing=conn.execute('SELECT public_id FROM memberships WHERE customer_id=? AND campaign_id=?',(customer_id,c['id'])).fetchone()
                 if existing:
                     return self.send_redirect('/card?id='+urllib.parse.quote(existing['public_id'])) if path=='/join' else self.send_json({'ok':True,'public_id':existing['public_id'],'existing':True})
@@ -2768,7 +2808,7 @@ class Handler(BaseHTTPRequestHandler):
             public_id=str(payload.get('id','')).strip(); cpf=normalize_cpf(payload.get('cpf'))
             if not cpf:return self.send_json({'ok':False,'error':'invalid_cpf'},400)
             with connect(DB_PATH) as conn:
-                row=conn.execute('''SELECT m.id membership_id,m.customer_id,c.company_id FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=? AND cu.cpf=?''',(public_id,cpf)).fetchone()
+                row=conn.execute('''SELECT m.id membership_id,m.customer_id,c.company_id FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=? AND cu.cpf_hash=?''',(public_id,pii_lookup_hash(cpf,'cpf'))).fetchone()
                 if not row:return self.send_json({'ok':False,'error':'not_found'},404)
                 audit(conn,row['company_id'],None,'lgpd_delete','customer',row['customer_id'],details=public_id,ip_address=self._ip())
                 conn.execute('DELETE FROM memberships WHERE id=?',(row['membership_id'],))
@@ -2781,7 +2821,7 @@ class Handler(BaseHTTPRequestHandler):
             marketing_email=1 if str(payload.get('marketing_email','')).lower() in ('1','true','on','yes') else 0
             marketing_whatsapp=1 if str(payload.get('marketing_whatsapp','')).lower() in ('1','true','on','yes') else 0
             with connect(DB_PATH) as conn:
-                row=conn.execute('''SELECT m.customer_id,c.company_id FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=? AND cu.cpf=?''',(public_id,cpf)).fetchone()
+                row=conn.execute('''SELECT m.customer_id,c.company_id FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=? AND cu.cpf_hash=?''',(public_id,pii_lookup_hash(cpf,'cpf'))).fetchone()
                 if not row:return self.send_json({'ok':False,'error':'not_found'},404)
                 conn.execute('UPDATE customers SET marketing_email=?,marketing_whatsapp=?,marketing_accepted_at=? WHERE id=?',(marketing_email,marketing_whatsapp,now_ts() if (marketing_email or marketing_whatsapp) else None,row['customer_id']))
                 audit(conn,row['company_id'],None,'privacy_preferences','customer',row['customer_id'],details=f'email={marketing_email};whatsapp={marketing_whatsapp}',ip_address=self._ip())
@@ -2835,10 +2875,11 @@ class Handler(BaseHTTPRequestHandler):
                 if limit and int(conn.execute("SELECT COUNT(*) n FROM memberships WHERE campaign_id=?",(ctx['campaign_id'],)).fetchone()['n'] or 0)>=limit:
                     return self.send_json({'ok':False,'error':'client_limit_reached'},409)
                 existing=None
-                if cpf: existing=conn.execute("SELECT cu.id FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.cpf=?",(ctx['campaign_id'],cpf)).fetchone()
+                if cpf: existing=conn.execute("SELECT cu.id FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.cpf_hash=?",(ctx['campaign_id'],pii_lookup_hash(cpf,'cpf'))).fetchone()
                 if not existing and email: existing=conn.execute("SELECT cu.id FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND lower(cu.email)=lower(?)",(ctx['campaign_id'],email)).fetchone()
                 if existing:return self.send_json({'ok':False,'error':'customer_exists'},409)
-                customer_id=insert_id(conn,"INSERT INTO customers(name,contact,email,phone,birth_date,cpf,privacy_accepted_at,marketing_email,marketing_whatsapp,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",(name,email,email,phone,birth or None,cpf or None,None,0,0,now_ts()))
+                pii=protected_customer_pii(phone,cpf)
+                customer_id=insert_id(conn,"INSERT INTO customers(name,contact,email,phone,phone_enc,phone_hash,birth_date,cpf,cpf_enc,cpf_hash,privacy_accepted_at,marketing_email,marketing_whatsapp,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(name,email,email,None,pii['phone_enc'],pii['phone_hash'],birth or None,None,pii['cpf_enc'],pii['cpf_hash'],None,0,0,now_ts()))
                 public_id='mem_'+secrets.token_urlsafe(10); qr_token=random_token(18)
                 mid=insert_id(conn,"INSERT INTO memberships(customer_id,campaign_id,public_id,qr_token,created_at) VALUES(?,?,?,?,?)",(customer_id,ctx['campaign_id'],public_id,qr_token,now_ts()))
                 audit(conn,ctx['company_id'],None,'api_customer_create','customer',customer_id,details=public_id,ip_address=self._ip(),campaign_id=ctx['campaign_id'])
@@ -2909,13 +2950,14 @@ class Handler(BaseHTTPRequestHandler):
                 if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 try: rows=_parse_import_file(payload.get('filename'),payload.get('data_base64'))
                 except (ValueError,binascii.Error) as exc:return self.send_json({'ok':False,'error':str(exc)},400)
-                existing_cpf={str(r['cpf']) for r in conn.execute("SELECT cu.cpf FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.cpf IS NOT NULL",(s['campaign_id'],)).fetchall() if r['cpf']}
+                existing_cpf={str(r['cpf_hash']) for r in conn.execute("SELECT cu.cpf_hash FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.cpf_hash IS NOT NULL",(s['campaign_id'],)).fetchall() if r['cpf_hash']}
                 existing_email={str(r['email']).lower() for r in conn.execute("SELECT cu.email FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.email IS NOT NULL",(s['campaign_id'],)).fetchall() if r['email']}
                 seen_cpf=set();seen_email=set()
                 for r in rows:
-                    duplicate=bool((r['cpf'] and (r['cpf'] in existing_cpf or r['cpf'] in seen_cpf)) or (r['email'] and (r['email'].lower() in existing_email or r['email'].lower() in seen_email)))
+                    cpf_h=pii_lookup_hash(r['cpf'],'cpf') if r['cpf'] else None
+                    duplicate=bool((r['cpf'] and (cpf_h in existing_cpf or cpf_h in seen_cpf)) or (r['email'] and (r['email'].lower() in existing_email or r['email'].lower() in seen_email)))
                     r['duplicate']=duplicate
-                    if r['cpf']:seen_cpf.add(r['cpf'])
+                    if r['cpf']:seen_cpf.add(cpf_h)
                     if r['email']:seen_email.add(r['email'].lower())
                 valid=sum(1 for r in rows if not r['errors'] and not r['duplicate'])
                 return self.send_json({'ok':True,'rows':rows,'summary':{'total':len(rows),'valid':valid,'duplicates':sum(1 for r in rows if r['duplicate']),'invalid':sum(1 for r in rows if r['errors'])}})
@@ -2933,9 +2975,10 @@ class Handler(BaseHTTPRequestHandler):
                     if r.get('errors') or r.get('duplicate'):skipped+=1;continue
                     name=str(r.get('name') or '').strip()[:120]; email=normalize_email(r.get('email')) if r.get('email') else ''; cpf=normalize_cpf(r.get('cpf')) if r.get('cpf') else ''; phone=str(r.get('phone') or '').strip()[:40]; birth=str(r.get('birth_date') or '').strip()[:10] or None
                     if len(name)<2:skipped+=1;continue
-                    if cpf and conn.execute("SELECT 1 FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.cpf=?",(s['campaign_id'],cpf)).fetchone():skipped+=1;continue
+                    if cpf and conn.execute("SELECT 1 FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.cpf_hash=?",(s['campaign_id'],pii_lookup_hash(cpf,'cpf'))).fetchone():skipped+=1;continue
                     if email and conn.execute("SELECT 1 FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND lower(cu.email)=lower(?)",(s['campaign_id'],email)).fetchone():skipped+=1;continue
-                    customer_id=insert_id(conn,"INSERT INTO customers(name,contact,email,phone,birth_date,cpf,privacy_accepted_at,marketing_email,marketing_whatsapp,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",(name,email,email,phone,birth,cpf or None,None,0,0,now_ts()))
+                    pii=protected_customer_pii(phone,cpf)
+                    customer_id=insert_id(conn,"INSERT INTO customers(name,contact,email,phone,phone_enc,phone_hash,birth_date,cpf,cpf_enc,cpf_hash,privacy_accepted_at,marketing_email,marketing_whatsapp,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(name,email,email,None,pii['phone_enc'],pii['phone_hash'],birth,None,pii['cpf_enc'],pii['cpf_hash'],None,0,0,now_ts()))
                     public_id='mem_'+secrets.token_urlsafe(10); mid=insert_id(conn,"INSERT INTO memberships(customer_id,campaign_id,public_id,qr_token,created_at) VALUES(?,?,?,?,?)",(customer_id,s['campaign_id'],public_id,random_token(18),now_ts()))
                     initial=max(0,int(r.get('initial_balance') or 0))
                     if initial:
@@ -3204,10 +3247,11 @@ class Handler(BaseHTTPRequestHandler):
                     WHERE m.customer_id=? AND m.campaign_id=? AND c.company_id=?""",(customer_id,s['campaign_id'],s['company_id'])).fetchone()
                 if not member: return self.send_json({'ok':False,'error':'customer_not_found'},404)
                 duplicate=conn.execute("""SELECT cu.id FROM customers cu JOIN memberships m ON m.customer_id=cu.id
-                    WHERE m.campaign_id=? AND cu.cpf=? AND cu.id<>? LIMIT 1""",(s['campaign_id'],cpf,customer_id)).fetchone()
+                    WHERE m.campaign_id=? AND cu.cpf_hash=? AND cu.id<>? LIMIT 1""",(s['campaign_id'],pii_lookup_hash(cpf,'cpf'),customer_id)).fetchone()
                 if duplicate: return self.send_json({'ok':False,'error':'cpf_exists'},409)
-                conn.execute('UPDATE customers SET name=?,contact=?,email=?,phone=?,birth_date=?,cpf=? WHERE id=?',
-                    (name,email,email,phone,birth_date,cpf,customer_id))
+                pii=protected_customer_pii(phone,cpf)
+                conn.execute('UPDATE customers SET name=?,contact=?,email=?,phone=NULL,phone_enc=?,phone_hash=?,birth_date=?,cpf=NULL,cpf_enc=?,cpf_hash=? WHERE id=?',
+                    (name,email,email,pii['phone_enc'],pii['phone_hash'],birth_date,pii['cpf_enc'],pii['cpf_hash'],customer_id))
                 audit(conn,s['company_id'],s['user_id'],'customer_update','customer',customer_id,details=member['public_id'],ip_address=self._ip())
                 return self.send_json({'ok':True,'customer_id':customer_id})
             if path == '/api/attendant/customer/delete':
@@ -3236,12 +3280,14 @@ class Handler(BaseHTTPRequestHandler):
                     if recipient=='segment:birthdays': extra=" AND substr(cu.birth_date,6,2)=?"; args.append(datetime.now(ZoneInfo('America/Sao_Paulo')).strftime('%m'))
                     elif recipient=='segment:inactive30': extra=" AND COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at)<?"; args.append(now_ts()-30*86400)
                     elif recipient=='segment:reward_ready': extra=" AND (m.rewards_available>0 OR m.points_balance>=(SELECT COALESCE(MIN(points_cost),999999999) FROM reward_catalog WHERE campaign_id=m.campaign_id AND active=1))"
-                    rows=conn.execute('SELECT DISTINCT cu.id,cu.name,cu.phone FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.marketing_whatsapp=1 AND cu.phone IS NOT NULL AND cu.phone<>?'+extra+' ORDER BY cu.name',tuple(args)).fetchall()
+                    rows=conn.execute('SELECT DISTINCT cu.id,cu.name,cu.phone,cu.phone_enc FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.marketing_whatsapp=1 AND COALESCE(cu.phone_enc,cu.phone) IS NOT NULL AND COALESCE(cu.phone_enc,cu.phone)<>?'+extra+' ORDER BY cu.name',tuple(args)).fetchall()
+                    rows=[customer_rowdict(r) for r in rows]
                 else:
                     try: customer_id=int(recipient)
                     except (TypeError,ValueError): return self.send_json({'ok':False,'error':'invalid_recipient'},400)
-                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.phone FROM customers cu JOIN memberships m ON m.customer_id=cu.id
-                        WHERE m.campaign_id=? AND cu.id=? AND cu.marketing_whatsapp=1 AND cu.phone IS NOT NULL AND cu.phone<>?''',(s['campaign_id'],customer_id,'')).fetchall()
+                    rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.phone,cu.phone_enc FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                        WHERE m.campaign_id=? AND cu.id=? AND cu.marketing_whatsapp=1 AND COALESCE(cu.phone_enc,cu.phone) IS NOT NULL AND COALESCE(cu.phone_enc,cu.phone)<>?''',(s['campaign_id'],customer_id,'')).fetchall()
+                rows=[customer_rowdict(r) for r in rows]
                 if not rows: return self.send_json({'ok':False,'error':'no_recipients'},404)
                 wa_cfg=whatsapp_config_for_client(conn,s['campaign_id'])
                 cloud=whatsapp_cloud_configured(wa_cfg)
@@ -3274,11 +3320,13 @@ class Handler(BaseHTTPRequestHandler):
                     elif recipient=='segment:inactive30': extra=" AND COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at)<?"; args.append(now_ts()-30*86400)
                     elif recipient=='segment:reward_ready': extra=" AND (m.rewards_available>0 OR m.points_balance>=(SELECT COALESCE(MIN(points_cost),999999999) FROM reward_catalog WHERE campaign_id=m.campaign_id AND active=1))"
                     rows=conn.execute('SELECT DISTINCT cu.id,cu.name,cu.email FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.marketing_email=1 AND cu.email IS NOT NULL AND cu.email<>?'+extra+' ORDER BY cu.name',tuple(args)).fetchall()
+                    rows=[customer_rowdict(r) for r in rows]
                 else:
                     try: customer_id=int(recipient)
                     except (TypeError,ValueError): return self.send_json({'ok':False,'error':'invalid_recipient'},400)
                     rows=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email FROM customers cu JOIN memberships m ON m.customer_id=cu.id
                         WHERE m.campaign_id=? AND cu.id=? AND cu.marketing_email=1 AND cu.email IS NOT NULL AND cu.email<>?''',(s['campaign_id'],customer_id,'')).fetchall()
+                rows=[customer_rowdict(r) for r in rows]
                 if not rows: return self.send_json({'ok':False,'error':'no_recipients'},404)
                 results=[]
                 for r in rows:
@@ -3303,9 +3351,10 @@ class Handler(BaseHTTPRequestHandler):
                 channel=str(payload.get('channel') or '').strip().lower()
                 if not template_id or not customer_id:return self.send_json({'ok':False,'error':'invalid_test_recipient'},400)
                 if channel not in ('email','whatsapp','both'):return self.send_json({'ok':False,'error':'invalid_test_channel'},400)
-                customer=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email,cu.phone,cu.marketing_email,cu.marketing_whatsapp FROM customers cu JOIN memberships m ON m.customer_id=cu.id
+                customer=conn.execute('''SELECT DISTINCT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.marketing_email,cu.marketing_whatsapp FROM customers cu JOIN memberships m ON m.customer_id=cu.id
                     WHERE cu.id=? AND m.campaign_id=?''',(customer_id,s['campaign_id'])).fetchone()
                 if not customer:return self.send_json({'ok':False,'error':'customer_not_found'},404)
+                customer=customer_rowdict(customer)
                 tpl=conn.execute('SELECT id,name,channel,subject,body FROM message_templates WHERE id=? AND campaign_id=?',(template_id,s['campaign_id'])).fetchone()
                 if not tpl:return self.send_json({'ok':False,'error':'template_not_found'},404)
                 allowed={'email':('email',),'whatsapp':('whatsapp',),'both':('email','whatsapp','both')}

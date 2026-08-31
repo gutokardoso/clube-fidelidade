@@ -5,6 +5,8 @@ import os
 import secrets
 import time
 
+from cryptography.fernet import Fernet, InvalidToken
+
 PBKDF2_ROUNDS = 600_000
 
 
@@ -75,3 +77,62 @@ def verify_totp(secret: str, code: str, at_time: int | None = None, window: int 
         except Exception:
             return False
     return False
+
+
+PII_PREFIX = "enc:v1:"
+
+def _encryption_master():
+    return os.environ.get("CLUBE_ENCRYPTION_KEY", "").strip()
+
+def pii_key_configured() -> bool:
+    return bool(_encryption_master())
+
+def _pii_box():
+    master = _encryption_master()
+    if not master:
+        return None
+    key = base64.urlsafe_b64encode(hashlib.sha256(("fidelizae-pii-v1:" + master).encode("utf-8")).digest())
+    return Fernet(key)
+
+def canonicalize_pii(value, purpose: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    if purpose in ("cpf", "phone"):
+        return "".join(ch for ch in value if ch.isdigit())
+    return value
+
+def encrypt_pii(value, purpose: str) -> str | None:
+    plain = canonicalize_pii(value, purpose)
+    if not plain:
+        return None
+    box = _pii_box()
+    if not box:
+        raise RuntimeError("encryption_key_not_configured")
+    token = box.encrypt(plain.encode("utf-8")).decode("ascii")
+    return PII_PREFIX + token
+
+def decrypt_pii(value, purpose: str) -> str:
+    raw = str(value or "")
+    if not raw:
+        return ""
+    # Compatibilidade durante migração: valores antigos em texto puro continuam legíveis.
+    if not raw.startswith(PII_PREFIX):
+        return canonicalize_pii(raw, purpose)
+    box = _pii_box()
+    if not box:
+        return ""
+    try:
+        return box.decrypt(raw[len(PII_PREFIX):].encode("ascii")).decode("utf-8")
+    except (InvalidToken, ValueError):
+        return ""
+
+def pii_lookup_hash(value, purpose: str) -> str | None:
+    plain = canonicalize_pii(value, purpose)
+    if not plain:
+        return None
+    master = _encryption_master()
+    if not master:
+        raise RuntimeError("encryption_key_not_configured")
+    key = hashlib.sha256(("fidelizae-pii-index-v1:" + master).encode("utf-8")).digest()
+    return hmac.new(key, (purpose + ":" + plain).encode("utf-8"), hashlib.sha256).hexdigest()
