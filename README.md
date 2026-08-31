@@ -1,4 +1,12 @@
-# Fidelizaê! v139
+# Fidelizaê! v140
+
+## v140
+
+- Todas as janelas modais do Painel Fidelizaê! e dos painéis de Administrador/Atendente passam a fechar também ao clicar na área externa do modal.
+- Painel do Administrador reorganizado para: **Visão Geral → Escanear QR → Configuração do programa → Clientes cadastrados → Divulgação → Aniversariantes → Central de Campanhas → Comunicação**.
+- Nova área **Configuração do programa** abre o modal já existente de Programa de Fidelidade.
+- Menu cinza dos painéis de Administrador e Atendente permanece fixo durante a rolagem, com deslocamento automático pela altura do cabeçalho.
+- Logo da empresa no cartão digital do usuário agora é exibida dentro de um círculo.
 
 ## v139
 
@@ -6,7 +14,6 @@
 - **Excluir conta** foi movido para o final de Minha conta, removendo a ação destrutiva do submenu principal de Perfil.
 - Histórico de aceites exibe versões, data/hora, responsável, e-mail e IP quando registrados; aceites de cadastros por assinatura passam a ser vinculados à empresa provisionada.
 - Menus com submenu passam a abrir diretamente ao passar o mouse em desktop, mantendo clique/toque como alternativa para dispositivos touch.
-
 ## v138
 
 - Auditoria de regressão das funcionalidades acumuladas até a v137.
@@ -154,7 +161,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v139
+**Versão atual:** v140
 
 
 ## Novidades da v117
@@ -462,6 +469,8 @@ META_GRAPH_VERSION=v24.0
 - Mantém a imagem da logo em endpoint PNG dedicado e com cache-busting.
 
 ## Histórico de versões
+
+- **v140:** Modais fecham ao clicar fora; painel administrativo reorganizado; Configuração do programa adicionada ao fluxo; menus cinza permanecem fixos durante rolagem; logo do cartão do usuário passa a ser circular.
 
 **v88**
 - Implementação das 23 melhorias aprovadas, com cashback reservado para evolução futura e sem alteração do consentimento de comunicação.
