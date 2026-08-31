@@ -566,12 +566,17 @@ body:has(#editClientCard.manager-inline-modal:not(.hidden))::before,body:has(#cl
 @media(max-width:620px){.manager-kpi-grid,.manager-chart-grid,.manager-integration-grid{grid-template-columns:1fr}.manager-chart-wide{grid-column:auto}.manager-donut-row{justify-content:flex-start;gap:20px}.manager-kpi>strong{font-size:26px}.manager-platform-dashboard .section-head{align-items:flex-start}.dashboard-updated{white-space:normal}}
 
 
-/* v136 — alinhamentos, menu do Painel Fidelizaê! e Programa de Fidelidade */
+/* v137 — alinhamentos, menu do Painel Fidelizaê! e Programa de Fidelidade */
 .legal-consent-box input[type=checkbox],.webhook-events input[type=checkbox]{width:16px!important;height:16px!important;min-width:16px;padding:0!important;margin:2px 0 0!important;accent-color:#e27a00;flex:0 0 16px}
 .manager-legal-consent .legal-check{display:grid!important;grid-template-columns:16px minmax(0,1fr);align-items:start;column-gap:10px;width:100%;line-height:1.5;font-weight:600}
 .manager-legal-consent .legal-check span{min-width:0;overflow-wrap:anywhere}
 .webhook-events label{display:grid;grid-template-columns:16px minmax(0,1fr);align-items:center;gap:9px;line-height:1.4}
-.manager-admin-nav{position:sticky;top:85px;z-index:19}
-.manager-admin-nav button{border:0;background:transparent;color:#8a4b08;font:inherit;font-weight:800;padding:8px 11px;border-radius:10px;cursor:pointer;white-space:nowrap}
+.manager-admin-nav{position:sticky;top:var(--manager-topbar-height,96px);z-index:29}
+.manager-admin-nav button{border:0;background:transparent;color:#8a4b08;font:inherit;font-weight:650;font-size:13px;padding:9px 12px;border-radius:10px;cursor:pointer;white-space:nowrap}
 .manager-admin-nav button:hover{background:#fff1df;color:#e27a00}
-@media(max-width:800px){#programGiftCard,#programCouponsCard{grid-column:auto}.manager-admin-nav{top:64px}}
+@media(max-width:800px){#programGiftCard,#programCouponsCard{grid-column:auto}.manager-admin-nav{position:static!important;top:auto!important;z-index:auto!important}}
+
+/* v137 — menu do Painel Fidelizaê! e integrações editáveis pelo administrador da empresa */
+.client-admin-integrations{margin-top:8px;padding-top:18px;border-top:1px solid var(--line)}
+.client-admin-integrations .integration-status-line{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}
+@media(max-width:820px){.client-admin-integrations .grid.cols-2{grid-template-columns:1fr}}

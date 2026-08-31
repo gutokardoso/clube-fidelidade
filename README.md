@@ -1,11 +1,18 @@
-# Fidelizaê! v136
+# Fidelizaê! v137
+
+## v137
+
+- Painel Fidelizaê!: menu cinza corrigido para não ficar cortado sob o cabeçalho durante a rolagem.
+- Fonte do menu cinza do Painel Fidelizaê! igualada à navegação do painel do Administrador.
+- Empresas PRO agora podem editar E-mail (SMTP/Brevo) e WhatsApp em **Perfil > Editar empresa**.
+- Senhas/tokens já configurados não são exibidos e são preservados quando os campos secretos ficam em branco.
 
 ## v136
 
 - Programa de Fidelidade: Vale-presente e Cupons agora ficam lado a lado em telas amplas.
 - Corrigido o alinhamento dos checkboxes de Webhooks e de Termos/Política no cadastro de empresa.
 - Painel Fidelizaê!: novo menu cinza com Alterar senha e Cadastrar novo administrador, com endpoints protegidos no backend.
-- As configurações de E-mail e WhatsApp voltaram a ficar visíveis no cadastro de nova empresa em qualquer plano; os disparos continuam sujeitos às permissões do plano contratado.
+- As configurações de E-mail e WhatsApp ficaram visíveis no cadastro de nova empresa em qualquer plano; os disparos continuam sujeitos às permissões do plano contratado.
 
 ## v135
 

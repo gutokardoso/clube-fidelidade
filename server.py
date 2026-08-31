@@ -41,7 +41,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v136'
+VERSION='v137'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
@@ -2214,9 +2214,10 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant')
                 if not s:return
                 if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
-                c=conn.execute('SELECT id,name,code,logo_image,plan,loyalty_type,points_spend_cents,goal,reward_name,card_theme,min_stamp_interval_sec,max_stamps_per_hour FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
+                c=conn.execute('SELECT id,name,code,logo_image,plan,loyalty_type,points_spend_cents,goal,reward_name,card_theme,min_stamp_interval_sec,max_stamps_per_hour,email_provider,smtp_host,smtp_port,smtp_user,smtp_from,smtp_from_name,smtp_security,brevo_sender_email,brevo_sender_name,brevo_reply_to,whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_api_version FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
                 if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
-                return self.send_json({'ok':True,'company':rowdict(c),'features':PLAN_FEATURES[normalize_plan(c['plan'])]})
+                company=rowdict(c); company['email_configured']=bool(email_configured(email_config_for_client(conn,s['campaign_id']))); company['whatsapp_configured']=bool(whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])))
+                return self.send_json({'ok':True,'company':company,'features':PLAN_FEATURES[normalize_plan(c['plan'])]})
         if path == '/api/attendant/recent':
             with connect(DB_PATH) as conn:
                 s=self._require_auth(conn,'attendant')
@@ -3694,7 +3695,21 @@ class Handler(BaseHTTPRequestHandler):
                     except ValueError as exc:return self.send_json({'ok':False,'error':str(exc)},400)
                 
                 try:
-                    conn.execute('UPDATE campaigns SET code=?,name=?,loyalty_type=?,points_spend_cents=?,goal=?,reward_name=?,card_theme=?,logo_image=COALESCE(?,logo_image) WHERE id=? AND company_id=?',(code,name,loyalty,points,goal,reward,theme,logo,s['campaign_id'],s['company_id']))
+                    if plan=='pro':
+                        email_provider=str(payload.get('email_provider',c['email_provider'] or 'smtp')).strip().lower()
+                        if email_provider not in ('smtp','brevo'):email_provider='smtp'
+                        smtp_host=str(payload.get('smtp_host',c['smtp_host'] or '')).strip()[:200];smtp_port=str(payload.get('smtp_port',c['smtp_port'] or '587')).strip()[:8] or '587';smtp_user=str(payload.get('smtp_user',c['smtp_user'] or '')).strip()[:200];smtp_from=str(payload.get('smtp_from',c['smtp_from'] or '')).strip()[:200];smtp_from_name=str(payload.get('smtp_from_name',c['smtp_from_name'] or '')).strip()[:100];smtp_security=str(payload.get('smtp_security',c['smtp_security'] or 'starttls')).strip().lower()
+                        if smtp_security not in ('starttls','ssl','none'):smtp_security='starttls'
+                        brevo_sender_email=str(payload.get('brevo_sender_email',c['brevo_sender_email'] or '')).strip()[:200];brevo_sender_name=str(payload.get('brevo_sender_name',c['brevo_sender_name'] or '')).strip()[:100];brevo_reply_to=str(payload.get('brevo_reply_to',c['brevo_reply_to'] or '')).strip()[:200]
+                        wa_phone_id=str(payload.get('whatsapp_phone_number_id',c['whatsapp_phone_number_id'] or '')).strip()[:100];wa_waba_id=str(payload.get('whatsapp_waba_id',c['whatsapp_waba_id'] or '')).strip()[:100];wa_version=str(payload.get('whatsapp_api_version',c['whatsapp_api_version'] or 'v24.0')).strip()[:20]
+                        smtp_password_enc=c['smtp_password_enc'];brevo_api_key_enc=c['brevo_api_key_enc'];wa_token_enc=c['whatsapp_access_token_enc']
+                        if payload.get('smtp_password'):smtp_password_enc=encrypt_secret(payload.get('smtp_password'))
+                        if payload.get('brevo_api_key'):brevo_api_key_enc=encrypt_secret(payload.get('brevo_api_key'))
+                        if payload.get('whatsapp_access_token'):wa_token_enc=encrypt_secret(payload.get('whatsapp_access_token'))
+                        conn.execute('''UPDATE campaigns SET code=?,name=?,loyalty_type=?,points_spend_cents=?,goal=?,reward_name=?,card_theme=?,logo_image=COALESCE(?,logo_image),email_provider=?,smtp_host=?,smtp_port=?,smtp_user=?,smtp_password_enc=?,smtp_from=?,smtp_from_name=?,smtp_security=?,brevo_api_key_enc=?,brevo_sender_email=?,brevo_sender_name=?,brevo_reply_to=?,whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_integration_mode='manual',whatsapp_signup_status=? WHERE id=? AND company_id=?''',(code,name,loyalty,points,goal,reward,theme,logo,email_provider,smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,wa_phone_id,wa_waba_id,wa_token_enc,wa_version,'connected' if (wa_phone_id and wa_token_enc) else 'not_connected',s['campaign_id'],s['company_id']))
+                    else:
+                        conn.execute('UPDATE campaigns SET code=?,name=?,loyalty_type=?,points_spend_cents=?,goal=?,reward_name=?,card_theme=?,logo_image=COALESCE(?,logo_image) WHERE id=? AND company_id=?',(code,name,loyalty,points,goal,reward,theme,logo,s['campaign_id'],s['company_id']))
+                except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
                 except integrity_errors():return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'client_admin_company_update','campaign',s['campaign_id'],details=f'plan={plan}',ip_address=self._ip());return self.send_json({'ok':True})
             if path == '/api/client-admin/subscription/cancel-renewal':
