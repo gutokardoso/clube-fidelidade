@@ -41,7 +41,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v138'
+VERSION='v139'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
@@ -758,6 +758,7 @@ def provision_signup(conn,row,subscription=None):
     cid=insert_id(conn,"INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,card_theme,plan,loyalty_type,points_spend_cents,logo_image,subscription_provider,subscription_id,subscription_status,subscription_started_at,subscription_current_period_end,subscription_next_payment_at,subscription_status_updated_at,billing_option,billing_amount,commitment_until,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(company_id,code,row['company_name'],'Recompensa do programa',5,'__LOGO__','orange',plan,loyalty,200,row['logo_image'] if 'logo_image' in row.keys() else None,'mercadopago' if plan!='beginner' else 'free',row['subscription_id'], 'active',now,next_ts,next_ts,now,billing_option,bcfg['amount'],commitment_until,now))
     uid=insert_id(conn,"INSERT INTO users(company_id,name,email,password_hash,role,active,is_client_admin,campaign_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(company_id,row['responsible_name'],row['email'],row['password_hash'],'attendant',1,1,cid,now))
     conn.execute("UPDATE subscription_signups SET status='active',provisioned_at=? WHERE id=?",(now,row['id']))
+    conn.execute("UPDATE legal_acceptances SET campaign_id=COALESCE(campaign_id,?),user_id=COALESCE(user_id,?),email=COALESCE(email,?) WHERE signup_id=?",(cid,uid,row['email'],row['id']))
     audit(conn,company_id,uid,'subscription_signup','campaign',cid,details=plan)
     try: send_subscription_welcome(row['responsible_name'],row['email'],row['company_name'],plan,billing_option)
     except Exception as exc: print('[BILLING] welcome email failed',exc)
@@ -2229,6 +2230,48 @@ class Handler(BaseHTTPRequestHandler):
                    FROM transactions t JOIN memberships m ON m.id=t.membership_id JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id LEFT JOIN users u ON u.id=t.user_id
                    WHERE c.id=? AND c.company_id=? ORDER BY t.id DESC LIMIT 50''',(s['campaign_id'],s['company_id'])).fetchall()]
                 return self.send_json({'ok':True,'transactions':tx,'client':{'id':s['campaign_id'],'name':s['client_name']}})
+        if path == '/api/admin/my-account':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                c=conn.execute("""SELECT id,name,code,reward_name,goal,loyalty_type,points_spend_cents,plan,created_at,subscription_id,
+                                  email_provider,smtp_host,brevo_sender_email,whatsapp_phone_number_id,ecommerce_platform
+                                  FROM campaigns WHERE id=? AND company_id=?""",(sess['campaign_id'],sess['company_id'])).fetchone()
+                if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                signup=None
+                if c['subscription_id']:
+                    signup=conn.execute("SELECT responsible_name,email,phone,document,created_at FROM subscription_signups WHERE subscription_id=? ORDER BY id DESC LIMIT 1",(c['subscription_id'],)).fetchone()
+                if not signup:
+                    signup=conn.execute("SELECT responsible_name,email,phone,document,created_at FROM subscription_signups WHERE lower(email)=lower(?) AND lower(company_name)=lower(?) ORDER BY id DESC LIMIT 1",(sess['email'],c['name'])).fetchone()
+                account=rowdict(c)
+                account.update({
+                    'company_name':c['name'],
+                    'responsible_name':(signup['responsible_name'] if signup else sess['name']),
+                    'email':(signup['email'] if signup else sess['email']),
+                    'phone':(signup['phone'] if signup else None),
+                    'document':(signup['document'] if signup else None),
+                    'integrations':{
+                        'email':bool(email_configured(email_config_for_client(conn,sess['campaign_id']))),
+                        'whatsapp':bool(whatsapp_cloud_configured(whatsapp_config_for_client(conn,sess['campaign_id']))),
+                        'ecommerce':({'nuvemshop':'Nuvemshop','shopify':'Shopify','woocommerce':'WooCommerce','tray':'Tray','vtex':'VTEX','custom':'API própria'}.get(normalize_ecommerce_platform(c['ecommerce_platform'])) if normalize_ecommerce_platform(c['ecommerce_platform'])!='none' else None)
+                    }
+                })
+                # Histórico vinculado diretamente à empresa e, nos cadastros por assinatura,
+                # também ao registro de adesão original. Nunca altera evidências antigas.
+                rows=conn.execute("""SELECT la.id,la.email,la.terms_version,la.privacy_version,la.accepted_at,la.ip_address,u.name user_name
+                                     FROM legal_acceptances la LEFT JOIN users u ON u.id=la.user_id
+                                     WHERE la.campaign_id=? ORDER BY la.accepted_at DESC,la.id DESC""",(sess['campaign_id'],)).fetchall()
+                legal=[rowdict(r) for r in rows]
+                if signup:
+                    signup_rows=conn.execute("""SELECT la.id,la.email,la.terms_version,la.privacy_version,la.accepted_at,la.ip_address,
+                                               ? AS user_name FROM legal_acceptances la JOIN subscription_signups ss ON ss.id=la.signup_id
+                                               WHERE lower(ss.email)=lower(?) AND lower(ss.company_name)=lower(?) ORDER BY la.accepted_at DESC,la.id DESC""",
+                                             (signup['responsible_name'],signup['email'],c['name'])).fetchall()
+                    seen={x['id'] for x in legal}
+                    legal.extend(rowdict(r) for r in signup_rows if r['id'] not in seen)
+                    legal.sort(key=lambda x:(int(x.get('accepted_at') or 0),int(x.get('id') or 0)),reverse=True)
+                return self.send_json({'ok':True,'account':account,'legal_acceptances':legal})
         if path == '/api/admin/onboarding':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')

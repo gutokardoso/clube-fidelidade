@@ -1,4 +1,11 @@
-# Fidelizaê! v138
+# Fidelizaê! v139
+
+## v139
+
+- Perfil do Administrador da empresa ganha **Minha conta**, com dados cadastrados da empresa, responsável, contato, documento, plano, programa, integrações e histórico de Termos/Política.
+- **Excluir conta** foi movido para o final de Minha conta, removendo a ação destrutiva do submenu principal de Perfil.
+- Histórico de aceites exibe versões, data/hora, responsável, e-mail e IP quando registrados; aceites de cadastros por assinatura passam a ser vinculados à empresa provisionada.
+- Menus com submenu passam a abrir diretamente ao passar o mouse em desktop, mantendo clique/toque como alternativa para dispositivos touch.
 
 ## v138
 
@@ -147,7 +154,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v138
+**Versão atual:** v139
 
 
 ## Novidades da v117
