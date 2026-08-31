@@ -41,7 +41,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v143'
+VERSION='v144'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
@@ -2770,11 +2770,17 @@ class Handler(BaseHTTPRequestHandler):
                 allow_repair=os.environ.get('CLUBE_ALLOW_ADMIN_REPAIR','0' if (os.environ.get('APP_ENV') or '').lower()=='production' else '1')=='1'
                 admin_login=bool(allow_repair and u and admin_email and admin_password and email==admin_email and hmac.compare_digest(password,admin_password))
                 if admin_login:
-                    needs_repair=(u['role']!='manager') or (not password_ok) or (u['campaign_id'] is not None)
+                    # CLUBE_ADMIN_PASSWORD é credencial de bootstrap/recuperação de perfil, não uma
+                    # senha mestre permanente. Nunca regrave password_hash aqui: isso anulava uma
+                    # troca de senha feita pelo próprio administrador no Painel Fidelizaê!.
+                    needs_repair=(u['role']!='manager') or (u['campaign_id'] is not None) or (not u['active'])
                     if needs_repair:
-                        conn.execute("UPDATE users SET password_hash=?,role='manager',campaign_id=NULL,active=1 WHERE id=?",(hash_password(admin_password),u['id']))
-                        u=conn.execute('SELECT * FROM users WHERE id=?',(u['id'],)).fetchone(); password_ok=True
-                        print(f'[AUTH] ADMIN_LOGIN_REPAIRED user={_email_tag(email)}')
+                        conn.execute("UPDATE users SET role='manager',campaign_id=NULL,active=1 WHERE id=?",(u['id'],))
+                        u=conn.execute('SELECT * FROM users WHERE id=?',(u['id'],)).fetchone()
+                        print(f'[AUTH] ADMIN_PROFILE_REPAIRED user={_email_tag(email)}')
+                    # Permite a credencial de recuperação apenas quando explicitamente habilitada,
+                    # sem alterar a senha persistida. Em produção o padrão continua desabilitado.
+                    password_ok=True
                 if not u or not password_ok:
                     print(f'[AUTH] LOGIN_FAILED user={_email_tag(email)}')
                     audit(conn,u['company_id'] if u else None,u['id'] if u else None,'login_failed',details='credential_rejected',ip_address=self._ip())

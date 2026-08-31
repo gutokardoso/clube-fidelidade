@@ -1,9 +1,11 @@
-# Fidelizaê! v143
+# Fidelizaê! v144
 
-## v143
+## v144
 - Padronização dos botões do menu superior nos painéis Fidelizaê!, Administrador e Atendente.
 - Estado padrão: fundo amarelo-claro, texto e contorno laranja, seguindo o botão Sair.
 - Hover: fundo laranja e texto branco em todos os botões do menu superior.
+- Corrigida a troca de senha do Administrador Geral: a senha definida no Painel Fidelizaê! passa a permanecer válida após logout, restart e novo deploy.
+- `CLUBE_ADMIN_PASSWORD` passa a funcionar como credencial de bootstrap/recuperação de perfil e não sobrescreve mais a senha persistida de uma conta administrativa já existente.
 
 ## v142
 - Painel Fidelizaê!: novo menu **Perfil** ao lado de Cadastrar.

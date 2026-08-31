@@ -896,8 +896,8 @@ def init_db(db_path=None, seed=True):
 def ensure_configured_staff(db_path=None):
     """Sincroniza credenciais configuradas por variáveis de ambiente.
 
-    Em produção isto permite trocar a senha no Railway sem precisar apagar o banco.
-    Se o usuário já existe, nome/senha/role são atualizados; se não existe, ele é criado.
+    Em produção, as variáveis servem para criar as credenciais iniciais.
+    Se o usuário já existe, nome/perfil são sincronizados sem sobrescrever a senha definida no painel.
     """
     target = db_path or DATABASE_URL or DEFAULT_DB
     admin_email = os.environ.get('CLUBE_ADMIN_EMAIL', '').strip().lower()
@@ -941,14 +941,11 @@ def ensure_configured_staff(db_path=None):
                 if role == 'attendant' and campaign_id is None:
                     first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
                     campaign_id = first_client['id'] if first_client else None
-                if role == 'attendant':
-                    # A senha do atendente pode ser alterada por ele próprio e não deve
-                    # ser redefinida pelo Railway em deploys futuros.
-                    conn.execute('UPDATE users SET name=?, role=?, campaign_id=?, active=1 WHERE id=?',
-                                 (name, role, campaign_id, existing['id']))
-                else:
-                    conn.execute('UPDATE users SET name=?, password_hash=?, role=?, campaign_id=?, active=1 WHERE id=?',
-                                 (name, pwd_hash, role, campaign_id, existing['id']))
+                # As credenciais das variáveis de ambiente servem apenas para o bootstrap.
+                # Depois que a conta existe, a senha é administrada pelo próprio usuário no painel
+                # e não pode ser sobrescrita em cada deploy/restart do Railway.
+                conn.execute('UPDATE users SET name=?, role=?, campaign_id=?, active=1 WHERE id=?',
+                             (name, role, campaign_id, existing['id']))
                 user_id = existing['id']
             else:
                 campaign_id = None
@@ -959,11 +956,13 @@ def ensure_configured_staff(db_path=None):
                     'INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,created_at) VALUES(?,?,?,?,?,?,?)',
                     (company['id'], name, email, pwd_hash, role, campaign_id, now_ts()))
             check = conn.execute('SELECT password_hash,role,active FROM users WHERE id=?', (user_id,)).fetchone()
-            password_synced = verify_password(password, check['password_hash']) if check and (role == 'manager' or not existing) else True
+            # A senha do ambiente só precisa conferir quando a conta acabou de ser criada.
+            # Para contas existentes (manager ou attendant), a senha persistida é a fonte de verdade.
+            password_synced = verify_password(password, check['password_hash']) if check and not existing else True
             if not check or not password_synced or check['role'] != role or int(check['active']) != 1:
                 raise RuntimeError(f'Falha ao sincronizar credenciais de {role}: {email}')
             label = 'ADMIN' if role == 'manager' else 'ATTENDANT'
-            print(f'[AUTH] {label}_SYNC_OK email={email} password_length={len(password)} preserved={bool(role == "attendant" and existing)}')
+            print(f'[AUTH] {label}_SYNC_OK email={email} password_length={len(password)} preserved={bool(existing)}')
 
 
 def create_session(conn, user_id: int, ttl=8*60*60):
