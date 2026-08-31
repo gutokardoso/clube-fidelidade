@@ -41,7 +41,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v135'
+VERSION='v136'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
@@ -3991,6 +3991,38 @@ class Handler(BaseHTTPRequestHandler):
                 try: response=send_whatsapp_cloud(phone,'Teste de integração • Fidelizaê!',cfg)
                 except Exception as exc: return self.send_json({'ok':False,'error':'whatsapp_test_failed','detail':str(exc)[:500]},502)
                 return self.send_json({'ok':True,'message_id':((response.get('messages') or [{}])[0]).get('id')})
+            if path == '/api/manager/password':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                current_password=str(payload.get('current_password',''))
+                new_password=str(payload.get('new_password','')).strip()
+                if not password_is_strong(new_password,12): return self.send_json({'ok':False,'error':'invalid_new_password'},400)
+                u=conn.execute("SELECT id,password_hash FROM users WHERE id=? AND role='manager' AND active=1",(s['user_id'],)).fetchone()
+                if not u or not verify_password(current_password,u['password_hash']): return self.send_json({'ok':False,'error':'invalid_current_password'},401)
+                if verify_password(new_password,u['password_hash']): return self.send_json({'ok':False,'error':'same_password'},409)
+                conn.execute('UPDATE users SET password_hash=? WHERE id=?',(hash_password(new_password),s['user_id']))
+                conn.execute('DELETE FROM sessions WHERE user_id=?',(s['user_id'],))
+                new_token,new_csrf=create_session(conn,s['user_id'])
+                audit(conn,s['company_id'],s['user_id'],'password_change','user',s['user_id'],details='manager_sessions_revoked',ip_address=self._ip())
+                print(f'[AUTH] MANAGER_PASSWORD_CHANGED user_id={s["user_id"]} sessions_revoked=True')
+                return self.send_json({'ok':True,'csrf':new_csrf},200,{'Set-Cookie':_session_cookie(new_token)})
+
+            if path == '/api/manager/admin':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                name=str(payload.get('name','')).strip()[:80]
+                email=normalize_email(payload.get('email'))
+                password=str(payload.get('password','')).strip()
+                if len(name)<2 or not email or '@' not in email or not password_is_strong(password,12):
+                    return self.send_json({'ok':False,'error':'invalid_manager_admin','message':'Preencha nome, e-mail e uma senha com pelo menos 12 caracteres, com maiúscula, minúscula e número.'},400)
+                existing=conn.execute('SELECT id FROM users WHERE lower(email)=lower(?) LIMIT 1',(email,)).fetchone()
+                if existing:
+                    return self.send_json({'ok':False,'error':'email_exists','message':'Este e-mail já está cadastrado no sistema.'},409)
+                try:
+                    new_id=insert_id(conn,'INSERT INTO users(company_id,name,email,password_hash,role,active,is_client_admin,campaign_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)',(s['company_id'],name,email,hash_password(password),'manager',1,0,None,now_ts()))
+                except integrity_errors():
+                    return self.send_json({'ok':False,'error':'email_exists','message':'Este e-mail já está cadastrado no sistema.'},409)
+                audit(conn,s['company_id'],s['user_id'],'manager_admin_create','user',new_id,details=email,ip_address=self._ip())
+                return self.send_json({'ok':True,'user_id':new_id})
+
             if path == '/api/manager/staff/check-email':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 email=normalize_email(payload.get('email'))

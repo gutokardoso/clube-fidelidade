@@ -1,4 +1,11 @@
-# Fidelizaê! v135
+# Fidelizaê! v136
+
+## v136
+
+- Programa de Fidelidade: Vale-presente e Cupons agora ficam lado a lado em telas amplas.
+- Corrigido o alinhamento dos checkboxes de Webhooks e de Termos/Política no cadastro de empresa.
+- Painel Fidelizaê!: novo menu cinza com Alterar senha e Cadastrar novo administrador, com endpoints protegidos no backend.
+- As configurações de E-mail e WhatsApp voltaram a ficar visíveis no cadastro de nova empresa em qualquer plano; os disparos continuam sujeitos às permissões do plano contratado.
 
 ## v135
 
