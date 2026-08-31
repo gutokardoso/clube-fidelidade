@@ -1,4 +1,9 @@
-# Fidelizaê! v142
+# Fidelizaê! v143
+
+## v143
+- Padronização dos botões do menu superior nos painéis Fidelizaê!, Administrador e Atendente.
+- Estado padrão: fundo amarelo-claro, texto e contorno laranja, seguindo o botão Sair.
+- Hover: fundo laranja e texto branco em todos os botões do menu superior.
 
 ## v142
 - Painel Fidelizaê!: novo menu **Perfil** ao lado de Cadastrar.
