@@ -1,4 +1,18 @@
-# Fidelizaê! v129
+# Fidelizaê! v130
+
+## v130
+
+- Inteligência de clientes com classificação automática em Novo, Ativo, Recorrente, VIP, Em risco, Inativo, Quase na recompensa e Recompensa disponível.
+- Métricas individuais de frequência de compra, dias desde a última compra, ticket médio, faturamento, resgates e LTV estimado.
+- Segmentação avançada integrada à lista de clientes e às campanhas de comunicação.
+- Dashboard comercial ampliado com taxa de retorno, frequência média, LTV médio, clientes recuperados, receita atribuída às campanhas e visão financeira.
+- Importação de clientes por CSV e XLSX com análise prévia, validação, identificação de duplicados, saldo inicial e confirmação antes da gravação.
+- Onboarding guiado para administradores, com checklist baseado no estado real da conta.
+- Central de Ajuda interna e documentação da API.
+- API Fidelizaê! v1 com chaves individuais por empresa para clientes, compras e resgates.
+- Webhooks de saída assinados, com eventos de cliente criado, compra, pontos/selos e recompensa resgatada, histórico de entregas e tentativas.
+- Novas integrações ficam isoladas por empresa e as chaves/segredos são exibidos apenas no momento da criação.
+- Todos os recursos anteriores da v129 foram preservados.
 
 ## v129
 

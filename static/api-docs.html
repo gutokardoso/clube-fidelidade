@@ -1,0 +1,21 @@
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>API Fidelizaê!</title><link rel="stylesheet" href="/static/styles.css"></head><body><header class="topbar"><div><div class="brand">FIDELIZAÊ!</div><h2>API v1</h2></div><div class="actions"><button class="btn secondary" onclick="history.back()">Voltar</button></div></header><main class="content api-docs"><section class="card"><h1>API Fidelizaê! v1</h1><p>Use <code>Authorization: Bearer SUA_CHAVE</code>. As chaves são criadas pelo administrador em Gestão avançada → Integrações / API.</p><p class="notice">Guarde a chave e o segredo do webhook em local seguro. Eles são exibidos apenas no momento da criação.</p></section><section class="card"><h3>Clientes</h3><pre>GET /api/v1/customers
+GET /api/v1/customers/{public_id}
+
+POST /api/v1/customers
+{
+  "name":"Maria Silva",
+  "email":"maria@exemplo.com",
+  "phone":"11999999999",
+  "cpf":"12345678900",
+  "birth_date":"1990-05-18"
+}</pre></section><section class="card"><h3>Registrar compra</h3><pre>POST /api/v1/purchases
+{
+  "public_id":"mem_...",
+  "amount_cents":12990,
+  "idempotency_key":"pedido-8472"
+}</pre><p>Em pontos, o crédito segue a regra configurada. Em selos, a compra adiciona um selo. O <code>idempotency_key</code> evita duplicidade.</p></section><section class="card"><h3>Resgatar recompensa</h3><pre>POST /api/v1/redemptions
+{
+  "public_id":"mem_...",
+  "reward_id":12
+}</pre><p><code>reward_id</code> é obrigatório para programas por pontos e dispensável para programas por selos.</p></section><section class="card"><h3>Webhooks</h3><p>Eventos disponíveis: <code>customer.created</code>, <code>purchase.created</code>, <code>points.earned</code>, <code>stamp.earned</code> e <code>reward.redeemed</code>.</p><p>Headers enviados:</p><pre>X-Fidelizae-Event: purchase.created
+X-Fidelizae-Signature: sha256=...</pre><p>A assinatura é HMAC-SHA256 do corpo bruto usando o segredo do webhook.</p></section></main></body></html>

@@ -82,10 +82,12 @@ def record_purchase(conn,membership_id,transaction_id,amount_cents,channel='in_s
     if amount<=0:return
     created_at=created_at or int(time.time())
     conn.execute("INSERT INTO purchase_records(membership_id,transaction_id,amount_cents,channel,created_at) VALUES(?,?,?,?,?)",(membership_id,transaction_id,amount,channel,created_at))
-    # atribui retorno à campanha mais recente ainda não convertida, em janela de 30 dias
-    rec=conn.execute("SELECT mcr.id FROM marketing_campaign_recipients mcr WHERE mcr.membership_id=? AND mcr.returned_at IS NULL AND mcr.sent_at<=? AND mcr.sent_at>=? ORDER BY mcr.sent_at DESC LIMIT 1",(membership_id,created_at,created_at-30*86400)).fetchone()
+    # Atribui a compra à campanha mais recente recebida pelo cliente nos últimos 30 dias.
+    # O primeiro retorno marca a conversão; compras seguintes na mesma janela acumulam receita,
+    # permitindo medir ROI de campanha sem contar a mesma compra em múltiplas campanhas.
+    rec=conn.execute("SELECT mcr.id,mcr.returned_at FROM marketing_campaign_recipients mcr WHERE mcr.membership_id=? AND mcr.sent_at<=? AND mcr.sent_at>=? ORDER BY mcr.sent_at DESC LIMIT 1",(membership_id,created_at,created_at-30*86400)).fetchone()
     if rec:
-        conn.execute("UPDATE marketing_campaign_recipients SET returned_at=?,returned_transaction_id=?,attributed_revenue_cents=? WHERE id=?",(created_at,transaction_id,amount,rec['id']))
+        conn.execute("UPDATE marketing_campaign_recipients SET returned_at=COALESCE(returned_at,?),returned_transaction_id=COALESCE(returned_transaction_id,?),attributed_revenue_cents=COALESCE(attributed_revenue_cents,0)+? WHERE id=?",(created_at,transaction_id,amount,rec['id']))
 
 class RateLimiter:
     def __init__(self):

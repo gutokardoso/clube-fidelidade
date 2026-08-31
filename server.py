@@ -35,12 +35,13 @@ from antifraud import validate_stamp, FraudError
 from wallet import wallet_status, apple_pass_link, google_wallet_link, build_apple_pkpass, google_save_url, google_update_object, apple_auth_token, apple_push_update
 from platform_features import has_permission, session_permissions, active_multiplier, add_point_lot, consume_point_lots, expire_points_once, record_purchase
 from integrations import platform_order
+from intelligence import customer_intelligence, campaign_intelligence
 
 BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v129'
+VERSION='v130'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
@@ -1052,6 +1053,31 @@ def _queue_send(item, conn):
         return send_attendant_welcome_email(payload['name'],item['recipient'],payload['client_name'],global_email_config())
     if kind=='password_recovery':
         return send_password_recovery_email(item['recipient'],payload['token'],global_email_config())
+    if kind=='outbound_webhook':
+        delivery_id=int(payload.get('delivery_id') or 0); webhook_id=int(payload.get('webhook_id') or 0)
+        hook=conn.execute("SELECT secret_enc,active FROM webhook_subscriptions WHERE id=? AND campaign_id=?",(webhook_id,campaign_id)).fetchone()
+        if not hook or not hook['active']:
+            return {'sent':False,'reason':'webhook_inactive'}
+        secret=decrypt_secret(hook['secret_enc'])
+        if not secret:
+            return {'sent':False,'reason':'webhook_secret_unavailable'}
+        body=jdump(payload.get('payload') or {})
+        req=urllib.request.Request(item['recipient'],data=body,method='POST',headers={
+            'Content-Type':'application/json','User-Agent':'Fidelizae-Webhooks/1.0',
+            'X-Fidelizae-Event':str((payload.get('payload') or {}).get('event') or ''),
+            'X-Fidelizae-Signature':'sha256='+_webhook_signature(secret,body)
+        })
+        try:
+            with urllib.request.urlopen(req,timeout=12) as resp:
+                status=int(getattr(resp,'status',200) or 200)
+            conn.execute("UPDATE webhook_deliveries SET status='delivered',http_status=?,attempts=attempts+1,delivered_at=? WHERE id=?",(status,now_ts(),delivery_id))
+            return {'sent':True,'http_status':status}
+        except urllib.error.HTTPError as exc:
+            conn.execute("UPDATE webhook_deliveries SET status='failed',http_status=?,attempts=attempts+1,last_error=? WHERE id=?",(int(exc.code),str(exc)[:500],delivery_id))
+            return {'sent':False,'reason':'http_'+str(exc.code)}
+        except Exception as exc:
+            conn.execute("UPDATE webhook_deliveries SET status='failed',attempts=attempts+1,last_error=? WHERE id=?",(str(exc)[:500],delivery_id))
+            return {'sent':False,'reason':str(exc)[:500]}
     return {'sent':False,'reason':'unknown_queue_kind'}
 
 def process_message_queue_once(limit=15):
@@ -1097,16 +1123,30 @@ def segment_sql(segment,cid,loyalty_type='stamps'):
     elif segment=='inactive60': extra=f" AND {last}<? AND {last}>=?"; params=[now-60*86400,now-90*86400]
     elif segment=='inactive90': extra=f" AND {last}<?"; params=[now-90*86400]
     elif segment=='vip': extra=f" AND {visits}>=12"
+    elif segment=='recurrent': extra=f" AND {visits}>=3 AND {visits}<12 AND {last}>=?"; params=[now-45*86400]
+    elif segment=='inactive': extra=f" AND {last}<?"; params=[now-90*86400]
     elif segment=='new': extra=" AND m.created_at>=?"; params=[now-30*86400]
     elif segment=='reward_ready': extra=" AND (m.rewards_available>0 OR (c.loyalty_type='points' AND m.points_balance>=(SELECT COALESCE(MIN(points_cost),999999999) FROM reward_catalog WHERE campaign_id=m.campaign_id AND active=1)))"
     elif segment=='almost_reward': extra=" AND ((c.loyalty_type='stamps' AND m.progress=c.goal-1) OR (c.loyalty_type='points' AND EXISTS(SELECT 1 FROM reward_catalog r WHERE r.campaign_id=m.campaign_id AND r.active=1 AND r.points_cost>m.points_balance AND r.points_cost-m.points_balance<=GREATEST(1,CAST(r.points_cost*0.15 AS INTEGER)))))" if str(DB_PATH).startswith(('postgres://','postgresql://')) else " AND ((c.loyalty_type='stamps' AND m.progress=c.goal-1) OR (c.loyalty_type='points' AND EXISTS(SELECT 1 FROM reward_catalog r WHERE r.campaign_id=m.campaign_id AND r.active=1 AND r.points_cost>m.points_balance AND r.points_cost-m.points_balance<=MAX(1,CAST(r.points_cost*0.15 AS INTEGER)))))"
     return extra,params
 
 def campaign_recipient_rows(conn,cid,segment):
-    extra,params=segment_sql(segment,cid)
-    return conn.execute("""SELECT m.id membership_id,m.public_id,cu.id customer_id,cu.name,cu.email,cu.phone,cu.marketing_email,cu.marketing_whatsapp
-      FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id
-      WHERE m.campaign_id=? AND m.status='active' """+extra+' ORDER BY cu.name',(cid,*params)).fetchall()
+    if segment in ('all','birthdays','inactive60','inactive90'):
+        extra,params=segment_sql(segment,cid)
+        return conn.execute("""SELECT m.id membership_id,m.public_id,cu.id customer_id,cu.name,cu.email,cu.phone,cu.marketing_email,cu.marketing_whatsapp
+          FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id
+          WHERE m.campaign_id=? AND m.status='active' """+extra+' ORDER BY cu.name',(cid,*params)).fetchall()
+    rows=conn.execute("""SELECT m.id membership_id,m.public_id,m.campaign_id,m.created_at,m.progress,m.points_balance,m.rewards_available,
+                               c.goal,c.loyalty_type,cu.id customer_id,cu.name,cu.email,cu.phone,cu.marketing_email,cu.marketing_whatsapp
+                        FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id
+                        WHERE m.campaign_id=? AND m.status='active' ORDER BY cu.name""",(cid,)).fetchall()
+    out=[]
+    for row in rows:
+        d=rowdict(row)
+        intel=customer_intelligence(conn,{**d,'id':d['membership_id']},d)
+        if intel['segment']==segment:
+            out.append(d)
+    return out
 
 def ensure_automation_defaults(conn,campaign_id):
     try:
@@ -1205,6 +1245,70 @@ def notify_wallet_updates(conn,public_id):
         try: apple_push_update(r['push_token'])
         except Exception: pass
 
+
+def _webhook_signature(secret, body_bytes):
+    return hmac.new(secret.encode('utf-8'), body_bytes, hashlib.sha256).hexdigest()
+
+def queue_webhook_event(conn, campaign_id, event_type, data):
+    rows=conn.execute("SELECT id,url,secret_enc,events_json FROM webhook_subscriptions WHERE campaign_id=? AND active=1",(campaign_id,)).fetchall()
+    for r in rows:
+        try: events=json.loads(r['events_json'] or '[]')
+        except Exception: events=[]
+        if event_type not in events and '*' not in events:
+            continue
+        payload={'event':event_type,'created_at':now_iso(),'data':data}
+        delivery_id=insert_id(conn,"INSERT INTO webhook_deliveries(campaign_id,webhook_id,event_type,status,created_at) VALUES(?,?,?,?,?)",(campaign_id,r['id'],event_type,'pending',now_ts()))
+        enqueue_message(conn,campaign_id,'outbound_webhook',r['url'],{'delivery_id':delivery_id,'webhook_id':r['id'],'payload':payload})
+
+def _parse_import_file(filename, data_b64):
+    raw=base64.b64decode(data_b64 or '',validate=True)
+    if len(raw)>4_000_000: raise ValueError('file_too_large')
+    name=str(filename or '').lower()
+    rows=[]
+    if name.endswith('.xlsx'):
+        try:
+            from openpyxl import load_workbook
+        except Exception as exc:
+            raise ValueError('xlsx_support_unavailable') from exc
+        wb=load_workbook(io.BytesIO(raw),read_only=True,data_only=True)
+        ws=wb.active
+        values=list(ws.iter_rows(values_only=True))
+        if not values:return []
+        headers=[str(x or '').strip().lower() for x in values[0]]
+        for vals in values[1:]:
+            rows.append(dict(zip(headers,vals)))
+    else:
+        import csv
+        text=raw.decode('utf-8-sig',errors='strict')
+        sample=text[:2048]
+        try: dialect=csv.Sniffer().sniff(sample,delimiters=',;\\t')
+        except Exception: dialect=csv.excel
+        rows=list(csv.DictReader(io.StringIO(text),dialect=dialect))
+    def pick(d,*names):
+        norm={re.sub(r'[^a-z0-9]','',str(k).lower()):v for k,v in d.items()}
+        for n in names:
+            key=re.sub(r'[^a-z0-9]','',n.lower())
+            if key in norm:return norm[key]
+        return ''
+    out=[]
+    for i,r in enumerate(rows[:10000],start=2):
+        name=str(pick(r,'nome','name') or '').strip()[:120]
+        raw_email=str(pick(r,'email','e-mail') or '').strip(); email=normalize_email(raw_email) if raw_email else ''
+        phone=str(pick(r,'celular','telefone','phone') or '').strip()[:40]
+        raw_cpf=str(pick(r,'cpf') or '').strip(); cpf=normalize_cpf(raw_cpf) if raw_cpf else ''
+        birth=str(pick(r,'nascimento','data de nascimento','birth_date','birthdate') or '').strip()[:10]
+        initial=str(pick(r,'saldo inicial','saldo','pontos','selos','initial_balance') or '').strip()
+        try: initial_balance=max(0,int(float(initial.replace(',','.')))) if initial else 0
+        except Exception: initial_balance=0
+        errors=[]
+        if len(name)<2: errors.append('nome')
+        if raw_email and not email: errors.append('email')
+        if raw_cpf and not cpf: errors.append('cpf')
+        if birth and not re.fullmatch(r'\d{4}-\d{2}-\d{2}',birth): errors.append('nascimento')
+        out.append({'row':i,'name':name,'email':email,'phone':phone,'cpf':cpf,'birth_date':birth,'initial_balance':initial_balance,'errors':errors})
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     sys_version = ''
     def _need_permission(self,sess,key):
@@ -1217,6 +1321,24 @@ class Handler(BaseHTTPRequestHandler):
         ok,retry=persistent_rate_allow(f'{bucket}:{digest}',limit,window,block_seconds)
         if ok: return True
         self.send_json({'ok':False,'error':'rate_limited','retry_after':retry},429,{'Retry-After':str(max(1,retry))}); return False
+
+    def _api_context(self,conn):
+        auth=(self.headers.get('Authorization') or '').strip()
+        if not auth.lower().startswith('bearer '):
+            self.send_json({'ok':False,'error':'api_key_required'},401); return None
+        token=auth[7:].strip()
+        if len(token)<24:
+            self.send_json({'ok':False,'error':'invalid_api_key'},401); return None
+        digest=hashlib.sha256(token.encode()).hexdigest()
+        row=conn.execute('''SELECT ak.id key_id,ak.campaign_id,c.company_id,c.name campaign_name,c.loyalty_type,c.goal,c.points_spend_cents,c.points_expiry_days
+                            FROM api_keys ak JOIN campaigns c ON c.id=ak.campaign_id
+                            WHERE ak.token_hash=? AND ak.active=1 AND c.active=1''',(digest,)).fetchone()
+        if not row:
+            self.send_json({'ok':False,'error':'invalid_api_key'},401); return None
+        if not plan_allows(conn,row['campaign_id'],'advanced'):
+            self.send_json({'ok':False,'error':'api_feature_not_available'},403); return None
+        conn.execute('UPDATE api_keys SET last_used_at=? WHERE id=?',(now_ts(),row['key_id']))
+        return rowdict(row)
 
     server_version = 'Fidelizae/20.0'
 
@@ -1237,14 +1359,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body_json(self):
         n = int(self.headers.get('Content-Length', '0') or 0)
-        if n > 1_500_000:
+        if n > 8_000_000:
             raise ValueError('body_too_large')
         raw = self.rfile.read(n) if n else b'{}'
         return json.loads(raw.decode('utf-8') or '{}')
 
     def _body_payload(self):
         n = int(self.headers.get('Content-Length', '0') or 0)
-        if n > 1_500_000:
+        if n > 8_000_000:
             raise ValueError('body_too_large')
         raw = self.rfile.read(n) if n else b''
         ctype = (self.headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
@@ -1478,7 +1600,7 @@ class Handler(BaseHTTPRequestHandler):
             template=(STATIC/'two-factor.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION)
             if (qs.get('error') or [''])[0]: template=template.replace('<div id="msg"></div>','<div id="msg"><div class="notice error">Código inválido ou expirado.</div></div>')
             return self.send_text(template)
-        if path in ['/login','/manager','/attendant','/card','/rewards','/loyalty360']:
+        if path in ['/login','/manager','/attendant','/card','/rewards','/loyalty360','/help','/api-docs']:
             name = path.strip('/') + '.html'
             template=(STATIC/name).read_text(encoding='utf-8').replace('{{VERSION}}',VERSION)
             if path == '/login' and (qs.get('error') or [''])[0]:
@@ -1679,11 +1801,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not row:return self.send_json({'ok':False,'error':'customer_not_found'},404)
                 hist=[rowdict(x) for x in conn.execute("SELECT t.type,t.value,t.previous_progress,t.new_progress,t.rewards_delta,t.note,t.created_at,u.name user_name FROM transactions t LEFT JOIN users u ON u.id=t.user_id WHERE t.membership_id=? ORDER BY t.created_at DESC LIMIT 300",(row['membership_id'],)).fetchall()]
                 stats=conn.execute("SELECT COUNT(*) visits,MAX(created_at) last_activity,MIN(created_at) first_activity,COALESCE(SUM(CASE WHEN value>0 THEN value ELSE 0 END),0) total_earned,COALESCE(SUM(CASE WHEN type='redeem' THEN 1 ELSE 0 END),0) total_redeems FROM transactions WHERE membership_id=?",(row['membership_id'],)).fetchone()
+                intelligence=customer_intelligence(conn,{**rowdict(row),'id':row['membership_id'],'campaign_id':sess['campaign_id']},rowdict(row))
                 notes=[rowdict(x) for x in conn.execute("SELECT n.note,n.created_at,u.name user_name FROM customer_notes n LEFT JOIN users u ON u.id=n.user_id WHERE n.membership_id=? ORDER BY n.id DESC LIMIT 30",(row['membership_id'],)).fetchall()]
                 communications=[rowdict(x) for x in conn.execute("SELECT kind,status,created_at,sent_at FROM message_queue WHERE campaign_id=? AND recipient IN (?,?) ORDER BY created_at DESC LIMIT 30",(sess['campaign_id'],row['email'] or '',row['phone'] or '')).fetchall()]
                 coupons=[rowdict(x) for x in conn.execute("SELECT cp.name,cp.code,cr.created_at FROM coupon_redemptions cr JOIN coupons cp ON cp.id=cr.coupon_id WHERE cr.membership_id=? ORDER BY cr.created_at DESC LIMIT 30",(row['membership_id'],)).fetchall()]
                 redemptions=[rowdict(x) for x in conn.execute("SELECT COALESCE(rc.name,'Recompensa') name,rr.points_cost,rr.created_at FROM reward_redemptions rr LEFT JOIN reward_catalog rc ON rc.id=rr.reward_id WHERE rr.membership_id=? ORDER BY rr.created_at DESC LIMIT 30",(row['membership_id'],)).fetchall()]
-                return self.send_json({'ok':True,'customer':rowdict(row),'stats':rowdict(stats),'notes':notes,'communications':communications,'coupons':coupons,'redemptions':redemptions,'history':hist})
+                return self.send_json({'ok':True,'customer':rowdict(row),'stats':rowdict(stats),'notes':notes,'communications':communications,'coupons':coupons,'redemptions':redemptions,'history':hist,'intelligence':intelligence})
         if path == '/api/admin/report.csv':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')
@@ -1856,6 +1979,9 @@ class Handler(BaseHTTPRequestHandler):
                 # Financeiro: usa valores de compra registrados tanto em pontos quanto em selos.
                 fin=conn.execute('SELECT COALESCE(SUM(pr.amount_cents),0) revenue,COUNT(*) purchases FROM purchase_records pr JOIN memberships m ON m.id=pr.membership_id WHERE m.campaign_id=? AND pr.created_at>=?',(cid,month_start)).fetchone()
                 metrics['revenue_month_cents']=int(fin['revenue'] or 0); metrics['purchases_month']=int(fin['purchases'] or 0); metrics['avg_ticket_cents']=round(metrics['revenue_month_cents']/max(metrics['purchases_month'],1))
+                intel_summary=campaign_intelligence(conn,cid)
+                metrics['segments_smart']=intel_summary['segments']; metrics['smart_return_rate']=intel_summary['return_rate']
+                metrics['avg_frequency_days']=intel_summary['avg_frequency_days']; metrics['avg_ltv_cents']=intel_summary['avg_ltv_cents']
                 metrics['campaign_revenue_cents']=int(conn.execute('SELECT COALESCE(SUM(mcr.attributed_revenue_cents),0) n FROM marketing_campaign_recipients mcr JOIN marketing_campaigns mc ON mc.id=mcr.marketing_campaign_id WHERE mc.campaign_id=? AND mcr.returned_at>=?',(cid,month_start)).fetchone()['n'] or 0)
                 finance=[]
                 for back in range(5,-1,-1):
@@ -2051,6 +2177,62 @@ class Handler(BaseHTTPRequestHandler):
                    FROM transactions t JOIN memberships m ON m.id=t.membership_id JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id LEFT JOIN users u ON u.id=t.user_id
                    WHERE c.id=? AND c.company_id=? ORDER BY t.id DESC LIMIT 50''',(s['campaign_id'],s['company_id'])).fetchall()]
                 return self.send_json({'ok':True,'transactions':tx,'client':{'id':s['campaign_id'],'name':s['client_name']}})
+        if path == '/api/admin/onboarding':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                cid=sess['campaign_id']
+                c=conn.execute("SELECT name,logo_image,loyalty_type,reward_name FROM campaigns WHERE id=?",(cid,)).fetchone()
+                staff=conn.execute("SELECT COUNT(*) n FROM users WHERE campaign_id=? AND role='attendant' AND is_client_admin=0 AND active=1",(cid,)).fetchone()['n']
+                clients=conn.execute("SELECT COUNT(*) n FROM memberships WHERE campaign_id=?",(cid,)).fetchone()['n']
+                rewards=conn.execute("SELECT COUNT(*) n FROM reward_catalog WHERE campaign_id=? AND active=1",(cid,)).fetchone()['n']
+                comm=bool(email_configured(email_config_for_client(conn,cid)) or whatsapp_cloud_configured(whatsapp_config_for_client(conn,cid)))
+                wallet=conn.execute("SELECT COUNT(*) n FROM wallet_registrations wr JOIN memberships m ON m.id=wr.membership_id WHERE m.campaign_id=?",(cid,)).fetchone()['n']
+                steps=[
+                  {'key':'company','label':'Empresa e logo configuradas','done':bool(c and c['name'] and c['logo_image']),'target':'company'},
+                  {'key':'program','label':'Programa de fidelidade configurado','done':bool(c and c['reward_name']),'target':'company'},
+                  {'key':'reward','label':'Primeira recompensa cadastrada','done':bool(c and (c['loyalty_type']=='stamps' or rewards>0)),'target':'rewards'},
+                  {'key':'staff','label':'Primeiro atendente cadastrado','done':staff>0,'target':'staff'},
+                  {'key':'customer','label':'Primeiro cliente cadastrado','done':clients>0,'target':'customers'},
+                  {'key':'communication','label':'Canal de comunicação configurado','done':comm,'target':'communication'},
+                  {'key':'wallet','label':'Primeiro cartão salvo na Wallet','done':wallet>0,'target':'wallet'}
+                ]
+                return self.send_json({'ok':True,'steps':steps,'completed':sum(1 for x in steps if x['done']),'total':len(steps)})
+        if path == '/api/admin/integrations':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not plan_allows(conn,sess['campaign_id'],'advanced'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                keys=[rowdict(r) for r in conn.execute("SELECT id,name,token_prefix,active,last_used_at,created_at FROM api_keys WHERE campaign_id=? ORDER BY id DESC",(sess['campaign_id'],)).fetchall()]
+                hooks=[]
+                for r in conn.execute("SELECT id,url,events_json,active,created_at FROM webhook_subscriptions WHERE campaign_id=? ORDER BY id DESC",(sess['campaign_id'],)).fetchall():
+                    d=rowdict(r)
+                    try:d['events']=json.loads(d.pop('events_json') or '[]')
+                    except Exception:d['events']=[]
+                    hooks.append(d)
+                deliveries=[rowdict(r) for r in conn.execute("SELECT event_type,status,http_status,attempts,last_error,created_at,delivered_at FROM webhook_deliveries WHERE campaign_id=? ORDER BY id DESC LIMIT 30",(sess['campaign_id'],)).fetchall()]
+                return self.send_json({'ok':True,'api_keys':keys,'webhooks':hooks,'deliveries':deliveries})
+        if path == '/api/v1/customers':
+            with connect(DB_PATH) as conn:
+                ctx=self._api_context(conn)
+                if not ctx:return
+                rows=conn.execute("""SELECT cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,m.created_at
+                                     FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? ORDER BY cu.name LIMIT 1000""",(ctx['campaign_id'],)).fetchall()
+                out=[]
+                for r in rows:
+                    d=rowdict(r); intel=customer_intelligence(conn,{**d,'id':conn.execute('SELECT id FROM memberships WHERE public_id=?',(d['public_id'],)).fetchone()['id'],'campaign_id':ctx['campaign_id'],'loyalty_type':ctx['loyalty_type'],'goal':ctx['goal']},ctx); d.update(intel); out.append(d)
+                return self.send_json({'ok':True,'data':out})
+        if path.startswith('/api/v1/customers/'):
+            public_id=urllib.parse.unquote(path.rsplit('/',1)[1])
+            with connect(DB_PATH) as conn:
+                ctx=self._api_context(conn)
+                if not ctx:return
+                r=conn.execute("""SELECT cu.name,cu.email,cu.phone,cu.birth_date,cu.cpf,m.* FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND m.public_id=?""",(ctx['campaign_id'],public_id)).fetchone()
+                if not r:return self.send_json({'ok':False,'error':'customer_not_found'},404)
+                d=rowdict(r); d['intelligence']=customer_intelligence(conn,d,{**ctx,'goal':ctx['goal']})
+                return self.send_json({'ok':True,'data':d})
         if path == '/api/attendant/customers':
             with connect(DB_PATH) as conn:
                 s=self._require_auth(conn,'attendant')
@@ -2066,10 +2248,9 @@ class Handler(BaseHTTPRequestHandler):
                 vip_enabled=plan_allows(conn,s['campaign_id'],'vip_tiers')
                 tiers=[rowdict(r) for r in conn.execute("SELECT name,min_points,benefit FROM loyalty_tiers WHERE campaign_id=? AND active=1 ORDER BY min_points",(s['campaign_id'],)).fetchall()] if vip_enabled else []
                 for c in customers:
-                    reward_ready=bool(c.get('rewards_available')) or bool(c['loyalty_type']=='points' and cheapest and int(c.get('points_balance') or 0)>=int(cheapest))
-                    almost=bool(c['loyalty_type']=='stamps' and int(c.get('progress') or 0)==max(0,int(c.get('goal') or 0)-1)) or bool(c['loyalty_type']=='points' and cheapest and 0<int(cheapest)-int(c.get('points_balance') or 0)<=max(1,int(int(cheapest)*.15)))
-                    c['segment']=customer_segment(c.get('last_activity'),c.get('created_at'),c.get('visits'),reward_ready,almost)
-                    if c['segment']=='vip' and not vip_enabled:c['segment']='active'
+                    intel=customer_intelligence(conn,{**c,'id':c['membership_id'],'campaign_id':s['campaign_id']},c)
+                    c.update(intel)
+                    if c['segment']=='vip' and not vip_enabled:c['segment']='recurrent'
                     if tiers and c['loyalty_type']=='points':
                         eligible=[t for t in tiers if int(c.get('points_balance') or 0)>=int(t.get('min_points') or 0)]; c['level']=(eligible[-1]['name'] if eligible else 'Inicial')
                     else: c['level']='VIP' if vip_enabled and int(c.get('visits') or 0)>=12 else ('Frequente' if int(c.get('visits') or 0)>=5 else 'Inicial')
@@ -2627,10 +2808,168 @@ class Handler(BaseHTTPRequestHandler):
                 except integrity_errors(): conn.execute('UPDATE wallet_registrations SET push_token=?,created_at=? WHERE membership_id=? AND device_library_id=?',(push,now_ts(),m['id'],device))
             return self.send_json({'ok':True},201)
 
+        if path == '/api/v1/customers':
+            with connect(DB_PATH) as conn:
+                ctx=self._api_context(conn)
+                if not ctx:return
+                name=str(payload.get('name') or '').strip()[:120]
+                email=normalize_email(payload.get('email')) if payload.get('email') else ''
+                phone=str(payload.get('phone') or '').strip()[:40]
+                cpf=normalize_cpf(payload.get('cpf')) if payload.get('cpf') else ''
+                birth=str(payload.get('birth_date') or '').strip()[:10]
+                if len(name)<2:return self.send_json({'ok':False,'error':'invalid_name'},400)
+                plan=campaign_plan(conn,ctx['campaign_id']); limit=int(PLAN_FEATURES[plan].get('client_limit') or 0)
+                if limit and int(conn.execute("SELECT COUNT(*) n FROM memberships WHERE campaign_id=?",(ctx['campaign_id'],)).fetchone()['n'] or 0)>=limit:
+                    return self.send_json({'ok':False,'error':'client_limit_reached'},409)
+                existing=None
+                if cpf: existing=conn.execute("SELECT cu.id FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.cpf=?",(ctx['campaign_id'],cpf)).fetchone()
+                if not existing and email: existing=conn.execute("SELECT cu.id FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND lower(cu.email)=lower(?)",(ctx['campaign_id'],email)).fetchone()
+                if existing:return self.send_json({'ok':False,'error':'customer_exists'},409)
+                customer_id=insert_id(conn,"INSERT INTO customers(name,contact,email,phone,birth_date,cpf,privacy_accepted_at,marketing_email,marketing_whatsapp,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",(name,email,email,phone,birth or None,cpf or None,None,0,0,now_ts()))
+                public_id='mem_'+secrets.token_urlsafe(10); qr_token=random_token(18)
+                mid=insert_id(conn,"INSERT INTO memberships(customer_id,campaign_id,public_id,qr_token,created_at) VALUES(?,?,?,?,?)",(customer_id,ctx['campaign_id'],public_id,qr_token,now_ts()))
+                audit(conn,ctx['company_id'],None,'api_customer_create','customer',customer_id,details=public_id,ip_address=self._ip(),campaign_id=ctx['campaign_id'])
+                queue_webhook_event(conn,ctx['campaign_id'],'customer.created',{'public_id':public_id,'name':name,'email':email,'phone':phone})
+                return self.send_json({'ok':True,'data':{'public_id':public_id,'customer_id':customer_id}},201)
+        if path == '/api/v1/purchases':
+            with connect(DB_PATH) as conn:
+                ctx=self._api_context(conn)
+                if not ctx:return
+                public_id=str(payload.get('public_id') or '').strip()
+                try: amount=max(0,int(payload.get('amount_cents') or 0))
+                except Exception:return self.send_json({'ok':False,'error':'invalid_amount'},400)
+                idem_key=str(payload.get('idempotency_key') or '').strip()[:160] or None
+                m=conn.execute("SELECT m.*,c.goal,c.loyalty_type,c.points_spend_cents,c.points_expiry_days FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=? AND m.campaign_id=?",(public_id,ctx['campaign_id'])).fetchone()
+                if not m:return self.send_json({'ok':False,'error':'customer_not_found'},404)
+                if m['status']!='active':return self.send_json({'ok':False,'error':'customer_blocked'},409)
+                if idem_key:
+                    prev=conn.execute("SELECT id,value,new_progress FROM transactions WHERE idempotency_key=?",(idem_key,)).fetchone()
+                    if prev:return self.send_json({'ok':True,'idempotent':True,'data':rowdict(prev)})
+                if m['loyalty_type']=='points':
+                    value=max(0,amount//max(1,int(m['points_spend_cents'] or 200)))
+                    previous=int(m['points_balance'] or 0); new=previous+value
+                    tid=insert_id(conn,"INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,device_id,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(m['id'],None,'adjustment',value,previous,new,0,idem_key,'api',self._ip(),'Compra via API',now_ts()))
+                    conn.execute("UPDATE memberships SET points_balance=? WHERE id=?",(new,m['id']))
+                    if value:add_point_lot(conn,m['id'],tid,value,int(m['points_expiry_days'] or 180),now_ts())
+                else:
+                    previous=int(m['progress'] or 0); goal=max(1,int(m['goal'] or 1)); new=previous+1; reward=0
+                    if new>=goal:new=0; reward=1
+                    tid=insert_id(conn,"INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,device_id,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(m['id'],None,'stamp',1,previous,new,reward,idem_key,'api',self._ip(),'Compra via API',now_ts()))
+                    conn.execute("UPDATE memberships SET progress=?,rewards_available=rewards_available+? WHERE id=?",(new,reward,m['id']))
+                    value=1
+                record_purchase(conn,m['id'],tid,amount,'api')
+                queue_webhook_event(conn,ctx['campaign_id'],'purchase.created',{'public_id':public_id,'amount_cents':amount,'earned':value,'loyalty_type':m['loyalty_type']})
+                return self.send_json({'ok':True,'data':{'transaction_id':tid,'earned':value,'loyalty_type':m['loyalty_type']}})
+        if path == '/api/v1/redemptions':
+            with connect(DB_PATH) as conn:
+                ctx=self._api_context(conn)
+                if not ctx:return
+                public_id=str(payload.get('public_id') or '').strip()
+                m=conn.execute("SELECT m.*,c.goal,c.loyalty_type FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=? AND m.campaign_id=?",(public_id,ctx['campaign_id'])).fetchone()
+                if not m:return self.send_json({'ok':False,'error':'customer_not_found'},404)
+                if m['loyalty_type']=='points':
+                    try: reward_id=int(payload.get('reward_id') or 0)
+                    except Exception: reward_id=0
+                    r=conn.execute("SELECT id,name,points_cost FROM reward_catalog WHERE id=? AND campaign_id=? AND active=1",(reward_id,ctx['campaign_id'])).fetchone()
+                    if not r:return self.send_json({'ok':False,'error':'reward_not_found'},404)
+                    cost=int(r['points_cost']); balance=int(m['points_balance'] or 0)
+                    if balance<cost:return self.send_json({'ok':False,'error':'insufficient_points'},409)
+                    new=balance-cost
+                    tid=insert_id(conn,"INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,device_id,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(m['id'],None,'redeem',-cost,balance,new,0,'api',self._ip(),r['name'],now_ts()))
+                    conn.execute("UPDATE memberships SET points_balance=? WHERE id=?",(new,m['id'])); consume_point_lots(conn,m['id'],cost)
+                    try:conn.execute("INSERT INTO reward_redemptions(reward_id,membership_id,user_id,points_cost,created_at) VALUES(?,?,?,?,?)",(r['id'],m['id'],None,cost,now_ts()))
+                    except Exception:pass
+                    reward_name=r['name']
+                else:
+                    available=int(m['rewards_available'] or 0)
+                    if available<1:return self.send_json({'ok':False,'error':'reward_not_available'},409)
+                    tid=insert_id(conn,"INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,device_id,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(m['id'],None,'redeem',0,int(m['progress'] or 0),int(m['progress'] or 0),-1,'api',self._ip(),'Resgate via API',now_ts()))
+                    conn.execute("UPDATE memberships SET rewards_available=rewards_available-1 WHERE id=?",(m['id'],)); reward_name='Recompensa'
+                queue_webhook_event(conn,ctx['campaign_id'],'reward.redeemed',{'public_id':public_id,'reward':reward_name,'transaction_id':tid})
+                return self.send_json({'ok':True,'data':{'transaction_id':tid,'reward':reward_name}})
+
         with connect(DB_PATH) as conn:
             s=self._require_auth(conn)
             if not s: return
             if not self._require_csrf(s,payload): return self.send_json({'ok':False,'error':'csrf_failed'},403)
+            if path == '/api/admin/customers/import/preview':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                try: rows=_parse_import_file(payload.get('filename'),payload.get('data_base64'))
+                except (ValueError,binascii.Error) as exc:return self.send_json({'ok':False,'error':str(exc)},400)
+                existing_cpf={str(r['cpf']) for r in conn.execute("SELECT cu.cpf FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.cpf IS NOT NULL",(s['campaign_id'],)).fetchall() if r['cpf']}
+                existing_email={str(r['email']).lower() for r in conn.execute("SELECT cu.email FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.email IS NOT NULL",(s['campaign_id'],)).fetchall() if r['email']}
+                seen_cpf=set();seen_email=set()
+                for r in rows:
+                    duplicate=bool((r['cpf'] and (r['cpf'] in existing_cpf or r['cpf'] in seen_cpf)) or (r['email'] and (r['email'].lower() in existing_email or r['email'].lower() in seen_email)))
+                    r['duplicate']=duplicate
+                    if r['cpf']:seen_cpf.add(r['cpf'])
+                    if r['email']:seen_email.add(r['email'].lower())
+                valid=sum(1 for r in rows if not r['errors'] and not r['duplicate'])
+                return self.send_json({'ok':True,'rows':rows,'summary':{'total':len(rows),'valid':valid,'duplicates':sum(1 for r in rows if r['duplicate']),'invalid':sum(1 for r in rows if r['errors'])}})
+            if path == '/api/admin/customers/import/commit':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                rows=payload.get('rows') if isinstance(payload.get('rows'),list) else []
+                if len(rows)>10000:return self.send_json({'ok':False,'error':'too_many_rows'},400)
+                campaign=conn.execute("SELECT loyalty_type,goal,points_expiry_days FROM campaigns WHERE id=?",(s['campaign_id'],)).fetchone()
+                plan=campaign_plan(conn,s['campaign_id']); limit=int(PLAN_FEATURES[plan].get('client_limit') or 0)
+                current_count=int(conn.execute("SELECT COUNT(*) n FROM memberships WHERE campaign_id=?",(s['campaign_id'],)).fetchone()['n'] or 0)
+                created=skipped=0
+                for r in rows:
+                    if limit and current_count+created>=limit:
+                        skipped+=1; continue
+                    if r.get('errors') or r.get('duplicate'):skipped+=1;continue
+                    name=str(r.get('name') or '').strip()[:120]; email=normalize_email(r.get('email')) if r.get('email') else ''; cpf=normalize_cpf(r.get('cpf')) if r.get('cpf') else ''; phone=str(r.get('phone') or '').strip()[:40]; birth=str(r.get('birth_date') or '').strip()[:10] or None
+                    if len(name)<2:skipped+=1;continue
+                    if cpf and conn.execute("SELECT 1 FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND cu.cpf=?",(s['campaign_id'],cpf)).fetchone():skipped+=1;continue
+                    if email and conn.execute("SELECT 1 FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND lower(cu.email)=lower(?)",(s['campaign_id'],email)).fetchone():skipped+=1;continue
+                    customer_id=insert_id(conn,"INSERT INTO customers(name,contact,email,phone,birth_date,cpf,privacy_accepted_at,marketing_email,marketing_whatsapp,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",(name,email,email,phone,birth,cpf or None,None,0,0,now_ts()))
+                    public_id='mem_'+secrets.token_urlsafe(10); mid=insert_id(conn,"INSERT INTO memberships(customer_id,campaign_id,public_id,qr_token,created_at) VALUES(?,?,?,?,?)",(customer_id,s['campaign_id'],public_id,random_token(18),now_ts()))
+                    initial=max(0,int(r.get('initial_balance') or 0))
+                    if initial:
+                        if campaign['loyalty_type']=='points':
+                            tid=insert_id(conn,"INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,note,created_at) VALUES(?,?,?,?,?,?,?,?)",(mid,s['user_id'],'adjustment',initial,0,initial,'Saldo inicial importado',now_ts()))
+                            conn.execute("UPDATE memberships SET points_balance=? WHERE id=?",(initial,mid)); add_point_lot(conn,mid,tid,initial,int(campaign['points_expiry_days'] or 180),now_ts())
+                        else:
+                            goal=max(1,int(campaign['goal'] or 1)); progress=initial%goal; rewards=initial//goal
+                            conn.execute("UPDATE memberships SET progress=?,rewards_available=? WHERE id=?",(progress,rewards,mid))
+                            insert_id(conn,"INSERT INTO transactions(membership_id,user_id,type,value,previous_progress,new_progress,rewards_delta,note,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(mid,s['user_id'],'adjustment',initial,0,progress,rewards,'Saldo inicial importado',now_ts()))
+                    audit(conn,s['company_id'],s['user_id'],'customer_import','customer',customer_id,details=public_id,ip_address=self._ip(),campaign_id=s['campaign_id'])
+                    created+=1
+                return self.send_json({'ok':True,'created':created,'skipped':skipped})
+            if path == '/api/admin/integrations/api-key/create':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not plan_allows(conn,s['campaign_id'],'advanced'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                name=str(payload.get('name') or 'Integração').strip()[:80] or 'Integração'
+                token='fiz_'+secrets.token_urlsafe(32); digest=hashlib.sha256(token.encode()).hexdigest()
+                kid=insert_id(conn,"INSERT INTO api_keys(campaign_id,name,token_hash,token_prefix,created_at) VALUES(?,?,?,?,?)",(s['campaign_id'],name,digest,token[:12],now_ts()))
+                audit(conn,s['company_id'],s['user_id'],'api_key_create','api_key',kid,details=name,ip_address=self._ip(),campaign_id=s['campaign_id'])
+                return self.send_json({'ok':True,'id':kid,'token':token,'warning':'O token é exibido uma única vez.'})
+            if path == '/api/admin/integrations/api-key/revoke':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not plan_allows(conn,s['campaign_id'],'advanced'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                kid=int(payload.get('id') or 0);conn.execute("UPDATE api_keys SET active=0 WHERE id=? AND campaign_id=?",(kid,s['campaign_id']))
+                audit(conn,s['company_id'],s['user_id'],'api_key_revoke','api_key',kid,ip_address=self._ip(),campaign_id=s['campaign_id']);return self.send_json({'ok':True})
+            if path == '/api/admin/integrations/webhook/create':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not plan_allows(conn,s['campaign_id'],'advanced'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                url=str(payload.get('url') or '').strip()[:500]
+                try:u=urllib.parse.urlparse(url)
+                except Exception:u=None
+                if not u or u.scheme!='https' or not u.netloc:return self.send_json({'ok':False,'error':'https_webhook_required'},400)
+                events=payload.get('events') if isinstance(payload.get('events'),list) else []
+                allowed={'customer.created','purchase.created','points.earned','stamp.earned','reward.redeemed','*'};events=[x for x in events if x in allowed]
+                if not events:return self.send_json({'ok':False,'error':'events_required'},400)
+                secret='whsec_'+secrets.token_urlsafe(24)
+                try: enc=encrypt_secret(secret)
+                except RuntimeError:return self.send_json({'ok':False,'error':'security_key_not_configured'},503)
+                wid=insert_id(conn,"INSERT INTO webhook_subscriptions(campaign_id,url,secret_enc,events_json,created_at) VALUES(?,?,?,?,?)",(s['campaign_id'],url,enc,json.dumps(events),now_ts()))
+                audit(conn,s['company_id'],s['user_id'],'webhook_create','webhook',wid,details=url,ip_address=self._ip(),campaign_id=s['campaign_id'])
+                return self.send_json({'ok':True,'id':wid,'secret':secret,'warning':'O segredo é exibido uma única vez.'})
+            if path == '/api/admin/integrations/webhook/delete':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not plan_allows(conn,s['campaign_id'],'advanced'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                wid=int(payload.get('id') or 0);conn.execute("DELETE FROM webhook_subscriptions WHERE id=? AND campaign_id=?",(wid,s['campaign_id']))
+                audit(conn,s['company_id'],s['user_id'],'webhook_delete','webhook',wid,ip_address=self._ip(),campaign_id=s['campaign_id']);return self.send_json({'ok':True})
             if path == '/api/security/sessions/revoke-other':
                 current_token=self._session_token()
                 before=conn.execute('SELECT COUNT(*) n FROM sessions WHERE user_id=? AND token<>?',(s['user_id'],current_token or '')).fetchone()['n']
@@ -2746,7 +3085,7 @@ class Handler(BaseHTTPRequestHandler):
                 if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not plan_allows(conn,s['campaign_id'],'communications'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
                 name=str(payload.get('name','')).strip()[:100]; segment=str(payload.get('segment','all')); channel=str(payload.get('channel','both')); message=str(payload.get('message','')).strip()[:4096]
-                if len(name)<2 or not message or segment not in ('all','new','active','vip','at_risk','inactive60','inactive90','almost_reward','reward_ready','birthdays') or channel not in ('email','whatsapp','both'):return self.send_json({'ok':False,'error':'invalid_campaign'},400)
+                if len(name)<2 or not message or segment not in ('all','new','active','recurrent','vip','at_risk','inactive','inactive60','inactive90','almost_reward','reward_ready','birthdays') or channel not in ('email','whatsapp','both'):return self.send_json({'ok':False,'error':'invalid_campaign'},400)
                 mid=insert_id(conn,'INSERT INTO marketing_campaigns(campaign_id,name,segment,channel,message,status,created_at) VALUES(?,?,?,?,?,?,?)',(s['campaign_id'],name,segment,channel,message,'draft',now_ts()))
                 audit(conn,s['company_id'],s['user_id'],'marketing_campaign_create','marketing_campaign',mid,details=name,ip_address=self._ip())
                 return self.send_json({'ok':True,'id':mid})

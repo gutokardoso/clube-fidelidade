@@ -720,6 +720,53 @@ def init_db(db_path=None, seed=True):
         else:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v124',?)",(now_ts(),))
 
+
+        # Migração v130: inteligência comercial, API pública e webhooks.
+        if _is_postgres(target):
+            conn.executescript("""CREATE TABLE IF NOT EXISTS api_keys (
+              id BIGSERIAL PRIMARY KEY,campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+              name TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,token_prefix TEXT NOT NULL,
+              active INTEGER NOT NULL DEFAULT 1,last_used_at BIGINT,created_at BIGINT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_api_keys_campaign ON api_keys(campaign_id,active);
+            CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+              id BIGSERIAL PRIMARY KEY,campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+              url TEXT NOT NULL,secret_enc TEXT NOT NULL,events_json TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,
+              created_at BIGINT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_webhook_subscriptions_campaign ON webhook_subscriptions(campaign_id,active);
+            CREATE TABLE IF NOT EXISTS webhook_deliveries (
+              id BIGSERIAL PRIMARY KEY,campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+              webhook_id BIGINT REFERENCES webhook_subscriptions(id) ON DELETE SET NULL,event_type TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'pending',http_status INTEGER,attempts INTEGER NOT NULL DEFAULT 0,
+              last_error TEXT,created_at BIGINT NOT NULL,delivered_at BIGINT
+            );
+            CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_campaign ON webhook_deliveries(campaign_id,created_at DESC);
+            """)
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v130',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.executescript("""CREATE TABLE IF NOT EXISTS api_keys (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+              name TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,token_prefix TEXT NOT NULL,
+              active INTEGER NOT NULL DEFAULT 1,last_used_at INTEGER,created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_api_keys_campaign ON api_keys(campaign_id,active);
+            CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+              url TEXT NOT NULL,secret_enc TEXT NOT NULL,events_json TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,
+              created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_webhook_subscriptions_campaign ON webhook_subscriptions(campaign_id,active);
+            CREATE TABLE IF NOT EXISTS webhook_deliveries (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+              webhook_id INTEGER REFERENCES webhook_subscriptions(id) ON DELETE SET NULL,event_type TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'pending',http_status INTEGER,attempts INTEGER NOT NULL DEFAULT 0,
+              last_error TEXT,created_at INTEGER NOT NULL,delivered_at INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_campaign ON webhook_deliveries(campaign_id,created_at DESC);
+            """)
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v130',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:
