@@ -1,4 +1,9 @@
-# Fidelizaê! v133
+# Fidelizaê! v134
+
+## v134
+
+- Painel Fidelizaê! com panorama visual consolidado das empresas, distribuição por plano, tipo de programa e cobertura de integrações.
+- Botão Cadastrar com hover padronizado e contador de Alertas com espaçamento corrigido.
 
 ## v133
 
