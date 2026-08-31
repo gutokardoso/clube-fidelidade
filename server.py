@@ -41,7 +41,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v141'
+VERSION='v142'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
@@ -2203,6 +2203,15 @@ class Handler(BaseHTTPRequestHandler):
                 if not row:return self.send_json({'ok':False,'error':'not_found'},404)
                 tx=[rowdict(r) for r in conn.execute('SELECT type,value,previous_progress,new_progress,rewards_delta,note,created_at FROM transactions WHERE membership_id=(SELECT id FROM memberships WHERE public_id=?) ORDER BY created_at',(public_id,)).fetchall()]
                 return self.send_json({'ok':True,'data':customer_rowdict(row),'history':tx})
+        if path == '/api/manager/admins':
+            with connect(DB_PATH) as conn:
+                s=self._require_auth(conn,'manager')
+                if not s:return
+                rows=conn.execute("SELECT id,name,email,active,created_at FROM users WHERE company_id=? AND role='manager' AND active=1 ORDER BY name,email",(s['company_id'],)).fetchall()
+                admins=[]
+                for r in rows:
+                    item=rowdict(r); item['is_current']=int(item.get('id') or 0)==int(s['user_id']); admins.append(item)
+                return self.send_json({'ok':True,'admins':admins})
         if path == '/api/manager/overview':
             with connect(DB_PATH) as conn:
                 s=self._require_auth(conn,'manager');
@@ -4127,6 +4136,41 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({'ok':False,'error':'email_exists','message':'Este e-mail já está cadastrado no sistema.'},409)
                 audit(conn,s['company_id'],s['user_id'],'manager_admin_create','user',new_id,details=email,ip_address=self._ip())
                 return self.send_json({'ok':True,'user_id':new_id})
+
+            if path == '/api/manager/admin/update':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                try: admin_id=int(payload.get('id',0))
+                except (TypeError,ValueError): admin_id=0
+                name=str(payload.get('name','')).strip()[:80]
+                email=normalize_email(payload.get('email'))
+                password=str(payload.get('password','')).strip()
+                if admin_id<1 or len(name)<2 or not email or '@' not in email or (password and not password_is_strong(password,12)):
+                    return self.send_json({'ok':False,'error':'invalid_manager_admin','message':'Preencha nome e e-mail válidos. A nova senha, quando informada, deve ter pelo menos 12 caracteres, com maiúscula, minúscula e número.'},400)
+                target=conn.execute("SELECT id FROM users WHERE id=? AND company_id=? AND role='manager'",(admin_id,s['company_id'])).fetchone()
+                if not target:return self.send_json({'ok':False,'error':'not_found'},404)
+                duplicate=conn.execute('SELECT id FROM users WHERE lower(email)=lower(?) AND id<>? LIMIT 1',(email,admin_id)).fetchone()
+                if duplicate:return self.send_json({'ok':False,'error':'email_exists','message':'Este e-mail já está cadastrado no sistema.'},409)
+                if password:
+                    conn.execute('UPDATE users SET name=?,email=?,password_hash=? WHERE id=?',(name,email,hash_password(password),admin_id))
+                    conn.execute('DELETE FROM sessions WHERE user_id=?',(admin_id,))
+                else:
+                    conn.execute('UPDATE users SET name=?,email=? WHERE id=?',(name,email,admin_id))
+                audit(conn,s['company_id'],s['user_id'],'manager_admin_update','user',admin_id,details=email,ip_address=self._ip())
+                return self.send_json({'ok':True})
+
+            if path == '/api/manager/admin/remove':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                try: admin_id=int(payload.get('id',0))
+                except (TypeError,ValueError): admin_id=0
+                if admin_id==int(s['user_id']):return self.send_json({'ok':False,'error':'cannot_remove_self'},409)
+                target=conn.execute("SELECT id,email,active FROM users WHERE id=? AND company_id=? AND role='manager'",(admin_id,s['company_id'])).fetchone()
+                if not target:return self.send_json({'ok':False,'error':'not_found'},404)
+                active_count=conn.execute("SELECT COUNT(*) n FROM users WHERE company_id=? AND role='manager' AND active=1",(s['company_id'],)).fetchone()['n']
+                if target['active'] and int(active_count)<=1:return self.send_json({'ok':False,'error':'last_manager'},409)
+                conn.execute('UPDATE users SET active=0 WHERE id=?',(admin_id,))
+                conn.execute('DELETE FROM sessions WHERE user_id=?',(admin_id,))
+                audit(conn,s['company_id'],s['user_id'],'manager_admin_remove','user',admin_id,details=target['email'],ip_address=self._ip())
+                return self.send_json({'ok':True})
 
             if path == '/api/manager/staff/check-email':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)

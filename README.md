@@ -1,4 +1,9 @@
-# Fidelizaê! v141
+# Fidelizaê! v142
+
+## v142
+- Painel Fidelizaê!: novo menu **Perfil** ao lado de Cadastrar.
+- Perfil reúne Alterar senha, Cadastrar novo administrador, Administradores e Segurança / 2FA.
+- Novo modal Administradores lista os Administradores Gerais cadastrados e permite editar ou remover acessos com proteção contra autoexclusão.
 
 ## v141
 - Removida a área duplicada de “Configuração do programa” criada na v140.
@@ -162,7 +167,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v141
+**Versão atual:** v142
 
 
 ## Novidades da v117
