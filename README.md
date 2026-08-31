@@ -1,4 +1,8 @@
-# Fidelizaê! v132
+# Fidelizaê! v133
+
+## v133
+
+- Removido o botão redundante “Voltar ao painel” do modal Programa de Fidelidade. O modal continua sendo fechado pelo botão “Fechar”.
 
 ## v132
 
