@@ -1,4 +1,13 @@
-# Fidelizaê! v137
+# Fidelizaê! v138
+
+## v138
+
+- Auditoria de regressão das funcionalidades acumuladas até a v137.
+- Perfil > Editar empresa (Administrador PRO) agora inclui E-commerce junto de E-mail e WhatsApp, com plataforma, URL da loja, webhook e rotação segura do endereço.
+- URLs de webhook de E-commerce usam o domínio oficial `https://app.fidelizae.com.br` como fallback quando `PUBLIC_BASE_URL` não estiver definida.
+- Painel Fidelizaê! teve nomenclatura visual padronizada para “empresa” nos cadastros e edições.
+- Texto de ciência da Política de Privacidade no cadastro do consumidor foi separado conceitualmente do consentimento opcional de marketing.
+- Validações de regressão executadas em rotas, planos, integrações, documentos legais, criptografia, menus e responsividade.
 
 ## v137
 
@@ -138,7 +147,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v124
+**Versão atual:** v138
 
 
 ## Novidades da v117

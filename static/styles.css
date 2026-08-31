@@ -580,3 +580,8 @@ body:has(#editClientCard.manager-inline-modal:not(.hidden))::before,body:has(#cl
 .client-admin-integrations{margin-top:8px;padding-top:18px;border-top:1px solid var(--line)}
 .client-admin-integrations .integration-status-line{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}
 @media(max-width:820px){.client-admin-integrations .grid.cols-2{grid-template-columns:1fr}}
+
+/* v138 — auditoria de regressão e integrações completas no Editar empresa */
+.client-admin-integration-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.client-admin-integration-grid>.integration-box{min-width:0}.client-admin-integration-grid .copy-field{min-width:0}.client-admin-integration-grid .copy-field input{min-width:0}
+@media(max-width:1120px){.client-admin-integration-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.client-admin-integration-grid>.integration-box:last-child{grid-column:1/-1}}
+@media(max-width:820px){.client-admin-integration-grid{grid-template-columns:1fr}.client-admin-integration-grid>.integration-box:last-child{grid-column:auto}}

@@ -41,7 +41,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v137'
+VERSION='v138'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
@@ -2200,8 +2200,8 @@ class Handler(BaseHTTPRequestHandler):
                     c['ecommerce_platform']=normalize_ecommerce_platform(c.get('ecommerce_platform'))
                     c['ecommerce_status']=c.get('ecommerce_status') or ('awaiting_connection' if c['ecommerce_platform']!='none' else 'not_connected')
                     c['ecommerce_configured']=bool(c['ecommerce_platform']!='none' and c.get('ecommerce_webhook_secret'))
-                    public_base=os.environ.get('PUBLIC_BASE_URL','').rstrip('/')
-                    c['ecommerce_webhook_url']=(public_base+f"/api/integrations/ecommerce/{c['id']}/{c.get('ecommerce_webhook_secret')}") if (public_base and c.get('ecommerce_webhook_secret')) else ''
+                    public_base=(os.environ.get('PUBLIC_BASE_URL') or 'https://app.fidelizae.com.br').rstrip('/')
+                    c['ecommerce_webhook_url']=(public_base+f"/api/integrations/ecommerce/{c['id']}/{c.get('ecommerce_webhook_secret')}") if c.get('ecommerce_webhook_secret') else ''
                     c['ecommerce_webhook_secret']=None
                     c['email_configured']=bool(c['brevo_configured'] if c['email_provider']=='brevo' else c['smtp_configured']); c['reward_catalog_count']=conn.execute("SELECT COUNT(*) n FROM reward_catalog WHERE campaign_id=? AND active=1",(c['id'],)).fetchone()['n']; c['wallet_google']=wallet_status()['google']['ready']; c['wallet_apple']=wallet_status()['apple']['ready']
                     c['smtp_password_enc']=None
@@ -2214,9 +2214,11 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant')
                 if not s:return
                 if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
-                c=conn.execute('SELECT id,name,code,logo_image,plan,loyalty_type,points_spend_cents,goal,reward_name,card_theme,min_stamp_interval_sec,max_stamps_per_hour,email_provider,smtp_host,smtp_port,smtp_user,smtp_from,smtp_from_name,smtp_security,brevo_sender_email,brevo_sender_name,brevo_reply_to,whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_api_version FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
+                c=conn.execute('SELECT id,name,code,logo_image,plan,loyalty_type,points_spend_cents,goal,reward_name,card_theme,min_stamp_interval_sec,max_stamps_per_hour,email_provider,smtp_host,smtp_port,smtp_user,smtp_from,smtp_from_name,smtp_security,brevo_sender_email,brevo_sender_name,brevo_reply_to,whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_api_version,ecommerce_platform,ecommerce_store_url,ecommerce_webhook_secret,ecommerce_status FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
                 if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
                 company=rowdict(c); company['email_configured']=bool(email_configured(email_config_for_client(conn,s['campaign_id']))); company['whatsapp_configured']=bool(whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])))
+                company['ecommerce_platform']=normalize_ecommerce_platform(company.get('ecommerce_platform')); company['ecommerce_status']=company.get('ecommerce_status') or ('awaiting_connection' if company['ecommerce_platform']!='none' else 'not_connected')
+                public_base=(os.environ.get('PUBLIC_BASE_URL') or 'https://app.fidelizae.com.br').rstrip('/'); company['ecommerce_webhook_url']=(public_base+f"/api/integrations/ecommerce/{company['id']}/{company.get('ecommerce_webhook_secret')}") if company.get('ecommerce_webhook_secret') else ''; company.pop('ecommerce_webhook_secret',None)
                 return self.send_json({'ok':True,'company':company,'features':PLAN_FEATURES[normalize_plan(c['plan'])]})
         if path == '/api/attendant/recent':
             with connect(DB_PATH) as conn:
@@ -3702,16 +3704,32 @@ class Handler(BaseHTTPRequestHandler):
                         if smtp_security not in ('starttls','ssl','none'):smtp_security='starttls'
                         brevo_sender_email=str(payload.get('brevo_sender_email',c['brevo_sender_email'] or '')).strip()[:200];brevo_sender_name=str(payload.get('brevo_sender_name',c['brevo_sender_name'] or '')).strip()[:100];brevo_reply_to=str(payload.get('brevo_reply_to',c['brevo_reply_to'] or '')).strip()[:200]
                         wa_phone_id=str(payload.get('whatsapp_phone_number_id',c['whatsapp_phone_number_id'] or '')).strip()[:100];wa_waba_id=str(payload.get('whatsapp_waba_id',c['whatsapp_waba_id'] or '')).strip()[:100];wa_version=str(payload.get('whatsapp_api_version',c['whatsapp_api_version'] or 'v24.0')).strip()[:20]
+                        ecommerce_platform=normalize_ecommerce_platform(payload.get('ecommerce_platform',c['ecommerce_platform'] or 'none')); ecommerce_store_url=str(payload.get('ecommerce_store_url',c['ecommerce_store_url'] or '')).strip()[:300]; old_ecommerce_platform=normalize_ecommerce_platform(c['ecommerce_platform']); ecommerce_secret=c['ecommerce_webhook_secret']
+                        if ecommerce_platform!='none' and not ecommerce_secret:ecommerce_secret=secrets.token_urlsafe(24)
+                        if ecommerce_platform=='none':ecommerce_secret=None
+                        ecommerce_status=('awaiting_connection' if ecommerce_platform!='none' else 'not_connected') if ecommerce_platform!=old_ecommerce_platform else (c['ecommerce_status'] or ('awaiting_connection' if ecommerce_platform!='none' else 'not_connected'))
                         smtp_password_enc=c['smtp_password_enc'];brevo_api_key_enc=c['brevo_api_key_enc'];wa_token_enc=c['whatsapp_access_token_enc']
                         if payload.get('smtp_password'):smtp_password_enc=encrypt_secret(payload.get('smtp_password'))
                         if payload.get('brevo_api_key'):brevo_api_key_enc=encrypt_secret(payload.get('brevo_api_key'))
                         if payload.get('whatsapp_access_token'):wa_token_enc=encrypt_secret(payload.get('whatsapp_access_token'))
-                        conn.execute('''UPDATE campaigns SET code=?,name=?,loyalty_type=?,points_spend_cents=?,goal=?,reward_name=?,card_theme=?,logo_image=COALESCE(?,logo_image),email_provider=?,smtp_host=?,smtp_port=?,smtp_user=?,smtp_password_enc=?,smtp_from=?,smtp_from_name=?,smtp_security=?,brevo_api_key_enc=?,brevo_sender_email=?,brevo_sender_name=?,brevo_reply_to=?,whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_integration_mode='manual',whatsapp_signup_status=? WHERE id=? AND company_id=?''',(code,name,loyalty,points,goal,reward,theme,logo,email_provider,smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,wa_phone_id,wa_waba_id,wa_token_enc,wa_version,'connected' if (wa_phone_id and wa_token_enc) else 'not_connected',s['campaign_id'],s['company_id']))
+                        conn.execute('''UPDATE campaigns SET code=?,name=?,loyalty_type=?,points_spend_cents=?,goal=?,reward_name=?,card_theme=?,logo_image=COALESCE(?,logo_image),email_provider=?,smtp_host=?,smtp_port=?,smtp_user=?,smtp_password_enc=?,smtp_from=?,smtp_from_name=?,smtp_security=?,brevo_api_key_enc=?,brevo_sender_email=?,brevo_sender_name=?,brevo_reply_to=?,whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_integration_mode='manual',whatsapp_signup_status=?,ecommerce_platform=?,ecommerce_store_url=?,ecommerce_webhook_secret=?,ecommerce_status=? WHERE id=? AND company_id=?''',(code,name,loyalty,points,goal,reward,theme,logo,email_provider,smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,wa_phone_id,wa_waba_id,wa_token_enc,wa_version,'connected' if (wa_phone_id and wa_token_enc) else 'not_connected',ecommerce_platform,ecommerce_store_url,ecommerce_secret,ecommerce_status,s['campaign_id'],s['company_id']))
                     else:
                         conn.execute('UPDATE campaigns SET code=?,name=?,loyalty_type=?,points_spend_cents=?,goal=?,reward_name=?,card_theme=?,logo_image=COALESCE(?,logo_image) WHERE id=? AND company_id=?',(code,name,loyalty,points,goal,reward,theme,logo,s['campaign_id'],s['company_id']))
                 except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
                 except integrity_errors():return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'client_admin_company_update','campaign',s['campaign_id'],details=f'plan={plan}',ip_address=self._ip());return self.send_json({'ok':True})
+            if path == '/api/client-admin/integration/ecommerce/rotate-secret':
+                if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                c=conn.execute('SELECT id,plan,ecommerce_platform FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
+                if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                if normalize_plan(c['plan'])!='pro':return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                if normalize_ecommerce_platform(c['ecommerce_platform'])=='none':return self.send_json({'ok':False,'error':'ecommerce_not_configured'},409)
+                secret=secrets.token_urlsafe(24); conn.execute("UPDATE campaigns SET ecommerce_webhook_secret=?,ecommerce_status='awaiting_connection' WHERE id=? AND company_id=?",(secret,s['campaign_id'],s['company_id']))
+                audit(conn,s['company_id'],s['user_id'],'ecommerce_secret_rotated','campaign',s['campaign_id'],ip_address=self._ip())
+                public_base=(os.environ.get('PUBLIC_BASE_URL') or 'https://app.fidelizae.com.br').rstrip('/')
+                return self.send_json({'ok':True,'webhook_url':public_base+f"/api/integrations/ecommerce/{s['campaign_id']}/{secret}"})
+
             if path == '/api/client-admin/subscription/cancel-renewal':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
@@ -3967,8 +3985,8 @@ class Handler(BaseHTTPRequestHandler):
                 secret=secrets.token_urlsafe(24)
                 conn.execute("UPDATE campaigns SET ecommerce_webhook_secret=?,ecommerce_status='awaiting_connection' WHERE id=?",(secret,campaign_id))
                 audit(conn,s['company_id'],s['user_id'],'ecommerce_secret_rotated','campaign',campaign_id,ip_address=self._ip())
-                public_base=os.environ.get('PUBLIC_BASE_URL','').rstrip('/')
-                return self.send_json({'ok':True,'webhook_url':(public_base+f'/api/integrations/ecommerce/{campaign_id}/{secret}') if public_base else '', 'secret':secret})
+                public_base=(os.environ.get('PUBLIC_BASE_URL') or 'https://app.fidelizae.com.br').rstrip('/')
+                return self.send_json({'ok':True,'webhook_url':public_base+f'/api/integrations/ecommerce/{campaign_id}/{secret}', 'secret':secret})
 
             if path == '/api/manager/integration/test-email':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
