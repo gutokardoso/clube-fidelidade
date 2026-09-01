@@ -1,5 +1,11 @@
-# Fidelizaê! v150
+# Fidelizaê! v151
 
+## v151
+- Teste controlado do Sentry disponível somente para Administrador Geral autenticado no Painel Fidelizaê!.
+- Novo endpoint `POST /api/manager/sentry-test` protegido por sessão de manager, CSRF e rate limit; não existe rota pública de erro.
+- O teste captura uma exceção proposital dentro de bloco controlado, envia ao Sentry, aguarda o flush por até 2 segundos e retorna o `event_id` sem derrubar a requisição nem alterar dados da plataforma.
+- O Diagnóstico da plataforma passa a mostrar o estado do Sentry e oferece o botão **TESTAR SENTRY** somente quando o monitoramento está ativo.
+- Cada teste fica registrado na auditoria administrativa.
 
 ## v150
 - Integração com Sentry para monitoramento externo de erros do backend em produção.

@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v150'
+VERSION='v151'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -2366,7 +2366,7 @@ class Handler(BaseHTTPRequestHandler):
                 sess=self._require_auth(conn,'manager')
                 if not sess:return
                 pending=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE status IN ('pending','retry','processing')").fetchone()['n']; failed=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE status='failed'").fetchone()['n']
-                return self.send_json({'ok':True,'version':VERSION,'database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite','wallet':wallet_status(),'queue':{'pending':pending,'failed':failed},'encryption':bool(_secret_box()),'pii_encryption':pii_key_configured(),'meta':meta_embedded_signup_configured(),'global_email':email_configured(global_email_config()),'public_base_url':os.environ.get('PUBLIC_BASE_URL',''),'environment':os.environ.get('APP_ENV','production'),'backup':'available','r2_backup':r2_backup_status()})
+                return self.send_json({'ok':True,'version':VERSION,'database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite','wallet':wallet_status(),'queue':{'pending':pending,'failed':failed},'encryption':bool(_secret_box()),'pii_encryption':pii_key_configured(),'meta':meta_embedded_signup_configured(),'global_email':email_configured(global_email_config()),'public_base_url':os.environ.get('PUBLIC_BASE_URL',''),'environment':os.environ.get('APP_ENV','production'),'backup':'available','r2_backup':r2_backup_status(),'sentry':{'configured':bool((os.environ.get('SENTRY_DSN') or '').strip()),'enabled':bool(SENTRY_ENABLED)}})
         if path == '/api/manager/backup':
             return self.send_json({'ok':False,'error':'backup_requires_reauthentication'},405)
         if path == '/api/privacy/export':
@@ -3210,6 +3210,26 @@ class Handler(BaseHTTPRequestHandler):
             s=self._require_auth(conn)
             if not s: return
             if not self._require_csrf(s,payload): return self.send_json({'ok':False,'error':'csrf_failed'},403)
+            if path == '/api/manager/sentry-test':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self._rate_ok('manager-sentry-test',5,900,self._ip(),1800): return
+                if not SENTRY_ENABLED or sentry_sdk is None:
+                    return self.send_json({'ok':False,'error':'sentry_not_configured'},503)
+                try:
+                    raise RuntimeError(f'Teste controlado do Sentry - Fidelizaê! {VERSION}')
+                except RuntimeError as exc:
+                    try:
+                        with sentry_sdk.new_scope() as scope:
+                            scope.set_tag('fidelizae_test','manager_controlled')
+                            scope.set_tag('release_version',VERSION)
+                            scope.set_context('test',{'source':'manager_diagnostics','user_id':int(s['user_id'])})
+                            event_id=sentry_sdk.capture_exception(exc)
+                        sentry_sdk.flush(timeout=2.0)
+                    except Exception as sentry_exc:
+                        print(f'[SENTRY] falha no teste controlado: {sentry_exc}')
+                        return self.send_json({'ok':False,'error':'sentry_test_failed'},502)
+                audit(conn,s['company_id'],s['user_id'],'sentry_test','platform',None,details=f'event_id={event_id or ""}',ip_address=self._ip())
+                return self.send_json({'ok':True,'event_id':str(event_id or ''),'version':VERSION})
             if path == '/api/manager/backup':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not self._rate_ok('manager-backup',5,900,self._ip(),1800): return
