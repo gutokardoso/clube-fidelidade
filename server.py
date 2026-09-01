@@ -41,7 +41,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v144'
+VERSION='v145'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
@@ -344,9 +344,9 @@ def smtp_configured(config=None):
 def brevo_api_config():
     return {
         'api_key':os.environ.get('BREVO_API_KEY','').strip(),
-        'sender_email':os.environ.get('BREVO_SENDER_EMAIL','').strip(),
+        'sender_email':os.environ.get('BREVO_SENDER_EMAIL','contato@fidelizae.com.br').strip(),
         'sender_name':os.environ.get('BREVO_SENDER_NAME','Fidelizaê!').strip(),
-        'reply_to':os.environ.get('BREVO_REPLY_TO','').strip(),
+        'reply_to':os.environ.get('BREVO_REPLY_TO','contato@fidelizae.com.br').strip(),
     }
 
 def brevo_api_configured():
@@ -354,7 +354,8 @@ def brevo_api_configured():
     return bool(c.get('api_key') and c.get('sender_email'))
 
 def global_email_config():
-    # Conta da Taboo usada apenas para mensagens administrativas da plataforma.
+    # Infraestrutura institucional do Fidelizaê!, usada apenas para mensagens da própria plataforma.
+    # Nunca é reutilizada como configuração promocional das empresas clientes.
     if brevo_api_configured():
         c=brevo_api_config(); c.update({'provider':'brevo','source':'global'}); return c
     c=global_smtp_config(); c.update({'provider':'smtp','source':'global'}); return c

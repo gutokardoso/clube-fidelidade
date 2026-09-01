@@ -1,4 +1,12 @@
-# Fidelizaê! v144
+# Fidelizaê! v145
+
+
+## v145
+- E-mails institucionais da própria plataforma usam a infraestrutura global da Brevo (`BREVO_API_KEY`) sem preencher ou reutilizar as credenciais das empresas clientes.
+- Remetente institucional padrão passa a ser **Fidelizaê! <contato@fidelizae.com.br>**; `BREVO_SENDER_EMAIL` continua podendo sobrescrever o endereço no Railway quando necessário.
+- `BREVO_REPLY_TO` passa a usar `contato@fidelizae.com.br` como fallback institucional.
+- E-mail, WhatsApp e E-commerce configurados em **Editar empresa** continuam isolados por empresa; campanhas e boas-vindas de clientes não usam as credenciais globais do Fidelizaê! como fallback.
+- Para produção, mantenha no Railway `BREVO_SENDER_EMAIL=contato@fidelizae.com.br` e `BREVO_SENDER_NAME=Fidelizaê!` para garantir o mesmo remetente mesmo quando já existirem variáveis antigas.
 
 ## v144
 - Padronização dos botões do menu superior nos painéis Fidelizaê!, Administrador e Atendente.
