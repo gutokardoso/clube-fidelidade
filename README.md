@@ -1,4 +1,9 @@
-# Fidelizaê! v148
+# Fidelizaê! v149
+
+## v149
+- Correção do utilitário `tools/backup_restore.py`: agora `validate` e `restore-sqlite` aceitam diretamente backups compactados `.json.gz` baixados do Cloudflare R2, além do JSON puro.
+- A detecção de gzip usa extensão e assinatura do arquivo, mantendo compatibilidade com backups anteriores.
+- Testado com o backup real `daily/2026-09-01/fidelizae-backup.json.gz`: checksum válido, restauração isolada concluída, `integrity_check` OK e `foreign_key_check` sem erros.
 
 ## v148
 - Backup automático privado no Cloudflare R2 usando as variáveis `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `R2_BUCKET` e `R2_ACCOUNT_ID`.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, hashlib, hmac, json, re, sqlite3, sys
+import argparse, gzip, hashlib, hmac, json, re, sqlite3, sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
@@ -19,7 +19,18 @@ def validate_payload(payload):
     return True,'ok'
 
 def load_backup(path):
-    payload=json.loads(Path(path).read_text(encoding='utf-8')); ok,reason=validate_payload(payload)
+    path=Path(path)
+    # Backups enviados ao R2 são armazenados como .json.gz. Aceita também
+    # o JSON puro para compatibilidade com exports manuais/versões anteriores.
+    with path.open('rb') as fh:
+        magic=fh.read(2)
+    is_gzip=path.suffix.lower()=='.gz' or magic==b'\x1f\x8b'
+    if is_gzip:
+        with gzip.open(path,'rt',encoding='utf-8') as fh:
+            payload=json.load(fh)
+    else:
+        payload=json.loads(path.read_text(encoding='utf-8'))
+    ok,reason=validate_payload(payload)
     if not ok: raise RuntimeError(reason)
     return payload
 
