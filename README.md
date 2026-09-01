@@ -1,7 +1,7 @@
-# Fidelizaê! v145
+# Fidelizaê! v147
 
 
-## v145
+## v147
 - E-mails institucionais da própria plataforma usam a infraestrutura global da Brevo (`BREVO_API_KEY`) sem preencher ou reutilizar as credenciais das empresas clientes.
 - Remetente institucional padrão passa a ser **Fidelizaê! <contato@fidelizae.com.br>**; `BREVO_SENDER_EMAIL` continua podendo sobrescrever o endereço no Railway quando necessário.
 - `BREVO_REPLY_TO` passa a usar `contato@fidelizae.com.br` como fallback institucional.
@@ -547,3 +547,19 @@ Permissões efetivas, validade real de pontos (1–12 meses; padrão 6), acelera
 ## v128 — Refinamento de ícones da landing
 - Bootstrap Icons oficiais aplicados em Acesse o programa (coin), Registre cada compra e QR Code (qr-code-scan), Relacionamento (whatsapp) e Beleza e bem-estar (scissors).
 - Mantido o padrão circular e a cor visual unificada da landing page.
+
+
+## v147 — fechamento técnico
+- Recuperação de senha também para Administrador Geral (`manager`).
+- HSTS agora é opt-in com `CLUBE_HSTS_ENABLED=1`; por padrão o aplicativo não envia HSTS.
+- E-commerce identificado corretamente como integração via webhook, sem prometer OAuth/conexão nativa em um clique.
+- Backup exige reautenticação com a senha atual do Administrador Geral, POST + CSRF, rate limit, `Cache-Control: no-store`, auditoria e checksum SHA-256.
+- Backup exporta as tabelas persistentes da plataforma. Sessões, desafios 2FA, tokens de reset e rate limits são excluídos por serem transitórios.
+- `tools/backup_restore.py` valida checksum/contagens e realiza ensaio de restauração em SQLite isolado com `integrity_check` e `foreign_key_check`.
+- Termos e Política de Privacidade atualizados para versão 1.1 e dados jurídicos centralizados por ambiente.
+
+### Dados jurídicos
+Dados jurídicos padrão configurados: `CLUBE_LEGAL_COMPANY_NAME=Agência Taboo`, CNPJ `10.995.977/0001-40`, `CLUBE_LEGAL_EMAIL=contato@fidelizae.com.br` e `CLUBE_LEGAL_LGPD_EMAIL=contato@fidelizae.com.br`. O endereço empresarial não é exibido nos documentos jurídicos da plataforma. `CLUBE_LEGAL_CNPJ` continua disponível como sobrescrita opcional no Railway.
+
+### Backup e restauração
+O backup contém dados pessoais, hashes de senha e segredos de integração criptografados. Preserve separadamente a mesma `CLUBE_ENCRYPTION_KEY`. Validação: `python tools/backup_restore.py validate backup.json`. Ensaio: `python tools/backup_restore.py restore-sqlite backup.json /tmp/fidelizae-restore.sqlite3`.

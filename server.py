@@ -41,7 +41,9 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v145'
+VERSION='v147'
+TERMS_VERSION='1.1'
+PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
 
 
@@ -82,6 +84,71 @@ def queue_rowdict(row):
 
 def now_iso():
     return datetime.now(ZoneInfo('America/Sao_Paulo')).isoformat(timespec='seconds')
+
+
+def legal_context():
+    return {
+        'company_name': (os.environ.get('CLUBE_LEGAL_COMPANY_NAME') or 'Agência Taboo').strip(),
+        'cnpj': (os.environ.get('CLUBE_LEGAL_CNPJ') or '10.995.977/0001-40').strip(),
+        'email': (os.environ.get('CLUBE_LEGAL_EMAIL') or 'contato@fidelizae.com.br').strip(),
+        'lgpd_email': (os.environ.get('CLUBE_LEGAL_LGPD_EMAIL') or os.environ.get('CLUBE_LEGAL_EMAIL') or 'contato@fidelizae.com.br').strip(),
+    }
+
+
+def render_legal_template(name):
+    ctx=legal_context()
+    parts=[f'<b>{html.escape(ctx["company_name"])}</b>']
+    if ctx['cnpj']: parts.append('CNPJ '+html.escape(ctx['cnpj']))
+    parts.append('Contato: <a href="mailto:'+html.escape(ctx['email'],quote=True)+'">'+html.escape(ctx['email'])+'</a>')
+    if ctx['lgpd_email'] and ctx['lgpd_email'].lower()!=ctx['email'].lower():
+        parts.append('Canal LGPD: <a href="mailto:'+html.escape(ctx['lgpd_email'],quote=True)+'">'+html.escape(ctx['lgpd_email'])+'</a>')
+    block='<br>'.join(parts)
+    return (STATIC/name).read_text(encoding='utf-8').replace('{{VERSION}}',VERSION).replace('{{LEGAL_ENTITY_BLOCK}}',block).replace('{{TERMS_VERSION}}',TERMS_VERSION).replace('{{PRIVACY_VERSION}}',PRIVACY_VERSION)
+
+
+BACKUP_FORMAT='fidelizae-platform-backup-v1'
+BACKUP_EXCLUDED_TABLES={'sessions','auth_challenges','password_reset_tokens','security_rate_limits'}
+
+def _backup_table_names(conn):
+    if str(DB_PATH).startswith(('postgres://','postgresql://')):
+        rows=conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name").fetchall()
+        names=[r['table_name'] for r in rows]
+    else:
+        rows=conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
+        names=[r['name'] for r in rows]
+    return [n for n in names if n not in BACKUP_EXCLUDED_TABLES and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*',n)]
+
+
+def build_platform_backup(conn):
+    tables={}
+    for table in _backup_table_names(conn):
+        tables[table]=[rowdict(r) for r in conn.execute(f'SELECT * FROM {table}').fetchall()]
+    payload={
+        'format':BACKUP_FORMAT,
+        'generated_at':now_iso(),
+        'version':VERSION,
+        'database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite',
+        'excluded_transient_tables':sorted(BACKUP_EXCLUDED_TABLES),
+        'tables':tables,
+        'counts':{k:len(v) for k,v in tables.items()},
+        'restore_notes':'Restaure somente em banco vazio/inicializado e preserve a mesma CLUBE_ENCRYPTION_KEY para dados criptografados.',
+    }
+    raw=json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode('utf-8')
+    payload['sha256']=hashlib.sha256(raw).hexdigest()
+    return payload
+
+
+def verify_platform_backup(payload):
+    if not isinstance(payload,dict) or payload.get('format')!=BACKUP_FORMAT or not isinstance(payload.get('tables'),dict):
+        return False,'invalid_backup_format'
+    expected=str(payload.get('sha256') or '')
+    unsigned=dict(payload); unsigned.pop('sha256',None)
+    raw=json.dumps(unsigned,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode('utf-8')
+    if not expected or not hmac.compare_digest(expected,hashlib.sha256(raw).hexdigest()): return False,'backup_checksum_invalid'
+    counts=payload.get('counts') or {}
+    for name,rows in payload['tables'].items():
+        if not isinstance(rows,list) or int(counts.get(name,-1))!=len(rows): return False,'backup_count_mismatch'
+    return True,'ok'
 
 
 def _safe_ip(value, fallback='0.0.0.0'):
@@ -1426,8 +1493,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Referrer-Policy','strict-origin-when-cross-origin')
         self.send_header('Permissions-Policy','camera=(self), microphone=(), geolocation=(), payment=()')
         self.send_header('X-Permitted-Cross-Domain-Policies','none')
-        if _cookie_secure():
-            self.send_header('Strict-Transport-Security','max-age=31536000; includeSubDomains')
+        # HSTS é opt-in no aplicativo; enquanto o Cloudflare estiver sem HSTS, mantenha desligado.
+        if _cookie_secure() and os.environ.get('CLUBE_HSTS_ENABLED','0')=='1':
+            try: max_age=max(0,min(int(os.environ.get('CLUBE_HSTS_MAX_AGE','31536000') or 31536000),63072000))
+            except ValueError: max_age=31536000
+            value=f'max-age={max_age}'
+            if os.environ.get('CLUBE_HSTS_INCLUDE_SUBDOMAINS','1')=='1': value+='; includeSubDomains'
+            self.send_header('Strict-Transport-Security',value)
         if html_response:
             frame_ancestors = "'self'" if same_origin_embed else "'none'"
             self.send_header('Content-Security-Policy', f"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors {frame_ancestors}; form-action 'self'; script-src 'self' 'unsafe-inline' https://www.mercadopago.com https://cdn.jsdelivr.net https://connect.facebook.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://api.mercadopago.com https://graph.facebook.com https://www.facebook.com; frame-src 'self' https://www.facebook.com https://web.facebook.com; upgrade-insecure-requests")
@@ -1605,14 +1677,14 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/empresa/'):
             code=path.split('/empresa/',1)[1].strip().upper()
             return self.send_redirect('/join?campaign='+urllib.parse.quote(code),302)
-        if path == '/terms': return self.send_text((STATIC/'terms.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION))
+        if path == '/terms': return self.send_text(render_legal_template('terms.html'))
         if path == '/privacy':
             code=(qs.get('campaign') or [''])[0].upper().strip(); client='seu estabelecimento'
             if code:
                 with connect(DB_PATH) as conn:
                     c=conn.execute('SELECT name FROM campaigns WHERE code=? AND active=1',(code,)).fetchone()
                     if c:client=c['name']
-            template=(STATIC/'privacy.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION).replace('{{CLIENT_NAME}}',html.escape(str(client)))
+            template=render_legal_template('privacy.html').replace('{{CLIENT_NAME}}',html.escape(str(client)))
             return self.send_text(template)
         if path == '/join':
             code=(qs.get('campaign') or ['CAFE5'])[0].upper().strip()
@@ -2186,15 +2258,7 @@ class Handler(BaseHTTPRequestHandler):
                 pending=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE status IN ('pending','retry','processing')").fetchone()['n']; failed=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE status='failed'").fetchone()['n']
                 return self.send_json({'ok':True,'version':VERSION,'database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite','wallet':wallet_status(),'queue':{'pending':pending,'failed':failed},'encryption':bool(_secret_box()),'pii_encryption':pii_key_configured(),'meta':meta_embedded_signup_configured(),'global_email':email_configured(global_email_config()),'public_base_url':os.environ.get('PUBLIC_BASE_URL',''),'environment':os.environ.get('APP_ENV','production'),'backup':'available'})
         if path == '/api/manager/backup':
-            with connect(DB_PATH) as conn:
-                sess=self._require_auth(conn,'manager')
-                if not sess:return
-                cid=sess['company_id']; payload={'generated_at':now_iso(),'version':VERSION,'company_id':cid}
-                payload['campaigns']=[rowdict(r) for r in conn.execute('SELECT id,code,name,reward_name,goal,active,created_at FROM campaigns WHERE company_id=? ORDER BY id',(cid,)).fetchall()]
-                payload['staff']=[rowdict(r) for r in conn.execute("SELECT id,name,email,role,active,is_client_admin,campaign_id,created_at FROM users WHERE company_id=? ORDER BY id",(cid,)).fetchall()]
-                payload['customers']=[customer_rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.gender,cu.cpf,cu.cpf_enc,m.public_id,m.progress,m.rewards_available,m.status,m.campaign_id FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? ORDER BY cu.id''',(cid,)).fetchall()]
-                payload['transactions']=[rowdict(r) for r in conn.execute('''SELECT t.id,t.membership_id,t.user_id,t.type,t.value,t.previous_progress,t.new_progress,t.rewards_delta,t.note,t.created_at FROM transactions t JOIN memberships m ON m.id=t.membership_id JOIN campaigns c ON c.id=m.campaign_id WHERE c.company_id=? ORDER BY t.id''',(cid,)).fetchall()]
-                data=json.dumps(payload,ensure_ascii=False,indent=2).encode('utf-8'); return self.send_bytes(data,'application/json; charset=utf-8',headers={'Content-Disposition':f'attachment; filename="clube-backup-{datetime.now().strftime("%Y%m%d-%H%M")}.json"'})
+            return self.send_json({'ok':False,'error':'backup_requires_reauthentication'},405)
         if path == '/api/privacy/export':
             if not self._rate_ok('privacy-export',8,900,self._ip(),1800): return
             public_id=(qs.get('id') or [''])[0].strip(); cpf=normalize_cpf((qs.get('cpf') or [''])[0])
@@ -2530,7 +2594,7 @@ class Handler(BaseHTTPRequestHandler):
                         except Exception as exc:
                             print('[BILLING] MP_REUSE_CHECK_UNAVAILABLE type=%s' % type(exc).__name__,flush=True)
                 token=secrets.token_urlsafe(24); _,bcfg=billing_config(plan,billing_option); sid=insert_id(conn,'INSERT INTO subscription_signups(token,company_name,responsible_name,email,phone,document,password_hash,plan,loyalty_type,status,created_at,logo_image,billing_option,billing_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(token,company,name,email,phone,document,hash_password(password),plan,loyalty,'pending',now_ts(),logo_image,billing_option,bcfg['amount']))
-                conn.execute('INSERT INTO legal_acceptances(signup_id,email,terms_version,privacy_version,accepted_at,ip_address) VALUES(?,?,?,?,?,?)',(sid,email,'1.0','1.0',now_ts(),self._ip()))
+                conn.execute('INSERT INTO legal_acceptances(signup_id,email,terms_version,privacy_version,accepted_at,ip_address) VALUES(?,?,?,?,?,?)',(sid,email,TERMS_VERSION,PRIVACY_VERSION,now_ts(),self._ip()))
                 row=conn.execute('SELECT * FROM subscription_signups WHERE id=?',(sid,)).fetchone()
                 if plan=='beginner':
                     provision_signup(conn,row); return self.send_json({'ok':True,'active':True,'redirect':'/login'})
@@ -2870,7 +2934,7 @@ class Handler(BaseHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 u=conn.execute("SELECT id,company_id,email,role,active,campaign_id FROM users WHERE email=? AND active=1",(email,)).fetchone()
                 # Não revelamos se o endereço existe. A redefinição usa token único de 30 minutos.
-                if u and u['role']=='attendant':
+                if u and u['role'] in ('attendant','manager'):
                     raw=random_token(32); token_hash=hashlib.sha256(raw.encode()).hexdigest(); ts=now_ts()
                     smtp_cfg=global_email_config()
                     if email_configured(smtp_cfg):
@@ -3036,6 +3100,20 @@ class Handler(BaseHTTPRequestHandler):
             s=self._require_auth(conn)
             if not s: return
             if not self._require_csrf(s,payload): return self.send_json({'ok':False,'error':'csrf_failed'},403)
+            if path == '/api/manager/backup':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self._rate_ok('manager-backup',5,900,self._ip(),1800): return
+                password=str(payload.get('password') or '')
+                u=conn.execute("SELECT id,password_hash FROM users WHERE id=? AND role='manager' AND active=1",(s['user_id'],)).fetchone()
+                if not u or not verify_password(password,u['password_hash']):
+                    audit(conn,s['company_id'],s['user_id'],'platform_backup_denied','backup',None,details='reauth_failed',ip_address=self._ip())
+                    return self.send_json({'ok':False,'error':'invalid_password'},403)
+                backup=build_platform_backup(conn)
+                ok,reason=verify_platform_backup(backup)
+                if not ok: return self.send_json({'ok':False,'error':reason},500)
+                audit(conn,s['company_id'],s['user_id'],'platform_backup_download','backup',None,details=f'tables={len(backup["tables"])};sha256={backup["sha256"][:12]}',ip_address=self._ip())
+                data=json.dumps(backup,ensure_ascii=False,indent=2).encode('utf-8')
+                return self.send_bytes(data,'application/json; charset=utf-8',headers={'Content-Disposition':f'attachment; filename="fidelizae-backup-{datetime.now().strftime("%Y%m%d-%H%M")}.json"','Cache-Control':'no-store'})
             if path == '/api/admin/customers/import/preview':
                 if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 try: rows=_parse_import_file(payload.get('filename'),payload.get('data_base64'))
@@ -3992,7 +4070,7 @@ class Handler(BaseHTTPRequestHandler):
                         wa_phone_id,wa_waba_id,wa_token_enc,wa_version,wa_mode,wa_status,
                         ecommerce_platform,ecommerce_store_url,ecommerce_secret,ecommerce_status,now_ts()))
                 except integrity_errors(): return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
-                conn.execute('INSERT INTO legal_acceptances(campaign_id,user_id,terms_version,privacy_version,accepted_at,ip_address) VALUES(?,?,?,?,?,?)',(new_id,s['user_id'],'1.0','1.0',now_ts(),self._ip()))
+                conn.execute('INSERT INTO legal_acceptances(campaign_id,user_id,terms_version,privacy_version,accepted_at,ip_address) VALUES(?,?,?,?,?,?)',(new_id,s['user_id'],TERMS_VERSION,PRIVACY_VERSION,now_ts(),self._ip()))
                 audit(conn,s['company_id'],s['user_id'],'campaign_create','campaign',new_id,details=code,ip_address=self._ip())
                 return self.send_json({'ok':True,'campaign_id':new_id})
             if path == '/api/manager/campaign/update':
