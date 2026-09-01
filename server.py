@@ -3,6 +3,7 @@ import base64
 import binascii
 import html
 import hmac
+import gzip
 import io
 import ipaddress
 import json
@@ -41,7 +42,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v147'
+VERSION='v148'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -149,6 +150,83 @@ def verify_platform_backup(payload):
     for name,rows in payload['tables'].items():
         if not isinstance(rows,list) or int(counts.get(name,-1))!=len(rows): return False,'backup_count_mismatch'
     return True,'ok'
+
+
+# Cloudflare R2 (S3-compatible) automatic private backups.
+_R2_BACKUP_STATE={'configured':False,'last_success':None,'last_error':None,'last_key':None,'last_size':0}
+_R2_BACKUP_LOCK=threading.Lock()
+
+def r2_backup_config():
+    endpoint=(os.environ.get('R2_ENDPOINT') or '').strip().rstrip('/')
+    bucket=(os.environ.get('R2_BUCKET') or '').strip()
+    access=(os.environ.get('R2_ACCESS_KEY_ID') or '').strip()
+    secret=(os.environ.get('R2_SECRET_ACCESS_KEY') or '').strip()
+    account=(os.environ.get('R2_ACCOUNT_ID') or '').strip()
+    if not endpoint and account: endpoint=f'https://{account}.r2.cloudflarestorage.com'
+    return {'endpoint':endpoint,'bucket':bucket,'access_key':access,'secret_key':secret,'account_id':account}
+
+def r2_backup_configured():
+    c=r2_backup_config()
+    return bool(c['endpoint'] and c['bucket'] and c['access_key'] and c['secret_key'])
+
+def _aws_sigv4_headers(method,url,body,access_key,secret_key,content_type='application/gzip'):
+    parsed=urllib.parse.urlsplit(url); host=parsed.netloc
+    now=datetime.now(ZoneInfo('UTC')); amz_date=now.strftime('%Y%m%dT%H%M%SZ'); date_stamp=now.strftime('%Y%m%d')
+    payload_hash=hashlib.sha256(body).hexdigest()
+    canonical_uri=urllib.parse.quote(urllib.parse.unquote(parsed.path or '/'),safe='/-_.~')
+    canonical_query=parsed.query
+    headers={'content-type':content_type,'host':host,'x-amz-content-sha256':payload_hash,'x-amz-date':amz_date}
+    signed_headers=';'.join(sorted(headers))
+    canonical_headers=''.join(f'{k}:{headers[k].strip()}\n' for k in sorted(headers))
+    canonical_request='\n'.join([method,canonical_uri,canonical_query,canonical_headers,signed_headers,payload_hash])
+    scope=f'{date_stamp}/auto/s3/aws4_request'
+    string_to_sign='AWS4-HMAC-SHA256\n'+amz_date+'\n'+scope+'\n'+hashlib.sha256(canonical_request.encode()).hexdigest()
+    def sign(key,msg): return hmac.new(key,msg.encode(),hashlib.sha256).digest()
+    k_date=sign(('AWS4'+secret_key).encode(),date_stamp); k_region=sign(k_date,'auto'); k_service=sign(k_region,'s3'); k_signing=sign(k_service,'aws4_request')
+    signature=hmac.new(k_signing,string_to_sign.encode(),hashlib.sha256).hexdigest()
+    headers['authorization']=f'AWS4-HMAC-SHA256 Credential={access_key}/{scope}, SignedHeaders={signed_headers}, Signature={signature}'
+    return {('Authorization' if k=='authorization' else '-'.join(x.capitalize() for x in k.split('-'))):v for k,v in headers.items() if k!='host'}
+
+def r2_put_object(key,data,content_type='application/gzip'):
+    c=r2_backup_config(); key=str(key).lstrip('/')
+    url=f"{c['endpoint']}/{urllib.parse.quote(c['bucket'],safe='')}/{urllib.parse.quote(key,safe='/')}"
+    headers=_aws_sigv4_headers('PUT',url,data,c['access_key'],c['secret_key'],content_type)
+    req=urllib.request.Request(url,data=data,method='PUT',headers=headers)
+    with urllib.request.urlopen(req,timeout=45) as resp:
+        if int(resp.status) not in (200,201,204): raise RuntimeError(f'r2_http_{resp.status}')
+    return True
+
+def create_r2_backup(kind='daily'):
+    if not r2_backup_configured(): raise RuntimeError('r2_not_configured')
+    with _R2_BACKUP_LOCK:
+        with connect(DB_PATH) as conn: payload=build_platform_backup(conn)
+        ok,reason=verify_platform_backup(payload)
+        if not ok: raise RuntimeError(reason)
+        raw=json.dumps(payload,ensure_ascii=False,separators=(',',':')).encode('utf-8')
+        compressed=gzip.compress(raw,compresslevel=6,mtime=0)
+        now=datetime.now(ZoneInfo('America/Sao_Paulo'))
+        if kind=='monthly': key=f'monthly/{now:%Y-%m}/fidelizae-backup.json.gz'
+        else: key=f'daily/{now:%Y-%m-%d}/fidelizae-backup.json.gz'
+        r2_put_object(key,compressed)
+        _R2_BACKUP_STATE.update({'configured':True,'last_success':now.isoformat(timespec='seconds'),'last_error':None,'last_key':key,'last_size':len(compressed)})
+        print(f'[R2_BACKUP] success kind={kind} key={key} bytes={len(compressed)} sha256={payload["sha256"][:12]}')
+        return {'key':key,'bytes':len(compressed),'sha256':payload['sha256']}
+
+def r2_backup_status():
+    out=dict(_R2_BACKUP_STATE); out['configured']=r2_backup_configured(); out['bucket']=r2_backup_config().get('bucket') if out['configured'] else None
+    return out
+
+def run_scheduled_r2_backup_once():
+    if not r2_backup_configured(): return
+    now=datetime.now(ZoneInfo('America/Sao_Paulo'))
+    # Deterministic object keys make restarts idempotent. Run after 03:00 local time.
+    if now.hour < 3: return
+    today=now.strftime('%Y-%m-%d')
+    if getattr(run_scheduled_r2_backup_once,'_daily',None)!=today:
+        create_r2_backup('daily'); run_scheduled_r2_backup_once._daily=today
+    month=now.strftime('%Y-%m')
+    if now.day==1 and getattr(run_scheduled_r2_backup_once,'_monthly',None)!=month:
+        create_r2_backup('monthly'); run_scheduled_r2_backup_once._monthly=month
 
 
 def _safe_ip(value, fallback='0.0.0.0'):
@@ -1325,7 +1403,7 @@ def run_automations_once():
                     conn.execute('INSERT INTO automation_runs(rule_id,membership_id,period_key,created_at) VALUES(?,?,?,?) ON CONFLICT(rule_id,membership_id,period_key) DO NOTHING',(rule['id'],x['membership_id'],period,now_ts()))
 
 def background_loop():
-    tick=0
+    tick=299
     while True:
         try: process_message_queue_once()
         except Exception as exc: print('[QUEUE]',type(exc).__name__,str(exc)[:300])
@@ -1336,6 +1414,11 @@ def background_loop():
             except Exception as exc: print('[POINTS_EXPIRY]',type(exc).__name__,str(exc)[:300])
             try: run_automations_once()
             except Exception as exc: print('[AUTOMATION]',type(exc).__name__,str(exc)[:300])
+        if tick%300==0:
+            try: run_scheduled_r2_backup_once()
+            except Exception as exc:
+                _R2_BACKUP_STATE.update({'configured':r2_backup_configured(),'last_error':str(exc)[:300]})
+                print('[R2_BACKUP]',type(exc).__name__,str(exc)[:300])
         time.sleep(2)
 
 def card_record(conn,public_id):
@@ -2256,7 +2339,7 @@ class Handler(BaseHTTPRequestHandler):
                 sess=self._require_auth(conn,'manager')
                 if not sess:return
                 pending=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE status IN ('pending','retry','processing')").fetchone()['n']; failed=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE status='failed'").fetchone()['n']
-                return self.send_json({'ok':True,'version':VERSION,'database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite','wallet':wallet_status(),'queue':{'pending':pending,'failed':failed},'encryption':bool(_secret_box()),'pii_encryption':pii_key_configured(),'meta':meta_embedded_signup_configured(),'global_email':email_configured(global_email_config()),'public_base_url':os.environ.get('PUBLIC_BASE_URL',''),'environment':os.environ.get('APP_ENV','production'),'backup':'available'})
+                return self.send_json({'ok':True,'version':VERSION,'database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite','wallet':wallet_status(),'queue':{'pending':pending,'failed':failed},'encryption':bool(_secret_box()),'pii_encryption':pii_key_configured(),'meta':meta_embedded_signup_configured(),'global_email':email_configured(global_email_config()),'public_base_url':os.environ.get('PUBLIC_BASE_URL',''),'environment':os.environ.get('APP_ENV','production'),'backup':'available','r2_backup':r2_backup_status()})
         if path == '/api/manager/backup':
             return self.send_json({'ok':False,'error':'backup_requires_reauthentication'},405)
         if path == '/api/privacy/export':

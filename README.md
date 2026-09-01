@@ -1,5 +1,12 @@
-# Fidelizaê! v147
+# Fidelizaê! v148
 
+## v148
+- Backup automático privado no Cloudflare R2 usando as variáveis `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `R2_BUCKET` e `R2_ACCOUNT_ID`.
+- Gera backup diário compactado em `daily/YYYY-MM-DD/fidelizae-backup.json.gz`, compatível com a retenção de 30 dias configurada no bucket.
+- No primeiro dia de cada mês, também grava `monthly/YYYY-MM/fidelizae-backup.json.gz`, compatível com a retenção de 365 dias configurada no bucket.
+- O backup é validado por checksum SHA-256 antes do envio e o bucket permanece privado.
+- O Diagnóstico do Painel Fidelizaê! passa a mostrar se o R2 está configurado e a data/hora do último backup automático concluído na instância atual.
+- O botão de backup manual existente continua disponível e inalterado.
 
 ## v147
 - E-mails institucionais da própria plataforma usam a infraestrutura global da Brevo (`BREVO_API_KEY`) sem preencher ou reutilizar as credenciais das empresas clientes.
