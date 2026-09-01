@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v151'
+VERSION='v152'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -3210,26 +3210,6 @@ class Handler(BaseHTTPRequestHandler):
             s=self._require_auth(conn)
             if not s: return
             if not self._require_csrf(s,payload): return self.send_json({'ok':False,'error':'csrf_failed'},403)
-            if path == '/api/manager/sentry-test':
-                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
-                if not self._rate_ok('manager-sentry-test',5,900,self._ip(),1800): return
-                if not SENTRY_ENABLED or sentry_sdk is None:
-                    return self.send_json({'ok':False,'error':'sentry_not_configured'},503)
-                try:
-                    raise RuntimeError(f'Teste controlado do Sentry - Fidelizaê! {VERSION}')
-                except RuntimeError as exc:
-                    try:
-                        with sentry_sdk.new_scope() as scope:
-                            scope.set_tag('fidelizae_test','manager_controlled')
-                            scope.set_tag('release_version',VERSION)
-                            scope.set_context('test',{'source':'manager_diagnostics','user_id':int(s['user_id'])})
-                            event_id=sentry_sdk.capture_exception(exc)
-                        sentry_sdk.flush(timeout=2.0)
-                    except Exception as sentry_exc:
-                        print(f'[SENTRY] falha no teste controlado: {sentry_exc}')
-                        return self.send_json({'ok':False,'error':'sentry_test_failed'},502)
-                audit(conn,s['company_id'],s['user_id'],'sentry_test','platform',None,details=f'event_id={event_id or ""}',ip_address=self._ip())
-                return self.send_json({'ok':True,'event_id':str(event_id or ''),'version':VERSION})
             if path == '/api/manager/backup':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not self._rate_ok('manager-backup',5,900,self._ip(),1800): return

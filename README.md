@@ -1,4 +1,10 @@
-# Fidelizaê! v151
+# Fidelizaê! v152
+
+## v152
+- Removido o mecanismo temporário de teste do Sentry após validação bem-sucedida em produção.
+- Removidos o botão **TESTAR SENTRY**, o endpoint `POST /api/manager/sentry-test`, a exceção proposital e o registro de auditoria associado ao teste.
+- O monitoramento real do Sentry permanece ativo via `SENTRY_DSN`, com captura de exceções não tratadas, sem PII padrão e sem tracing/performance.
+- O Diagnóstico da plataforma continua exibindo o estado do Sentry como **Ativo**, **Configurado • indisponível** ou **Não configurado**.
 
 ## v151
 - Teste controlado do Sentry disponível somente para Administrador Geral autenticado no Painel Fidelizaê!.
