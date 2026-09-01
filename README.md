@@ -1,4 +1,14 @@
-# Fidelizaê! v149
+# Fidelizaê! v150
+
+
+## v150
+- Integração com Sentry para monitoramento externo de erros do backend em produção.
+- O monitoramento só é ativado quando `SENTRY_DSN` estiver configurado; sem a variável, a aplicação continua funcionando normalmente.
+- O DSN permanece exclusivamente em variável de ambiente e não é gravado no código-fonte.
+- Envio padrão de PII desativado (`send_default_pii=False`) e tracing/performance desativado (`traces_sample_rate=0.0`) para focar apenas em Error Monitoring.
+- Eventos recebem `environment` via `APP_ENV` (fallback `production`) e release `fidelizae@v150`.
+- Exceções não tratadas nas threads HTTP são capturadas pelo Sentry e continuam seguindo o tratamento padrão do servidor.
+- Dependência adicionada: `sentry-sdk>=2,<3`. O backend atual usa `ThreadingHTTPServer` da biblioteca padrão; não há dependência Flask.
 
 ## v149
 - Correção do utilitário `tools/backup_restore.py`: agora `validate` e `restore-sqlite` aceitam diretamente backups compactados `.json.gz` baixados do Cloudflare R2, além do JSON puro.

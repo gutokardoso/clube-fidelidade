@@ -30,6 +30,11 @@ import secrets
 
 import qrcode
 
+try:
+    import sentry_sdk
+except ImportError:
+    sentry_sdk = None
+
 from db import DEFAULT_DB, init_db, ensure_configured_staff, connect, create_session, get_session, audit, insert_id, begin_write, integrity_errors, fetchone_for_update
 from security import verify_password, hash_password, random_token, now_ts, password_is_strong, generate_totp_secret, verify_totp, encrypt_pii, decrypt_pii, pii_lookup_hash, pii_key_configured
 from antifraud import validate_stamp, FraudError
@@ -42,10 +47,32 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v149'
+VERSION='v150'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
+
+
+def init_sentry():
+    """Inicializa monitoramento de erros somente quando SENTRY_DSN estiver configurado."""
+    dsn=(os.environ.get('SENTRY_DSN') or '').strip()
+    if not dsn:
+        return False
+    if sentry_sdk is None:
+        print('[SENTRY] SENTRY_DSN configurado, mas sentry-sdk não está instalado')
+        return False
+    sentry_sdk.init(
+        dsn=dsn,
+        environment=(os.environ.get('APP_ENV') or 'production').strip() or 'production',
+        release=f'fidelizae@{VERSION}',
+        send_default_pii=False,
+        traces_sample_rate=0.0,
+    )
+    print(f'[SENTRY] error monitoring ativo release=fidelizae@{VERSION}')
+    return True
+
+
+SENTRY_ENABLED=init_sentry()
 
 
 def jdump(obj):
@@ -4443,6 +4470,17 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({'ok':False,'error':'not_found'},404)
 
 
+class SentryHTTPServer(ThreadingHTTPServer):
+    """Captura exceções não tratadas das threads HTTP sem alterar a resposta padrão do servidor."""
+    def handle_error(self, request, client_address):
+        if SENTRY_ENABLED and sentry_sdk is not None:
+            try:
+                sentry_sdk.capture_exception()
+            except Exception as exc:
+                print(f'[SENTRY] falha ao registrar exceção: {exc}')
+        return super().handle_error(request, client_address)
+
+
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument('--host',default=os.environ.get('HOST','0.0.0.0')); parser.add_argument('--port',type=int,default=int(os.environ.get('PORT','8000'))); parser.add_argument('--init-only',action='store_true'); args=parser.parse_args()
     init_db(DB_PATH,seed=True)
@@ -4450,7 +4488,7 @@ def main():
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
     threading.Thread(target=background_loop,daemon=True,name='clube-worker').start()
-    srv=ThreadingHTTPServer((args.host,args.port),Handler)
+    srv=SentryHTTPServer((args.host,args.port),Handler)
     print(f'Fidelizaê! {VERSION} em http://{args.host}:{args.port}')
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
