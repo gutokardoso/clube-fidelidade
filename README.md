@@ -1,4 +1,23 @@
-# Fidelizaê! v152
+# Fidelizaê! v153
+
+## v153
+- Corrigido o marcador documental antigo **“Versão atual: v142”** para a versão corrente **v153**.
+- Implementado monitoramento externo de uptime por **GitHub Actions**, executado aproximadamente a cada 5 minutos a partir de infraestrutura externa ao Railway.
+- O monitor consulta `https://app.fidelizae.com.br/api/health`, faz novas tentativas em falhas transitórias e valida tanto o HTTP 200 quanto o JSON `ok=true`.
+- Em indisponibilidade, o workflow cria ou atualiza uma única issue **“Produção indisponível”** no repositório; na recuperação, comenta e fecha automaticamente a issue.
+- O endpoint `/api/health` agora testa também a conexão com o banco (`SELECT 1`) e retorna **HTTP 503** quando a aplicação está acessível mas o banco não está, evitando falso positivo de disponibilidade.
+- A resposta saudável do health check informa apenas dados operacionais não sensíveis: status, serviço, versão, tipo de banco e latência do teste ao banco.
+- HSTS permanece opt-in. Pode ser ativado posteriormente com `CLUBE_HSTS_ENABLED=1` após confirmar que todos os subdomínios que serão cobertos possuem HTTPS válido.
+
+### Monitoramento externo de uptime
+O arquivo `.github/workflows/uptime-monitor.yml` monitora a produção de fora do Railway usando os runners do GitHub. Para ficar ativo, publique esta versão no branch padrão do repositório e mantenha **GitHub Actions** habilitado. O workflow também pode ser disparado manualmente em **Actions > Fidelizaê! Uptime Monitor > Run workflow**.
+
+Quando houver falha persistente após as tentativas, é aberta uma issue com o link da execução. Quando o serviço voltar a responder normalmente, a issue é fechada automaticamente. Para receber também notificações por e-mail das issues/workflows, mantenha as notificações do repositório habilitadas na sua conta GitHub.
+
+### HSTS
+HSTS (`Strict-Transport-Security`) instrui o navegador a acessar o domínio exclusivamente por HTTPS durante o período configurado, mesmo que alguém tente abrir uma URL `http://`. Isso reduz ataques de downgrade/SSL stripping. A aplicação já suporta `CLUBE_HSTS_ENABLED=1`, `CLUBE_HSTS_MAX_AGE` e `CLUBE_HSTS_INCLUDE_SUBDOMAINS`.
+
+Como `includeSubDomains` também força HTTPS em todos os subdomínios, habilite HSTS somente depois de confirmar que todos eles possuem HTTPS válido. O recurso não substitui o SSL/TLS do Cloudflare; ele adiciona uma proteção persistente no navegador.
 
 ## v152
 - Removido o mecanismo temporário de teste do Sentry após validação bem-sucedida em produção.
@@ -216,7 +235,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v142
+**Versão atual:** v153
 
 
 ## Novidades da v117

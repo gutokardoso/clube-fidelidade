@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v152'
+VERSION='v153'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -1843,7 +1843,21 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_bytes(target.read_bytes(),ctype,200,{'Cache-Control':'public, max-age=3600'})
         if path == '/reset-password':
             target=STATIC/'reset-password.html'; return self.send_text(target.read_text(encoding='utf-8').replace('{{VERSION}}',VERSION),200,'text/html; charset=utf-8')
-        if path == '/api/health': return self.send_json({'ok':True,'version':VERSION,'database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'})
+        if path == '/api/health':
+            # Endpoint público e sem dados sensíveis para monitoramento externo de disponibilidade.
+            # Além de responder HTTP, valida uma operação mínima no banco para detectar indisponibilidade parcial.
+            db_kind='postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite'
+            started=time.monotonic()
+            try:
+                with connect(DB_PATH) as health_conn:
+                    row=health_conn.execute('SELECT 1 AS ok').fetchone()
+                    if not row:
+                        raise RuntimeError('database_health_check_failed')
+                latency_ms=max(0,round((time.monotonic()-started)*1000))
+                return self.send_json({'ok':True,'status':'healthy','service':'fidelizae','version':VERSION,'database':db_kind,'database_latency_ms':latency_ms})
+            except Exception:
+                latency_ms=max(0,round((time.monotonic()-started)*1000))
+                return self.send_json({'ok':False,'status':'unhealthy','service':'fidelizae','version':VERSION,'database':'unavailable','database_latency_ms':latency_ms},503)
         if path == '/api/session':
             with connect(DB_PATH) as conn:
                 s=self._session(conn)
