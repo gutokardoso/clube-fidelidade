@@ -1,4 +1,22 @@
-# Fidelizaê! v153
+# Fidelizaê! v155
+
+## v155
+- Comunicação do Painel Fidelizaê! agora possui submenu **Enviar e-mail** e **Enviar Alerta**.
+- Novo alerta interno gratuito para todas as empresas ativas ou empresas específicas, sem consumo de envio de e-mail.
+- Alertas aparecem no painel dos administradores das empresas, com prioridade, histórico e leitura individual por administrador.
+- Alertas institucionais são auditáveis e podem ser marcados como lidos sem afetar outros administradores da mesma empresa.
+
+
+
+## v154
+- Central de Comunicação no Painel Fidelizaê! para mensagens institucionais da plataforma às empresas cadastradas.
+- Envio individual pelo botão **Enviar e-mail** dentro de Detalhes da empresa e envio coletivo pela nova opção **Comunicação** do menu superior.
+- Seleção manual de múltiplas empresas ou disparo filtrado por plano, status e tipo de programa.
+- Pré-visualização do e-mail, assunto, título, mensagem e CTA opcional com link HTTPS.
+- Modelos prontos e modelos personalizados reutilizáveis.
+- Histórico auditável de disparos com status por destinatário (pendente, enviado, nova tentativa ou falha).
+- Os disparos administrativos usam exclusivamente o e-mail global do Fidelizaê!, mantendo separadas as credenciais de comunicação das empresas clientes.
+- Processamento em fila com tentativas automáticas, evitando travar o painel em envios coletivos.
 
 ## v153
 - Corrigido o marcador documental antigo **“Versão atual: v142”** para a versão corrente **v153**.
@@ -235,7 +253,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v153
+**Versão atual:** v155
 
 
 ## Novidades da v117

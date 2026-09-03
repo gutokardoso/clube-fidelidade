@@ -843,6 +843,84 @@ def init_db(db_path=None, seed=True):
             ); CREATE INDEX IF NOT EXISTS idx_legal_acceptances_campaign ON legal_acceptances(campaign_id,accepted_at DESC);''')
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v131',?)",(now_ts(),))
 
+        # Migração v154: comunicação institucional Fidelizaê! -> empresas.
+        if _is_postgres(target):
+            conn.executescript("""CREATE TABLE IF NOT EXISTS platform_email_sends (
+              id BIGSERIAL PRIMARY KEY, company_id BIGINT, user_id BIGINT, subject TEXT NOT NULL, title TEXT, body TEXT NOT NULL,
+              cta_text TEXT, cta_url TEXT, target_mode TEXT NOT NULL DEFAULT 'specific', filter_plan TEXT, filter_status TEXT,
+              filter_loyalty TEXT, recipient_count INTEGER NOT NULL DEFAULT 0, created_at BIGINT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_platform_email_sends_time ON platform_email_sends(created_at DESC);
+            CREATE TABLE IF NOT EXISTS platform_email_recipients (
+              id BIGSERIAL PRIMARY KEY, send_id BIGINT NOT NULL REFERENCES platform_email_sends(id) ON DELETE CASCADE,
+              campaign_id BIGINT REFERENCES campaigns(id) ON DELETE SET NULL, company_name TEXT NOT NULL, contact_name TEXT,
+              email TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', queue_id BIGINT, last_error TEXT, created_at BIGINT NOT NULL, sent_at BIGINT
+            );
+            CREATE INDEX IF NOT EXISTS idx_platform_email_recipients_send ON platform_email_recipients(send_id,status);
+            CREATE TABLE IF NOT EXISTS platform_email_templates (
+              id BIGSERIAL PRIMARY KEY, company_id BIGINT, name TEXT NOT NULL, subject TEXT NOT NULL, title TEXT, body TEXT NOT NULL,
+              cta_text TEXT, cta_url TEXT, active INTEGER NOT NULL DEFAULT 1, created_at BIGINT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_platform_email_templates_company ON platform_email_templates(company_id,active,created_at DESC);
+            """)
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v154',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.executescript("""CREATE TABLE IF NOT EXISTS platform_email_sends (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER, user_id INTEGER, subject TEXT NOT NULL, title TEXT, body TEXT NOT NULL,
+              cta_text TEXT, cta_url TEXT, target_mode TEXT NOT NULL DEFAULT 'specific', filter_plan TEXT, filter_status TEXT,
+              filter_loyalty TEXT, recipient_count INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_platform_email_sends_time ON platform_email_sends(created_at DESC);
+            CREATE TABLE IF NOT EXISTS platform_email_recipients (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, send_id INTEGER NOT NULL REFERENCES platform_email_sends(id) ON DELETE CASCADE,
+              campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL, company_name TEXT NOT NULL, contact_name TEXT,
+              email TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', queue_id INTEGER, last_error TEXT, created_at INTEGER NOT NULL, sent_at INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_platform_email_recipients_send ON platform_email_recipients(send_id,status);
+            CREATE TABLE IF NOT EXISTS platform_email_templates (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER, name TEXT NOT NULL, subject TEXT NOT NULL, title TEXT, body TEXT NOT NULL,
+              cta_text TEXT, cta_url TEXT, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_platform_email_templates_company ON platform_email_templates(company_id,active,created_at DESC);
+            """)
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v154',?)",(now_ts(),))
+
+        # Migração v155: alertas internos Fidelizaê! -> administradores das empresas.
+        if _is_postgres(target):
+            conn.executescript("""CREATE TABLE IF NOT EXISTS platform_alert_sends (
+              id BIGSERIAL PRIMARY KEY, company_id BIGINT, user_id BIGINT, title TEXT NOT NULL, message TEXT NOT NULL,
+              severity TEXT NOT NULL DEFAULT 'info', target_mode TEXT NOT NULL DEFAULT 'specific', recipient_count INTEGER NOT NULL DEFAULT 0, created_at BIGINT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_platform_alert_sends_time ON platform_alert_sends(created_at DESC);
+            CREATE TABLE IF NOT EXISTS platform_alert_recipients (
+              id BIGSERIAL PRIMARY KEY, send_id BIGINT NOT NULL REFERENCES platform_alert_sends(id) ON DELETE CASCADE,
+              campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, company_name TEXT NOT NULL, created_at BIGINT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_platform_alert_recipients_campaign ON platform_alert_recipients(campaign_id,created_at DESC);
+            CREATE TABLE IF NOT EXISTS platform_alert_reads (
+              alert_recipient_id BIGINT NOT NULL REFERENCES platform_alert_recipients(id) ON DELETE CASCADE,
+              user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE, read_at BIGINT NOT NULL, PRIMARY KEY(alert_recipient_id,user_id)
+            );
+            """)
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v155',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.executescript("""CREATE TABLE IF NOT EXISTS platform_alert_sends (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER, user_id INTEGER, title TEXT NOT NULL, message TEXT NOT NULL,
+              severity TEXT NOT NULL DEFAULT 'info', target_mode TEXT NOT NULL DEFAULT 'specific', recipient_count INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_platform_alert_sends_time ON platform_alert_sends(created_at DESC);
+            CREATE TABLE IF NOT EXISTS platform_alert_recipients (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, send_id INTEGER NOT NULL REFERENCES platform_alert_sends(id) ON DELETE CASCADE,
+              campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, company_name TEXT NOT NULL, created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_platform_alert_recipients_campaign ON platform_alert_recipients(campaign_id,created_at DESC);
+            CREATE TABLE IF NOT EXISTS platform_alert_reads (
+              alert_recipient_id INTEGER NOT NULL REFERENCES platform_alert_recipients(id) ON DELETE CASCADE,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, read_at INTEGER NOT NULL, PRIMARY KEY(alert_recipient_id,user_id)
+            );
+            """)
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v155',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:

@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v153'
+VERSION='v155'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -744,6 +744,34 @@ def send_campaign_email(to_email, to_name, message, image_data=None, subject='Me
     return send_email_message(msg, smtp_config)
 
 
+
+def send_platform_company_email(to_email, contact_name, company_name, subject, title, body, cta_text='', cta_url='', config=None):
+    # Comunicação institucional da plataforma para a empresa cliente.
+    cfg=config or global_email_config()
+    msg=EmailMessage()
+    msg['Subject']=str(subject or 'Fidelizaê!')[:180]
+    msg['To']=to_email
+    reply_to=(cfg.get('reply_to') or '').strip()
+    if reply_to: msg['Reply-To']=reply_to
+    person=(str(contact_name or '').strip() or 'Responsável')
+    company=str(company_name or '').strip()
+    clean_body=str(body or '').strip()
+    text=f"Olá, {person}!\n\n{clean_body}"
+    if cta_text and cta_url: text+=f"\n\n{cta_text}: {cta_url}"
+    text+='\n\nEquipe Fidelizaê!\nFidelidade que marca pontos.'
+    msg.set_content(text)
+    safe_title=html.escape(str(title or subject or 'Fidelizaê!'))
+    paragraphs=''.join('<p style="margin:0 0 16px;line-height:1.6">'+html.escape(part).replace('\n','<br>')+'</p>' for part in clean_body.split('\n\n') if part.strip())
+    button=''
+    if cta_text and cta_url:
+        safe_url=html.escape(str(cta_url),quote=True); safe_cta=html.escape(str(cta_text))
+        button='<p style="margin:24px 0"><a href="'+safe_url+'" style="display:inline-block;background:#f28c28;color:#fff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:10px">'+safe_cta+'</a></p>'
+    greeting=html.escape(person)
+    company_line=('<div style="font-size:13px;color:#6b7280;margin-top:4px">'+html.escape(company)+'</div>') if company else ''
+    html_body='<!doctype html><html><body style="margin:0;background:#f6f6f6;font-family:Arial,sans-serif;color:#172033"><div style="max-width:640px;margin:0 auto;padding:28px 16px"><div style="background:#fff;border:1px solid #ececec;border-radius:16px;overflow:hidden"><div style="padding:24px 28px;background:#fff6dd;border-bottom:1px solid #f2dfaa"><div style="font-size:22px;font-weight:800;color:#ef7d00">FIDELIZAÊ!</div><div style="font-size:13px;color:#6b7280">Fidelidade que marca pontos.</div></div><div style="padding:28px"><div style="font-size:15px;margin-bottom:18px">Olá, '+greeting+'!'+company_line+'</div><h1 style="font-size:24px;line-height:1.25;margin:0 0 20px">'+safe_title+'</h1>'+paragraphs+button+'<p style="margin:28px 0 0;line-height:1.6;color:#6b7280">Equipe Fidelizaê!</p></div></div></div></body></html>'
+    msg.add_alternative(html_body,subtype='html')
+    return send_email_message(msg,cfg)
+
 def send_password_recovery_email(email, reset_token, smtp_config=None):
     if not email_configured(smtp_config):
         return {'sent':False,'reason':'smtp_not_configured'}
@@ -1261,6 +1289,8 @@ def _queue_send(item, conn):
             response=send_whatsapp_cloud(item['recipient'],payload.get('message',''),whatsapp_config_for_client(conn,campaign_id))
             return {'sent':True,'message_id':((response.get('messages') or [{}])[0]).get('id')}
         except Exception as exc:return {'sent':False,'reason':str(exc)[:500]}
+    if kind=='platform_company_email':
+        return send_platform_company_email(item['recipient'],payload.get('contact_name',''),payload.get('company_name',''),payload.get('subject','Fidelizaê!'),payload.get('title',''),payload.get('body',''),payload.get('cta_text',''),payload.get('cta_url',''),global_email_config())
     if kind=='attendant_welcome':
         return send_attendant_welcome_email(payload['name'],item['recipient'],payload['client_name'],global_email_config())
     if kind=='password_recovery':
@@ -1309,10 +1339,16 @@ def process_message_queue_once(limit=15):
             try: result=_queue_send(item,conn)
             except Exception as exc: result={'sent':False,'reason':type(exc).__name__+':'+str(exc)[:300]}
             if result.get('sent'):
-                conn.execute("UPDATE message_queue SET status='sent',sent_at=?,last_error=NULL WHERE id=? AND status='processing'",(now_ts(),item_id))
+                sent_at=now_ts()
+                conn.execute("UPDATE message_queue SET status='sent',sent_at=?,last_error=NULL WHERE id=? AND status='processing'",(sent_at,item_id))
+                if item.get('kind')=='platform_company_email':
+                    conn.execute("UPDATE platform_email_recipients SET status='sent',sent_at=?,last_error=NULL WHERE queue_id=?",(sent_at,item_id))
             else:
                 attempts=int(item.get('attempts') or 0); status='failed' if attempts>=4 else 'retry'; delay=min(900,30*(2**max(0,attempts-1)))
-                conn.execute("UPDATE message_queue SET status=?,last_error=?,available_at=? WHERE id=? AND status='processing'",(status,result.get('reason','failed'),now_ts()+delay,item_id))
+                reason=result.get('reason','failed')
+                conn.execute("UPDATE message_queue SET status=?,last_error=?,available_at=? WHERE id=? AND status='processing'",(status,reason,now_ts()+delay,item_id))
+                if item.get('kind')=='platform_company_email':
+                    conn.execute("UPDATE platform_email_recipients SET status=?,last_error=? WHERE queue_id=?",(status,str(reason)[:500],item_id))
             conn.commit()
 
 def customer_segment(last_activity,created_at,visits,reward_ready,almost_reward,now=None):
@@ -2413,6 +2449,8 @@ class Handler(BaseHTTPRequestHandler):
                 campaigns=[rowdict(r) for r in conn.execute("""SELECT c.*,
                     (SELECT COUNT(*) FROM memberships m WHERE m.campaign_id=c.id) card_count,
                     (SELECT COUNT(*) FROM users ux WHERE ux.campaign_id=c.id AND ux.role='attendant' AND ux.active=1) staff_count,
+                    (SELECT ux.email FROM users ux WHERE ux.campaign_id=c.id AND ux.role='attendant' AND ux.active=1 ORDER BY ux.is_client_admin DESC,ux.id ASC LIMIT 1) contact_email,
+                    (SELECT ux.name FROM users ux WHERE ux.campaign_id=c.id AND ux.role='attendant' AND ux.active=1 ORDER BY ux.is_client_admin DESC,ux.id ASC LIMIT 1) contact_name,
                     (SELECT COALESCE(SUM(CASE WHEN t.type='stamp' THEN t.value WHEN t.type='adjustment' THEN t.value ELSE 0 END),0)
                        FROM transactions t JOIN memberships m2 ON m2.id=t.membership_id WHERE m2.campaign_id=c.id) stamp_count
                     FROM campaigns c WHERE c.company_id=? ORDER BY c.id DESC""",(cid,)).fetchall()]
@@ -2435,6 +2473,51 @@ class Handler(BaseHTTPRequestHandler):
                     c['whatsapp_access_token_enc']=None
                 staff=[rowdict(r) for r in conn.execute('''SELECT u.id,u.name,u.email,u.role,u.active,u.is_client_admin,u.created_at,u.campaign_id,c.name client_name FROM users u LEFT JOIN campaigns c ON c.id=u.campaign_id WHERE u.company_id=? ORDER BY u.role,u.name''',(cid,)).fetchall()]
                 return self.send_json({'ok':True,'metrics':metrics,'campaigns':campaigns,'staff':staff})
+        if path == '/api/manager/communication':
+            with connect(DB_PATH) as conn:
+                s=self._require_auth(conn,'manager')
+                if not s:return
+                companies=[rowdict(r) for r in conn.execute("""SELECT c.id,c.name,c.code,c.plan,c.loyalty_type,c.active,
+                    (SELECT ux.email FROM users ux WHERE ux.campaign_id=c.id AND ux.role='attendant' AND ux.active=1 ORDER BY ux.is_client_admin DESC,ux.id ASC LIMIT 1) contact_email,
+                    (SELECT ux.name FROM users ux WHERE ux.campaign_id=c.id AND ux.role='attendant' AND ux.active=1 ORDER BY ux.is_client_admin DESC,ux.id ASC LIMIT 1) contact_name
+                    FROM campaigns c WHERE c.company_id=? ORDER BY c.active DESC,c.name""",(s['company_id'],)).fetchall()]
+                templates=[rowdict(r) for r in conn.execute("SELECT id,name,subject,title,body,cta_text,cta_url,created_at FROM platform_email_templates WHERE company_id=? AND active=1 ORDER BY id DESC",(s['company_id'],)).fetchall()]
+                sends=[rowdict(r) for r in conn.execute("""SELECT ps.id,ps.subject,ps.title,ps.target_mode,ps.filter_plan,ps.filter_status,ps.filter_loyalty,ps.recipient_count,ps.created_at,
+                    COALESCE((SELECT COUNT(*) FROM platform_email_recipients pr WHERE pr.send_id=ps.id AND pr.status='sent'),0) sent_count,
+                    COALESCE((SELECT COUNT(*) FROM platform_email_recipients pr WHERE pr.send_id=ps.id AND pr.status='failed'),0) failed_count,
+                    COALESCE((SELECT COUNT(*) FROM platform_email_recipients pr WHERE pr.send_id=ps.id AND pr.status IN ('pending','retry','processing')),0) pending_count
+                    FROM platform_email_sends ps WHERE ps.company_id=? ORDER BY ps.id DESC LIMIT 100""",(s['company_id'],)).fetchall()]
+                return self.send_json({'ok':True,'email_configured':email_configured(global_email_config()),'companies':companies,'templates':templates,'history':sends})
+        if path == '/api/manager/platform-alerts':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'manager')
+                if not sess:return
+                companies=[rowdict(r) for r in conn.execute("SELECT id,name,code,plan,loyalty_type,active FROM campaigns WHERE company_id=? ORDER BY active DESC,name",(sess['company_id'],)).fetchall()]
+                history=[rowdict(r) for r in conn.execute("""SELECT ps.id,ps.title,ps.message,ps.severity,ps.target_mode,ps.recipient_count,ps.created_at,
+                    COALESCE((SELECT COUNT(*) FROM platform_alert_reads rd JOIN platform_alert_recipients pr ON pr.id=rd.alert_recipient_id WHERE pr.send_id=ps.id),0) read_count
+                    FROM platform_alert_sends ps WHERE ps.company_id=? ORDER BY ps.id DESC LIMIT 100""",(sess['company_id'],)).fetchall()]
+                return self.send_json({'ok':True,'companies':companies,'history':history})
+        if path == '/api/client-admin/platform-alerts':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not sess['is_client_admin'] or not sess['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                rows=[rowdict(r) for r in conn.execute("""SELECT pr.id,ps.title,ps.message,ps.severity,ps.created_at,
+                    CASE WHEN rd.alert_recipient_id IS NULL THEN 0 ELSE 1 END is_read
+                    FROM platform_alert_recipients pr JOIN platform_alert_sends ps ON ps.id=pr.send_id
+                    LEFT JOIN platform_alert_reads rd ON rd.alert_recipient_id=pr.id AND rd.user_id=?
+                    WHERE pr.campaign_id=? ORDER BY ps.id DESC LIMIT 50""",(sess['user_id'],sess['campaign_id'])).fetchall()]
+                return self.send_json({'ok':True,'alerts':rows,'unread_count':sum(1 for r in rows if not int(r.get('is_read') or 0))})
+        if path == '/api/manager/communication/recipients':
+            with connect(DB_PATH) as conn:
+                s=self._require_auth(conn,'manager')
+                if not s:return
+                try: send_id=int((qs.get('send_id') or ['0'])[0])
+                except (TypeError,ValueError):send_id=0
+                exists=conn.execute('SELECT id FROM platform_email_sends WHERE id=? AND company_id=?',(send_id,s['company_id'])).fetchone()
+                if not exists:return self.send_json({'ok':False,'error':'send_not_found'},404)
+                rows=[rowdict(r) for r in conn.execute("SELECT campaign_id,company_name,contact_name,email,status,last_error,created_at,sent_at FROM platform_email_recipients WHERE send_id=? ORDER BY id",(send_id,)).fetchall()]
+                return self.send_json({'ok':True,'recipients':rows})
         if path == '/api/client-admin/company':
             with connect(DB_PATH) as conn:
                 s=self._require_auth(conn,'attendant')
@@ -4136,6 +4219,110 @@ class Handler(BaseHTTPRequestHandler):
                 u=conn.execute("SELECT id FROM users WHERE id=? AND campaign_id=? AND role='attendant' AND is_client_admin=0",(uid,s['campaign_id'])).fetchone()
                 if not u:return self.send_json({'ok':False,'error':'user_not_found'},404)
                 conn.execute('DELETE FROM users WHERE id=?',(uid,)); audit(conn,s['company_id'],s['user_id'],'client_admin_staff_delete','user',uid,ip_address=self._ip());return self.send_json({'ok':True})
+            if path == '/api/manager/platform-alerts/send':
+                if s['role']!='manager':return self.send_json({'ok':False,'error':'forbidden'},403)
+                title=str(payload.get('title','')).strip()[:180];message=str(payload.get('message','')).strip()[:6000];severity=str(payload.get('severity','info')).strip().lower();mode=str(payload.get('target_mode','specific')).strip().lower()
+                if not title or not message:return self.send_json({'ok':False,'error':'title_and_message_required'},400)
+                if severity not in ('info','important','urgent'):return self.send_json({'ok':False,'error':'invalid_severity'},400)
+                if mode not in ('specific','all'):return self.send_json({'ok':False,'error':'invalid_target_mode'},400)
+                sql='SELECT id,name,active FROM campaigns WHERE company_id=?';params=[s['company_id']]
+                if mode=='specific':
+                    raw_ids=payload.get('campaign_ids') or [];ids=[]
+                    for x in raw_ids:
+                        try:ids.append(int(x))
+                        except (TypeError,ValueError):pass
+                    ids=list(dict.fromkeys(ids))[:1000]
+                    if not ids:return self.send_json({'ok':False,'error':'recipient_required'},400)
+                    sql+=' AND id IN ('+','.join('?' for _ in ids)+')';params.extend(ids)
+                else:
+                    sql+=' AND active=1'
+                sql+=' ORDER BY name'
+                targets=[rowdict(r) for r in conn.execute(sql,tuple(params)).fetchall()]
+                if not targets:return self.send_json({'ok':False,'error':'no_recipients'},400)
+                send_id=insert_id(conn,"INSERT INTO platform_alert_sends(company_id,user_id,title,message,severity,target_mode,recipient_count,created_at) VALUES(?,?,?,?,?,?,?,?)",(s['company_id'],s['user_id'],title,message,severity,mode,len(targets),now_ts()))
+                created=now_ts()
+                for t in targets:
+                    conn.execute("INSERT INTO platform_alert_recipients(send_id,campaign_id,company_name,created_at) VALUES(?,?,?,?)",(send_id,t['id'],t['name'],created))
+                audit(conn,s['company_id'],s['user_id'],'platform_alert_send','platform_alert_send',send_id,details=f'recipients={len(targets)};mode={mode};severity={severity};title={title[:80]}',ip_address=self._ip())
+                return self.send_json({'ok':True,'send_id':send_id,'recipient_count':len(targets)})
+            if path == '/api/client-admin/platform-alerts/read':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                try:rid=int(payload.get('alert_id') or 0)
+                except (TypeError,ValueError):rid=0
+                owned=conn.execute('SELECT id FROM platform_alert_recipients WHERE id=? AND campaign_id=?',(rid,s['campaign_id'])).fetchone()
+                if not owned:return self.send_json({'ok':False,'error':'alert_not_found'},404)
+                if str(DB_PATH).startswith(('postgres://','postgresql://')):
+                    conn.execute('INSERT INTO platform_alert_reads(alert_recipient_id,user_id,read_at) VALUES(?,?,?) ON CONFLICT (alert_recipient_id,user_id) DO UPDATE SET read_at=EXCLUDED.read_at',(rid,s['user_id'],now_ts()))
+                else:
+                    conn.execute('INSERT OR REPLACE INTO platform_alert_reads(alert_recipient_id,user_id,read_at) VALUES(?,?,?)',(rid,s['user_id'],now_ts()))
+                audit(conn,s['company_id'],s['user_id'],'platform_alert_read','platform_alert_recipient',rid,ip_address=self._ip())
+                return self.send_json({'ok':True})
+            if path == '/api/manager/communication/send':
+                if s['role']!='manager':return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                cfg=global_email_config()
+                if not email_configured(cfg):return self.send_json({'ok':False,'error':'global_email_not_configured'},503)
+                subject=str(payload.get('subject','')).strip()[:180]; title=str(payload.get('title','')).strip()[:180]; body=str(payload.get('body','')).strip()[:12000]
+                cta_text=str(payload.get('cta_text','')).strip()[:80]; cta_url=str(payload.get('cta_url','')).strip()[:1000]
+                if not subject or not body:return self.send_json({'ok':False,'error':'subject_and_body_required'},400)
+                if bool(cta_text)!=bool(cta_url):return self.send_json({'ok':False,'error':'cta_incomplete'},400)
+                if cta_url and not re.match(r'^https://',cta_url,re.I):return self.send_json({'ok':False,'error':'cta_url_must_be_https'},400)
+                mode=str(payload.get('target_mode','specific')).strip().lower()
+                if mode not in ('specific','all'):return self.send_json({'ok':False,'error':'invalid_target_mode'},400)
+                plan=str(payload.get('filter_plan','all')).strip().lower(); status=str(payload.get('filter_status','active')).strip().lower(); loyalty=str(payload.get('filter_loyalty','all')).strip().lower()
+                if plan not in ('all','beginner','intermediate','pro') or status not in ('all','active','inactive') or loyalty not in ('all','stamps','points'):return self.send_json({'ok':False,'error':'invalid_filters'},400)
+                sql="""SELECT c.id,c.name,c.plan,c.loyalty_type,c.active,
+                    (SELECT ux.email FROM users ux WHERE ux.campaign_id=c.id AND ux.role='attendant' AND ux.active=1 ORDER BY ux.is_client_admin DESC,ux.id ASC LIMIT 1) contact_email,
+                    (SELECT ux.name FROM users ux WHERE ux.campaign_id=c.id AND ux.role='attendant' AND ux.active=1 ORDER BY ux.is_client_admin DESC,ux.id ASC LIMIT 1) contact_name
+                    FROM campaigns c WHERE c.company_id=?"""
+                params=[s['company_id']]
+                if mode=='specific':
+                    raw_ids=payload.get('campaign_ids') or []
+                    ids=[]
+                    for x in raw_ids:
+                        try: ids.append(int(x))
+                        except (TypeError,ValueError): pass
+                    ids=list(dict.fromkeys(ids))[:1000]
+                    if not ids:return self.send_json({'ok':False,'error':'recipient_required'},400)
+                    sql+=' AND c.id IN ('+','.join('?' for _ in ids)+')';params.extend(ids)
+                else:
+                    if plan!='all':sql+=' AND c.plan=?';params.append(plan)
+                    if status=='active':sql+=' AND c.active=1'
+                    elif status=='inactive':sql+=' AND c.active=0'
+                    if loyalty!='all':sql+=' AND c.loyalty_type=?';params.append(loyalty)
+                sql+=' ORDER BY c.name'
+                targets=[rowdict(r) for r in conn.execute(sql,tuple(params)).fetchall()]
+                targets=[t for t in targets if normalize_email(t.get('contact_email'))]
+                if not targets:return self.send_json({'ok':False,'error':'no_valid_recipients'},400)
+                if len(targets)>1000:return self.send_json({'ok':False,'error':'too_many_recipients'},400)
+                send_id=insert_id(conn,"INSERT INTO platform_email_sends(company_id,user_id,subject,title,body,cta_text,cta_url,target_mode,filter_plan,filter_status,filter_loyalty,recipient_count,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",(s['company_id'],s['user_id'],subject,title,body,cta_text,cta_url,mode,plan,status,loyalty,len(targets),now_ts()))
+                queued=0
+                for t in targets:
+                    email=normalize_email(t.get('contact_email')); created=now_ts()
+                    rid=insert_id(conn,"INSERT INTO platform_email_recipients(send_id,campaign_id,company_name,contact_name,email,status,created_at) VALUES(?,?,?,?,?,'pending',?)",(send_id,t['id'],t['name'],t.get('contact_name') or '',email,created))
+                    qid=enqueue_message(conn,None,'platform_company_email',email,{'platform_recipient_id':rid,'send_id':send_id,'campaign_id':t['id'],'contact_name':t.get('contact_name') or '','company_name':t['name'],'subject':subject,'title':title,'body':body,'cta_text':cta_text,'cta_url':cta_url},delay=min(300,queued*2))
+                    conn.execute('UPDATE platform_email_recipients SET queue_id=? WHERE id=?',(qid,rid));queued+=1
+                audit(conn,s['company_id'],s['user_id'],'platform_email_send','platform_email_send',send_id,details=f'recipients={queued};mode={mode};subject={subject[:80]}',ip_address=self._ip())
+                return self.send_json({'ok':True,'send_id':send_id,'recipient_count':queued})
+            if path == '/api/manager/communication/template/save':
+                if s['role']!='manager':return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                name=str(payload.get('name','')).strip()[:100];subject=str(payload.get('subject','')).strip()[:180];title=str(payload.get('title','')).strip()[:180];body=str(payload.get('body','')).strip()[:12000];cta_text=str(payload.get('cta_text','')).strip()[:80];cta_url=str(payload.get('cta_url','')).strip()[:1000]
+                if not name or not subject or not body:return self.send_json({'ok':False,'error':'template_fields_required'},400)
+                if bool(cta_text)!=bool(cta_url):return self.send_json({'ok':False,'error':'cta_incomplete'},400)
+                if cta_url and not re.match(r'^https://',cta_url,re.I):return self.send_json({'ok':False,'error':'cta_url_must_be_https'},400)
+                tid=insert_id(conn,"INSERT INTO platform_email_templates(company_id,name,subject,title,body,cta_text,cta_url,active,created_at) VALUES(?,?,?,?,?,?,?,1,?)",(s['company_id'],name,subject,title,body,cta_text,cta_url,now_ts()))
+                audit(conn,s['company_id'],s['user_id'],'platform_email_template_create','platform_email_template',tid,details=name,ip_address=self._ip())
+                return self.send_json({'ok':True,'template_id':tid})
+            if path == '/api/manager/communication/template/delete':
+                if s['role']!='manager':return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                try:tid=int(payload.get('template_id') or 0)
+                except (TypeError,ValueError):tid=0
+                cur=conn.execute('UPDATE platform_email_templates SET active=0 WHERE id=? AND company_id=?',(tid,s['company_id']))
+                if getattr(cur,'rowcount',0)!=1:return self.send_json({'ok':False,'error':'template_not_found'},404)
+                audit(conn,s['company_id'],s['user_id'],'platform_email_template_delete','platform_email_template',tid,ip_address=self._ip())
+                return self.send_json({'ok':True})
             if path == '/api/manager/campaign':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 name=str(payload.get('name','')).strip()[:80]; reward=str(payload.get('reward_name','')).strip()[:100] or 'Catálogo de recompensas'; code=re.sub(r'[^A-Z0-9_-]','',str(payload.get('code','')).upper())[:24]
