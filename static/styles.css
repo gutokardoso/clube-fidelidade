@@ -672,3 +672,4 @@ body:has(#editClientCard.manager-inline-modal:not(.hidden))::before,body:has(#cl
 @media(max-width:760px){.platform-company-alerts{padding:0 14px}.platform-company-alert{grid-template-columns:auto 1fr}.platform-company-alert>.btn{grid-column:1/-1;width:100%}.platform-alert-composer-card{width:min(96vw,900px)}}
 
 @supports not (height:100dvh){.platform-alert-composer-card{max-height:calc(100vh - 40px)}}
+.platform-alert-audience-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:end;margin-top:12px}.platform-alert-audience-actions{margin-top:0;justify-content:flex-end}.platform-alert-audience-row select{width:100%}@media(max-width:760px){.platform-alert-audience-row{grid-template-columns:1fr}.platform-alert-audience-actions{justify-content:flex-start}}

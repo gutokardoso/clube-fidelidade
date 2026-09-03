@@ -1,4 +1,13 @@
-# Fidelizaê! v156
+# Fidelizaê! v157
+
+## v157
+
+- **Enviar alerta** agora usa os mesmos filtros de público do envio de e-mail: plano (Iniciante, Intermediário ou PRO), status (ativas, arquivadas ou todas) e programa (Selos ou Pontos).
+- O modo coletivo foi renomeado para **Todas / por filtro** e mostra em tempo real quantas empresas receberão o alerta e o resumo do público selecionado.
+- Incluídos públicos rápidos **Todas as PRO**, **Apenas Selos** e **Empresas Iniciantes**.
+- É possível salvar públicos personalizados no banco, reutilizá-los posteriormente e excluí-los quando não forem mais necessários.
+- O histórico dos alertas registra os filtros utilizados em cada disparo para facilitar auditoria e conferência.
+- Mantidos seleção manual de empresas, prioridades, leitura individual pelos administradores e envio totalmente interno sem consumo de e-mail.
 
 ## v156
 
@@ -259,7 +268,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v156
+**Versão atual:** v157
 
 
 ## Novidades da v117

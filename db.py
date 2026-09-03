@@ -921,6 +921,35 @@ def init_db(db_path=None, seed=True):
             """)
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v155',?)",(now_ts(),))
 
+        # Migração v157: filtros e públicos salvos para alertas internos da plataforma.
+        if _is_postgres(target):
+            conn.execute("ALTER TABLE platform_alert_sends ADD COLUMN IF NOT EXISTS filter_plan TEXT")
+            conn.execute("ALTER TABLE platform_alert_sends ADD COLUMN IF NOT EXISTS filter_status TEXT")
+            conn.execute("ALTER TABLE platform_alert_sends ADD COLUMN IF NOT EXISTS filter_loyalty TEXT")
+            conn.executescript("""CREATE TABLE IF NOT EXISTS platform_alert_audiences (
+              id BIGSERIAL PRIMARY KEY, company_id BIGINT, name TEXT NOT NULL, filter_plan TEXT NOT NULL DEFAULT 'all',
+              filter_status TEXT NOT NULL DEFAULT 'active', filter_loyalty TEXT NOT NULL DEFAULT 'all',
+              active INTEGER NOT NULL DEFAULT 1, created_at BIGINT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_platform_alert_audiences_company ON platform_alert_audiences(company_id,active,created_at DESC);
+            """)
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v157',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            def _add_alert_send_col(col,typ):
+                cols={r['name'] for r in conn.execute('PRAGMA table_info(platform_alert_sends)').fetchall()}
+                if col not in cols: conn.execute(f'ALTER TABLE platform_alert_sends ADD COLUMN {col} {typ}')
+            _add_alert_send_col('filter_plan','TEXT')
+            _add_alert_send_col('filter_status','TEXT')
+            _add_alert_send_col('filter_loyalty','TEXT')
+            conn.executescript("""CREATE TABLE IF NOT EXISTS platform_alert_audiences (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER, name TEXT NOT NULL, filter_plan TEXT NOT NULL DEFAULT 'all',
+              filter_status TEXT NOT NULL DEFAULT 'active', filter_loyalty TEXT NOT NULL DEFAULT 'all',
+              active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_platform_alert_audiences_company ON platform_alert_audiences(company_id,active,created_at DESC);
+            """)
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v157',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:

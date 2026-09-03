@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v156'
+VERSION='v157'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -2493,10 +2493,11 @@ class Handler(BaseHTTPRequestHandler):
                 sess=self._require_auth(conn,'manager')
                 if not sess:return
                 companies=[rowdict(r) for r in conn.execute("SELECT id,name,code,plan,loyalty_type,active FROM campaigns WHERE company_id=? ORDER BY active DESC,name",(sess['company_id'],)).fetchall()]
-                history=[rowdict(r) for r in conn.execute("""SELECT ps.id,ps.title,ps.message,ps.severity,ps.target_mode,ps.recipient_count,ps.created_at,
+                audiences=[rowdict(r) for r in conn.execute("SELECT id,name,filter_plan,filter_status,filter_loyalty,created_at FROM platform_alert_audiences WHERE company_id=? AND active=1 ORDER BY name,id DESC",(sess['company_id'],)).fetchall()]
+                history=[rowdict(r) for r in conn.execute("""SELECT ps.id,ps.title,ps.message,ps.severity,ps.target_mode,ps.filter_plan,ps.filter_status,ps.filter_loyalty,ps.recipient_count,ps.created_at,
                     COALESCE((SELECT COUNT(*) FROM platform_alert_reads rd JOIN platform_alert_recipients pr ON pr.id=rd.alert_recipient_id WHERE pr.send_id=ps.id),0) read_count
                     FROM platform_alert_sends ps WHERE ps.company_id=? ORDER BY ps.id DESC LIMIT 100""",(sess['company_id'],)).fetchall()]
-                return self.send_json({'ok':True,'companies':companies,'history':history})
+                return self.send_json({'ok':True,'companies':companies,'audiences':audiences,'history':history})
         if path == '/api/client-admin/platform-alerts':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')
@@ -4222,10 +4223,14 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/manager/platform-alerts/send':
                 if s['role']!='manager':return self.send_json({'ok':False,'error':'forbidden'},403)
                 title=str(payload.get('title','')).strip()[:180];message=str(payload.get('message','')).strip()[:6000];severity=str(payload.get('severity','info')).strip().lower();mode=str(payload.get('target_mode','specific')).strip().lower()
+                filter_plan=str(payload.get('filter_plan','all')).strip().lower();filter_status=str(payload.get('filter_status','active')).strip().lower();filter_loyalty=str(payload.get('filter_loyalty','all')).strip().lower()
                 if not title or not message:return self.send_json({'ok':False,'error':'title_and_message_required'},400)
                 if severity not in ('info','important','urgent'):return self.send_json({'ok':False,'error':'invalid_severity'},400)
                 if mode not in ('specific','all'):return self.send_json({'ok':False,'error':'invalid_target_mode'},400)
-                sql='SELECT id,name,active FROM campaigns WHERE company_id=?';params=[s['company_id']]
+                if filter_plan not in ('all','beginner','intermediate','pro'):return self.send_json({'ok':False,'error':'invalid_plan_filter'},400)
+                if filter_status not in ('all','active','inactive'):return self.send_json({'ok':False,'error':'invalid_status_filter'},400)
+                if filter_loyalty not in ('all','stamps','points'):return self.send_json({'ok':False,'error':'invalid_loyalty_filter'},400)
+                sql='SELECT id,name,active,plan,loyalty_type FROM campaigns WHERE company_id=?';params=[s['company_id']]
                 if mode=='specific':
                     raw_ids=payload.get('campaign_ids') or [];ids=[]
                     for x in raw_ids:
@@ -4234,17 +4239,38 @@ class Handler(BaseHTTPRequestHandler):
                     ids=list(dict.fromkeys(ids))[:1000]
                     if not ids:return self.send_json({'ok':False,'error':'recipient_required'},400)
                     sql+=' AND id IN ('+','.join('?' for _ in ids)+')';params.extend(ids)
+                    filter_plan=filter_status=filter_loyalty=None
                 else:
-                    sql+=' AND active=1'
+                    if filter_plan!='all':sql+=' AND plan=?';params.append(filter_plan)
+                    if filter_status=='active':sql+=' AND active=1'
+                    elif filter_status=='inactive':sql+=' AND active=0'
+                    if filter_loyalty!='all':sql+=' AND loyalty_type=?';params.append(filter_loyalty)
                 sql+=' ORDER BY name'
                 targets=[rowdict(r) for r in conn.execute(sql,tuple(params)).fetchall()]
                 if not targets:return self.send_json({'ok':False,'error':'no_recipients'},400)
-                send_id=insert_id(conn,"INSERT INTO platform_alert_sends(company_id,user_id,title,message,severity,target_mode,recipient_count,created_at) VALUES(?,?,?,?,?,?,?,?)",(s['company_id'],s['user_id'],title,message,severity,mode,len(targets),now_ts()))
+                send_id=insert_id(conn,"INSERT INTO platform_alert_sends(company_id,user_id,title,message,severity,target_mode,filter_plan,filter_status,filter_loyalty,recipient_count,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(s['company_id'],s['user_id'],title,message,severity,mode,filter_plan,filter_status,filter_loyalty,len(targets),now_ts()))
                 created=now_ts()
                 for t in targets:
                     conn.execute("INSERT INTO platform_alert_recipients(send_id,campaign_id,company_name,created_at) VALUES(?,?,?,?)",(send_id,t['id'],t['name'],created))
-                audit(conn,s['company_id'],s['user_id'],'platform_alert_send','platform_alert_send',send_id,details=f'recipients={len(targets)};mode={mode};severity={severity};title={title[:80]}',ip_address=self._ip())
+                audit(conn,s['company_id'],s['user_id'],'platform_alert_send','platform_alert_send',send_id,details=f'recipients={len(targets)};mode={mode};plan={filter_plan or "manual"};status={filter_status or "manual"};program={filter_loyalty or "manual"};severity={severity};title={title[:80]}',ip_address=self._ip())
                 return self.send_json({'ok':True,'send_id':send_id,'recipient_count':len(targets)})
+            if path == '/api/manager/platform-alerts/audience/save':
+                if s['role']!='manager':return self.send_json({'ok':False,'error':'forbidden'},403)
+                name=str(payload.get('name','')).strip()[:80];filter_plan=str(payload.get('filter_plan','all')).strip().lower();filter_status=str(payload.get('filter_status','active')).strip().lower();filter_loyalty=str(payload.get('filter_loyalty','all')).strip().lower()
+                if not name:return self.send_json({'ok':False,'error':'audience_name_required'},400)
+                if filter_plan not in ('all','beginner','intermediate','pro') or filter_status not in ('all','active','inactive') or filter_loyalty not in ('all','stamps','points'):return self.send_json({'ok':False,'error':'invalid_audience_filter'},400)
+                audience_id=insert_id(conn,"INSERT INTO platform_alert_audiences(company_id,name,filter_plan,filter_status,filter_loyalty,active,created_at) VALUES(?,?,?,?,?,1,?)",(s['company_id'],name,filter_plan,filter_status,filter_loyalty,now_ts()))
+                audit(conn,s['company_id'],s['user_id'],'platform_alert_audience_save','platform_alert_audience',audience_id,details=f'{name};plan={filter_plan};status={filter_status};program={filter_loyalty}',ip_address=self._ip())
+                return self.send_json({'ok':True,'audience_id':audience_id})
+            if path == '/api/manager/platform-alerts/audience/delete':
+                if s['role']!='manager':return self.send_json({'ok':False,'error':'forbidden'},403)
+                try:audience_id=int(payload.get('audience_id') or 0)
+                except (TypeError,ValueError):audience_id=0
+                row=conn.execute('SELECT id FROM platform_alert_audiences WHERE id=? AND company_id=? AND active=1',(audience_id,s['company_id'])).fetchone()
+                if not row:return self.send_json({'ok':False,'error':'audience_not_found'},404)
+                conn.execute('UPDATE platform_alert_audiences SET active=0 WHERE id=?',(audience_id,))
+                audit(conn,s['company_id'],s['user_id'],'platform_alert_audience_delete','platform_alert_audience',audience_id,ip_address=self._ip())
+                return self.send_json({'ok':True})
             if path == '/api/client-admin/platform-alerts/read':
                 if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 try:rid=int(payload.get('alert_id') or 0)
