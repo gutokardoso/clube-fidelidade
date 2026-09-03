@@ -1,4 +1,10 @@
-# Fidelizaê! v155
+# Fidelizaê! v156
+
+## v156
+
+- Corrigido o modal de **Enviar alerta** para manter rolagem vertical interna em telas menores ou quando a lista de empresas aumenta, sem esconder os campos finais e o botão de envio.
+- Reforçado o envio autenticado do Painel Fidelizaê!: requisições administrativas agora usam credenciais same-origin explicitamente e renovam a sessão/CSRF uma vez em caso de `unauthorized` ou `csrf_failed`, evitando falhas transitórias de sessão.
+- Mantidos os alertas internos sem uso de e-mail, com envio para todas as empresas ativas ou seleção manual.
 
 ## v155
 - Comunicação do Painel Fidelizaê! agora possui submenu **Enviar e-mail** e **Enviar Alerta**.
@@ -253,7 +259,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v155
+**Versão atual:** v156
 
 
 ## Novidades da v117
