@@ -1,4 +1,8 @@
-# Fidelizaê! v157
+# Fidelizaê! v158
+
+## v158
+
+- Ajustado o modal de confirmação do envio de alertas: removida apenas a frase “Nenhum e-mail será enviado.”, mantendo a confirmação “Este alerta aparecerá no painel de X empresa(s). Deseja continuar?”.
 
 ## v157
 
@@ -268,7 +272,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v157
+**Versão atual:** v158
 
 
 ## Novidades da v117
