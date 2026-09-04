@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v159'
+VERSION='v160'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -1231,12 +1231,29 @@ def meta_exchange_code(code):
     app_id=os.environ.get('META_APP_ID','').strip(); secret=os.environ.get('META_APP_SECRET','').strip()
     if not (app_id and secret and code): raise RuntimeError('meta_embedded_signup_not_configured')
     qs=urllib.parse.urlencode({'client_id':app_id,'client_secret':secret,'code':code})
-    req=urllib.request.Request('https://graph.facebook.com/v24.0/oauth/access_token?'+qs,method='GET')
+    version=(os.environ.get('META_GRAPH_VERSION') or 'v24.0').strip() or 'v24.0'
+    req=urllib.request.Request(f'https://graph.facebook.com/{urllib.parse.quote(version)}/oauth/access_token?'+qs,method='GET')
     with urllib.request.urlopen(req,timeout=20) as resp: return json.loads(resp.read().decode('utf-8') or '{}')
 
 def meta_phone_details(phone_id,token):
-    req=urllib.request.Request(f'https://graph.facebook.com/v24.0/{urllib.parse.quote(str(phone_id))}?fields=id,display_phone_number,verified_name',headers={'Authorization':'Bearer '+token})
+    version=(os.environ.get('META_GRAPH_VERSION') or 'v24.0').strip() or 'v24.0'
+    req=urllib.request.Request(f'https://graph.facebook.com/{urllib.parse.quote(version)}/{urllib.parse.quote(str(phone_id))}?fields=id,display_phone_number,verified_name',headers={'Authorization':'Bearer '+token})
     with urllib.request.urlopen(req,timeout=20) as resp: return json.loads(resp.read().decode('utf-8') or '{}')
+
+def meta_subscribe_waba(waba_id, token):
+    """Assina o app na WABA conectada para receber eventos no webhook global."""
+    version=(os.environ.get('META_GRAPH_VERSION') or 'v24.0').strip() or 'v24.0'
+    if not waba_id or not token: raise RuntimeError('meta_waba_subscription_missing')
+    url=f'https://graph.facebook.com/{urllib.parse.quote(version)}/{urllib.parse.quote(str(waba_id))}/subscribed_apps'
+    req=urllib.request.Request(url,data=b'',method='POST',headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+    try:
+        with urllib.request.urlopen(req,timeout=20) as resp:
+            return json.loads(resp.read().decode('utf-8') or '{}')
+    except urllib.error.HTTPError as exc:
+        raw=exc.read().decode('utf-8',errors='replace')
+        try: detail=json.loads(raw)
+        except Exception: detail={'error':raw[:500]}
+        raise RuntimeError('meta_waba_subscription_failed:'+json.dumps(detail,ensure_ascii=False)[:600]) from exc
 
 def meta_webhook_verify_token():
     return (os.environ.get('META_WEBHOOK_VERIFY_TOKEN') or '').strip()
@@ -2594,12 +2611,22 @@ class Handler(BaseHTTPRequestHandler):
                 if not exists:return self.send_json({'ok':False,'error':'send_not_found'},404)
                 rows=[rowdict(r) for r in conn.execute("SELECT campaign_id,company_name,contact_name,email,status,last_error,created_at,sent_at FROM platform_email_recipients WHERE send_id=? ORDER BY id",(send_id,)).fetchall()]
                 return self.send_json({'ok':True,'recipients':rows})
+        if path == '/api/client-admin/meta-config':
+            with connect(DB_PATH) as conn:
+                s=self._require_auth(conn,'attendant')
+                if not s:return
+                if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                c=conn.execute('SELECT plan FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
+                if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                if normalize_plan(c['plan'])!='pro':return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                app_id=os.environ.get('META_APP_ID','').strip(); config_id=os.environ.get('META_CONFIG_ID','').strip(); version=(os.environ.get('META_GRAPH_VERSION') or 'v24.0').strip() or 'v24.0'
+                return self.send_json({'ok':True,'configured':meta_embedded_signup_configured(),'app_id':app_id,'config_id':config_id,'graph_version':version,'redirect_uri':meta_callback_url()})
         if path == '/api/client-admin/company':
             with connect(DB_PATH) as conn:
                 s=self._require_auth(conn,'attendant')
                 if not s:return
                 if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
-                c=conn.execute('SELECT id,name,code,logo_image,plan,loyalty_type,points_spend_cents,goal,reward_name,card_theme,min_stamp_interval_sec,max_stamps_per_hour,email_provider,smtp_host,smtp_port,smtp_user,smtp_from,smtp_from_name,smtp_security,brevo_sender_email,brevo_sender_name,brevo_reply_to,whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_api_version,ecommerce_platform,ecommerce_store_url,ecommerce_webhook_secret,ecommerce_status FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
+                c=conn.execute('SELECT id,name,code,logo_image,plan,loyalty_type,points_spend_cents,goal,reward_name,card_theme,min_stamp_interval_sec,max_stamps_per_hour,email_provider,smtp_host,smtp_port,smtp_user,smtp_from,smtp_from_name,smtp_security,brevo_sender_email,brevo_sender_name,brevo_reply_to,whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_api_version,whatsapp_integration_mode,whatsapp_signup_status,whatsapp_connected_at,ecommerce_platform,ecommerce_store_url,ecommerce_webhook_secret,ecommerce_status FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
                 if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
                 company=rowdict(c); company['email_configured']=bool(email_configured(email_config_for_client(conn,s['campaign_id']))); company['whatsapp_configured']=bool(whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])))
                 company['ecommerce_platform']=normalize_ecommerce_platform(company.get('ecommerce_platform')); company['ecommerce_status']=company.get('ecommerce_status') or ('awaiting_connection' if company['ecommerce_platform']!='none' else 'not_connected')
@@ -4167,6 +4194,7 @@ class Handler(BaseHTTPRequestHandler):
                         smtp_host=str(payload.get('smtp_host',c['smtp_host'] or '')).strip()[:200];smtp_port=str(payload.get('smtp_port',c['smtp_port'] or '587')).strip()[:8] or '587';smtp_user=str(payload.get('smtp_user',c['smtp_user'] or '')).strip()[:200];smtp_from=str(payload.get('smtp_from',c['smtp_from'] or '')).strip()[:200];smtp_from_name=str(payload.get('smtp_from_name',c['smtp_from_name'] or '')).strip()[:100];smtp_security=str(payload.get('smtp_security',c['smtp_security'] or 'starttls')).strip().lower()
                         if smtp_security not in ('starttls','ssl','none'):smtp_security='starttls'
                         brevo_sender_email=str(payload.get('brevo_sender_email',c['brevo_sender_email'] or '')).strip()[:200];brevo_sender_name=str(payload.get('brevo_sender_name',c['brevo_sender_name'] or '')).strip()[:100];brevo_reply_to=str(payload.get('brevo_reply_to',c['brevo_reply_to'] or '')).strip()[:200]
+                        manual_wa_supplied=any(k in payload for k in ('whatsapp_phone_number_id','whatsapp_waba_id','whatsapp_access_token','whatsapp_api_version'))
                         wa_phone_id=str(payload.get('whatsapp_phone_number_id',c['whatsapp_phone_number_id'] or '')).strip()[:100];wa_waba_id=str(payload.get('whatsapp_waba_id',c['whatsapp_waba_id'] or '')).strip()[:100];wa_version=str(payload.get('whatsapp_api_version',c['whatsapp_api_version'] or 'v24.0')).strip()[:20]
                         ecommerce_platform=normalize_ecommerce_platform(payload.get('ecommerce_platform',c['ecommerce_platform'] or 'none')); ecommerce_store_url=str(payload.get('ecommerce_store_url',c['ecommerce_store_url'] or '')).strip()[:300]; old_ecommerce_platform=normalize_ecommerce_platform(c['ecommerce_platform']); ecommerce_secret=c['ecommerce_webhook_secret']
                         if ecommerce_platform!='none' and not ecommerce_secret:ecommerce_secret=secrets.token_urlsafe(24)
@@ -4176,12 +4204,40 @@ class Handler(BaseHTTPRequestHandler):
                         if payload.get('smtp_password'):smtp_password_enc=encrypt_secret(payload.get('smtp_password'))
                         if payload.get('brevo_api_key'):brevo_api_key_enc=encrypt_secret(payload.get('brevo_api_key'))
                         if payload.get('whatsapp_access_token'):wa_token_enc=encrypt_secret(payload.get('whatsapp_access_token'))
-                        conn.execute('''UPDATE campaigns SET code=?,name=?,loyalty_type=?,points_spend_cents=?,goal=?,reward_name=?,card_theme=?,logo_image=COALESCE(?,logo_image),email_provider=?,smtp_host=?,smtp_port=?,smtp_user=?,smtp_password_enc=?,smtp_from=?,smtp_from_name=?,smtp_security=?,brevo_api_key_enc=?,brevo_sender_email=?,brevo_sender_name=?,brevo_reply_to=?,whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_integration_mode='manual',whatsapp_signup_status=?,ecommerce_platform=?,ecommerce_store_url=?,ecommerce_webhook_secret=?,ecommerce_status=? WHERE id=? AND company_id=?''',(code,name,loyalty,points,goal,reward,theme,logo,email_provider,smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,wa_phone_id,wa_waba_id,wa_token_enc,wa_version,'connected' if (wa_phone_id and wa_token_enc) else 'not_connected',ecommerce_platform,ecommerce_store_url,ecommerce_secret,ecommerce_status,s['campaign_id'],s['company_id']))
+                        if manual_wa_supplied:
+                            wa_mode='manual'; wa_signup='connected' if (wa_phone_id and wa_token_enc) else 'not_connected'
+                        else:
+                            wa_mode=c['whatsapp_integration_mode'] or 'none'; wa_signup=c['whatsapp_signup_status'] or ('connected' if (wa_phone_id and wa_token_enc) else 'not_connected')
+                        conn.execute('''UPDATE campaigns SET code=?,name=?,loyalty_type=?,points_spend_cents=?,goal=?,reward_name=?,card_theme=?,logo_image=COALESCE(?,logo_image),email_provider=?,smtp_host=?,smtp_port=?,smtp_user=?,smtp_password_enc=?,smtp_from=?,smtp_from_name=?,smtp_security=?,brevo_api_key_enc=?,brevo_sender_email=?,brevo_sender_name=?,brevo_reply_to=?,whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_integration_mode=?,whatsapp_signup_status=?,ecommerce_platform=?,ecommerce_store_url=?,ecommerce_webhook_secret=?,ecommerce_status=? WHERE id=? AND company_id=?''',(code,name,loyalty,points,goal,reward,theme,logo,email_provider,smtp_host,smtp_port,smtp_user,smtp_password_enc,smtp_from,smtp_from_name,smtp_security,brevo_api_key_enc,brevo_sender_email,brevo_sender_name,brevo_reply_to,wa_phone_id,wa_waba_id,wa_token_enc,wa_version,wa_mode,wa_signup,ecommerce_platform,ecommerce_store_url,ecommerce_secret,ecommerce_status,s['campaign_id'],s['company_id']))
                     else:
                         conn.execute('UPDATE campaigns SET code=?,name=?,loyalty_type=?,points_spend_cents=?,goal=?,reward_name=?,card_theme=?,logo_image=COALESCE(?,logo_image) WHERE id=? AND company_id=?',(code,name,loyalty,points,goal,reward,theme,logo,s['campaign_id'],s['company_id']))
                 except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
                 except integrity_errors():return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'client_admin_company_update','campaign',s['campaign_id'],details=f'plan={plan}',ip_address=self._ip());return self.send_json({'ok':True})
+            if path == '/api/client-admin/integration/whatsapp/embedded-complete':
+                if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                c=conn.execute('SELECT id,plan FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
+                if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                if normalize_plan(c['plan'])!='pro':return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                code=str(payload.get('code','')).strip(); phone_id=str(payload.get('phone_number_id','')).strip()[:100]; waba_id=str(payload.get('waba_id','')).strip()[:100]
+                if not (code and phone_id and waba_id):return self.send_json({'ok':False,'error':'embedded_signup_incomplete'},400)
+                if not meta_embedded_signup_configured():return self.send_json({'ok':False,'error':'meta_embedded_signup_not_configured'},503)
+                try:
+                    exchanged=meta_exchange_code(code); token=str(exchanged.get('access_token','')).strip()
+                    if not token:raise RuntimeError('meta_access_token_missing')
+                    # Confirma que o Phone Number ID pertence a uma conta acessível pelo token antes de persistir.
+                    phone_info=meta_phone_details(phone_id,token)
+                    if str(phone_info.get('id') or '')!=phone_id:raise RuntimeError('meta_phone_number_mismatch')
+                    # O webhook é global, mas cada WABA conectada precisa assinar o app para que os eventos cheguem.
+                    meta_subscribe_waba(waba_id,token)
+                    token_enc=encrypt_secret(token)
+                    version=(os.environ.get('META_GRAPH_VERSION') or 'v24.0').strip() or 'v24.0'
+                    conn.execute("""UPDATE campaigns SET whatsapp_integration_mode='embedded',whatsapp_signup_status='connected',whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_connected_at=? WHERE id=? AND company_id=?""",(phone_id,waba_id,token_enc,version,now_iso(),s['campaign_id'],s['company_id']))
+                    audit(conn,s['company_id'],s['user_id'],'whatsapp_embedded_connected','campaign',s['campaign_id'],details=f'waba={waba_id[-6:]};phone_id={phone_id[-6:]}',ip_address=self._ip())
+                    return self.send_json({'ok':True,'phone_number_id':phone_id,'waba_id':waba_id,'verified_name':phone_info.get('verified_name'),'display_phone_number':phone_info.get('display_phone_number')})
+                except Exception as exc:
+                    if sentry_sdk:sentry_sdk.capture_exception(exc)
+                    return self.send_json({'ok':False,'error':'embedded_signup_failed','detail':str(exc)[:700]},502)
             if path == '/api/client-admin/integration/ecommerce/rotate-secret':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)

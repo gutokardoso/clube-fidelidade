@@ -1,4 +1,14 @@
-# Fidelizaê! v159
+# Fidelizaê! v160
+
+
+## v160
+
+- Integração oficial do **WhatsApp Embedded Signup** disponibilizada diretamente no painel do administrador da empresa PRO, com botão **Conectar com WhatsApp**.
+- O fluxo usa `META_APP_ID`, `META_CONFIG_ID`, `META_APP_SECRET`, `PUBLIC_BASE_URL` e o SDK oficial da Meta; a empresa escolhe/vincula a própria WABA e o próprio número sem expor token ao usuário.
+- Novo endpoint autenticado `/api/client-admin/meta-config` fornece somente os dados públicos necessários ao SDK para administradores da empresa.
+- Novo endpoint `/api/client-admin/integration/whatsapp/embedded-complete` troca o código no servidor, valida o Phone Number ID, assina a WABA no webhook global e grava o access token criptografado no tenant correto.
+- O salvamento de outras configurações da empresa não sobrescreve mais uma conexão WhatsApp Embedded existente com o modo manual. A configuração manual foi mantida apenas como opção avançada para compatibilidade.
+- O status do WhatsApp no modal passa a mostrar **Conectado pela Meta** e oferece **Reconectar WhatsApp** para troca futura de conta/número.
 
 ## v159
 
@@ -299,7 +309,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v159
+**Versão atual:** v160
 
 
 ## Novidades da v117
