@@ -1,4 +1,31 @@
-# Fidelizaê! v158
+# Fidelizaê! v159
+
+## v159
+
+- Implementado o webhook oficial da Meta/WhatsApp em `GET/POST /api/webhooks/meta/whatsapp`.
+- A verificação inicial da Meta usa `META_WEBHOOK_VERIFY_TOKEN`; o valor deve existir somente como variável de ambiente no Railway.
+- Entregas POST são autenticadas pela assinatura `X-Hub-Signature-256` usando `META_APP_SECRET`; payloads sem assinatura válida são rejeitados.
+- Eventos são associados à empresa correta por `phone_number_id` e, como fallback, `waba_id`, preservando o isolamento multiempresa.
+- O sistema registra apenas metadados técnicos dos eventos do webhook; conteúdo de mensagens recebidas não é persistido nessa tabela.
+- IDs (`wamid`) retornados pela Cloud API passam a ser gravados na fila para correlacionar os status `sent`, `delivered`, `read` e `failed` recebidos da Meta.
+- Em caso de erro interno no processamento, o webhook retorna HTTP 500 para permitir nova tentativa de entrega pela Meta.
+
+### Webhook Meta / WhatsApp
+
+No Railway, configure um token secreto forte e exclusivo, por exemplo:
+
+```
+META_WEBHOOK_VERIFY_TOKEN=<segredo longo e aleatório>
+```
+
+Na Meta, em **Configurar webhooks**:
+
+```
+URL de callback: https://app.fidelizae.com.br/api/webhooks/meta/whatsapp
+Verificar token: o mesmo valor de META_WEBHOOK_VERIFY_TOKEN
+```
+
+`META_APP_SECRET` deve continuar configurado no Railway, pois é usado para validar criptograficamente os eventos POST enviados pela Meta.
 
 ## v158
 
@@ -272,7 +299,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v158
+**Versão atual:** v159
 
 
 ## Novidades da v117

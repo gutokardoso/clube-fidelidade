@@ -950,6 +950,39 @@ def init_db(db_path=None, seed=True):
             """)
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v157',?)",(now_ts(),))
 
+        # Migração v159: webhook oficial da Meta/WhatsApp e rastreio do status do provedor.
+        if _is_postgres(target):
+            conn.execute("ALTER TABLE message_queue ADD COLUMN IF NOT EXISTS external_message_id TEXT")
+            conn.execute("ALTER TABLE message_queue ADD COLUMN IF NOT EXISTS provider_status TEXT")
+            conn.execute("ALTER TABLE message_queue ADD COLUMN IF NOT EXISTS provider_status_at BIGINT")
+            conn.executescript("""CREATE INDEX IF NOT EXISTS idx_message_queue_external_message ON message_queue(external_message_id);
+            CREATE TABLE IF NOT EXISTS whatsapp_webhook_events (
+              id BIGSERIAL PRIMARY KEY, campaign_id BIGINT REFERENCES campaigns(id) ON DELETE SET NULL, company_id BIGINT REFERENCES companies(id) ON DELETE SET NULL,
+              waba_id TEXT, phone_number_id TEXT, event_type TEXT NOT NULL, external_message_id TEXT, provider_status TEXT,
+              error_code TEXT, error_title TEXT, payload_hash TEXT NOT NULL, received_at BIGINT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_whatsapp_webhook_events_campaign ON whatsapp_webhook_events(campaign_id,received_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_whatsapp_webhook_events_message ON whatsapp_webhook_events(external_message_id);
+            """)
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v159',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            def _add_message_queue_col(col,typ):
+                cols={r['name'] for r in conn.execute('PRAGMA table_info(message_queue)').fetchall()}
+                if col not in cols: conn.execute(f'ALTER TABLE message_queue ADD COLUMN {col} {typ}')
+            _add_message_queue_col('external_message_id','TEXT')
+            _add_message_queue_col('provider_status','TEXT')
+            _add_message_queue_col('provider_status_at','INTEGER')
+            conn.executescript("""CREATE INDEX IF NOT EXISTS idx_message_queue_external_message ON message_queue(external_message_id);
+            CREATE TABLE IF NOT EXISTS whatsapp_webhook_events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL, company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+              waba_id TEXT, phone_number_id TEXT, event_type TEXT NOT NULL, external_message_id TEXT, provider_status TEXT,
+              error_code TEXT, error_title TEXT, payload_hash TEXT NOT NULL, received_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_whatsapp_webhook_events_campaign ON whatsapp_webhook_events(campaign_id,received_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_whatsapp_webhook_events_message ON whatsapp_webhook_events(external_message_id);
+            """)
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v159',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:

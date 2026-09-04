@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v158'
+VERSION='v159'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -1238,6 +1238,71 @@ def meta_phone_details(phone_id,token):
     req=urllib.request.Request(f'https://graph.facebook.com/v24.0/{urllib.parse.quote(str(phone_id))}?fields=id,display_phone_number,verified_name',headers={'Authorization':'Bearer '+token})
     with urllib.request.urlopen(req,timeout=20) as resp: return json.loads(resp.read().decode('utf-8') or '{}')
 
+def meta_webhook_verify_token():
+    return (os.environ.get('META_WEBHOOK_VERIFY_TOKEN') or '').strip()
+
+def meta_webhook_url():
+    base=meta_public_base_url() or 'https://app.fidelizae.com.br'
+    return base.rstrip('/')+'/api/webhooks/meta/whatsapp'
+
+def validate_meta_webhook_signature(headers, raw_body):
+    secret=(os.environ.get('META_APP_SECRET') or '').strip()
+    signature=(headers.get('X-Hub-Signature-256') or '').strip()
+    if not secret or not signature.startswith('sha256='):
+        return False
+    expected='sha256='+hmac.new(secret.encode('utf-8'),raw_body or b'',hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature,expected)
+
+def process_meta_whatsapp_webhook(conn, payload):
+    """Registra metadados mínimos do webhook e associa eventos ao tenant correto.
+
+    Não persiste conteúdo de mensagens recebidas. Para status de mensagens enviadas,
+    atualiza o status do provedor usando o wamid gravado na fila.
+    """
+    if not isinstance(payload,dict) or payload.get('object')!='whatsapp_business_account':
+        return 0
+    processed=0
+    for entry in payload.get('entry') or []:
+        if not isinstance(entry,dict): continue
+        entry_waba=str(entry.get('id') or '').strip()[:120]
+        for change in entry.get('changes') or []:
+            if not isinstance(change,dict) or change.get('field')!='messages': continue
+            value=change.get('value') or {}
+            if not isinstance(value,dict): continue
+            metadata=value.get('metadata') or {}
+            phone_id=str(metadata.get('phone_number_id') or '').strip()[:120]
+            camp=None
+            if phone_id:
+                camp=conn.execute('SELECT id,company_id FROM campaigns WHERE whatsapp_phone_number_id=? ORDER BY id LIMIT 1',(phone_id,)).fetchone()
+            if not camp and entry_waba:
+                camp=conn.execute('SELECT id,company_id FROM campaigns WHERE whatsapp_waba_id=? ORDER BY id LIMIT 1',(entry_waba,)).fetchone()
+            campaign_id=camp['id'] if camp else None
+            company_id=camp['company_id'] if camp else None
+            # Status de mensagens enviadas pela Cloud API.
+            for st in value.get('statuses') or []:
+                if not isinstance(st,dict): continue
+                message_id=str(st.get('id') or '').strip()[:255]
+                provider_status=str(st.get('status') or '').strip().lower()[:40]
+                errors=st.get('errors') or []
+                error_code=''; error_title=''
+                if errors and isinstance(errors[0],dict):
+                    error_code=str(errors[0].get('code') or '')[:40]
+                    error_title=str(errors[0].get('title') or errors[0].get('message') or '')[:240]
+                if message_id:
+                    conn.execute('UPDATE message_queue SET provider_status=?,provider_status_at=? WHERE external_message_id=?',(provider_status or None,now_ts(),message_id))
+                conn.execute('''INSERT INTO whatsapp_webhook_events(campaign_id,company_id,waba_id,phone_number_id,event_type,external_message_id,provider_status,error_code,error_title,payload_hash,received_at)
+                                VALUES(?,?,?,?,?,?,?,?,?,?,?)''',(campaign_id,company_id,entry_waba or None,phone_id or None,'status',message_id or None,provider_status or None,error_code or None,error_title or None,hashlib.sha256(jdump(st)).hexdigest(),now_ts()))
+                processed+=1
+            # Mensagens recebidas: apenas metadados, nunca texto/conteúdo.
+            for msg in value.get('messages') or []:
+                if not isinstance(msg,dict): continue
+                message_id=str(msg.get('id') or '').strip()[:255]
+                msg_type=str(msg.get('type') or '').strip().lower()[:40]
+                conn.execute('''INSERT INTO whatsapp_webhook_events(campaign_id,company_id,waba_id,phone_number_id,event_type,external_message_id,provider_status,error_code,error_title,payload_hash,received_at)
+                                VALUES(?,?,?,?,?,?,?,?,?,?,?)''',(campaign_id,company_id,entry_waba or None,phone_id or None,'incoming_'+(msg_type or 'message'),message_id or None,None,None,None,hashlib.sha256(jdump({'id':message_id,'type':msg_type,'timestamp':msg.get('timestamp')})).hexdigest(),now_ts()))
+                processed+=1
+    return processed
+
 
 
 def _qr_secret():
@@ -1339,8 +1404,8 @@ def process_message_queue_once(limit=15):
             try: result=_queue_send(item,conn)
             except Exception as exc: result={'sent':False,'reason':type(exc).__name__+':'+str(exc)[:300]}
             if result.get('sent'):
-                sent_at=now_ts()
-                conn.execute("UPDATE message_queue SET status='sent',sent_at=?,last_error=NULL WHERE id=? AND status='processing'",(sent_at,item_id))
+                sent_at=now_ts(); external_message_id=str(result.get('message_id') or '').strip() or None
+                conn.execute("UPDATE message_queue SET status='sent',sent_at=?,last_error=NULL,external_message_id=COALESCE(?,external_message_id),provider_status=CASE WHEN ? IS NOT NULL THEN 'sent' ELSE provider_status END,provider_status_at=CASE WHEN ? IS NOT NULL THEN ? ELSE provider_status_at END WHERE id=? AND status='processing'",(sent_at,external_message_id,external_message_id,external_message_id,sent_at,item_id))
                 if item.get('kind')=='platform_company_email':
                     conn.execute("UPDATE platform_email_recipients SET status='sent',sent_at=?,last_error=NULL WHERE queue_id=?",(sent_at,item_id))
             else:
@@ -1623,6 +1688,7 @@ class Handler(BaseHTTPRequestHandler):
         if n > 8_000_000:
             raise ValueError('body_too_large')
         raw = self.rfile.read(n) if n else b''
+        self._raw_body = raw
         ctype = (self.headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
         if ctype == 'application/x-www-form-urlencoded':
             parsed = urllib.parse.parse_qs(raw.decode('utf-8'), keep_blank_values=True)
@@ -1725,6 +1791,15 @@ class Handler(BaseHTTPRequestHandler):
         path = p.path
         qs = urllib.parse.parse_qs(p.query)
         if path == '/': return self.send_text((STATIC/'index.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION))
+        if path == '/api/webhooks/meta/whatsapp':
+            mode=(qs.get('hub.mode') or [''])[0].strip()
+            token=(qs.get('hub.verify_token') or [''])[0].strip()
+            challenge=(qs.get('hub.challenge') or [''])[0]
+            expected=meta_webhook_verify_token()
+            if mode=='subscribe' and expected and token and hmac.compare_digest(token,expected):
+                return self.send_text(str(challenge),status=200,ctype='text/plain; charset=utf-8')
+            print('[META] webhook verification rejected mode=%s configured=%s' % (mode,bool(expected)),flush=True)
+            return self.send_text('forbidden',status=403,ctype='text/plain; charset=utf-8')
         if path in ('/signup/payment-return','/signup') and (path == '/signup/payment-return' or (qs.get('payment') or [''])[0].startswith('return')):
             # O Mercado Pago acrescenta os parâmetros de retorno à back_url. Usamos uma rota
             # dedicada (sem query string prévia) para evitar URLs como ?payment=return?preapproval_id=...
@@ -2410,13 +2485,13 @@ class Handler(BaseHTTPRequestHandler):
                 config_id=os.environ.get('META_CONFIG_ID','').strip()
                 version=(os.environ.get('META_GRAPH_VERSION') or 'v24.0').strip() or 'v24.0'
                 callback=meta_callback_url()
-                return self.send_json({'ok':True,'configured':meta_embedded_signup_configured(),'app_id':app_id,'config_id':config_id,'graph_version':version,'redirect_uri':callback,'public_base_url':meta_public_base_url()})
+                return self.send_json({'ok':True,'configured':meta_embedded_signup_configured(),'app_id':app_id,'config_id':config_id,'graph_version':version,'redirect_uri':callback,'public_base_url':meta_public_base_url(),'webhook_url':meta_webhook_url(),'webhook_configured':bool(meta_webhook_verify_token() and (os.environ.get('META_APP_SECRET') or '').strip())})
         if path == '/api/manager/diagnostics':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'manager')
                 if not sess:return
                 pending=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE status IN ('pending','retry','processing')").fetchone()['n']; failed=conn.execute("SELECT COUNT(*) n FROM message_queue WHERE status='failed'").fetchone()['n']
-                return self.send_json({'ok':True,'version':VERSION,'database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite','wallet':wallet_status(),'queue':{'pending':pending,'failed':failed},'encryption':bool(_secret_box()),'pii_encryption':pii_key_configured(),'meta':meta_embedded_signup_configured(),'global_email':email_configured(global_email_config()),'public_base_url':os.environ.get('PUBLIC_BASE_URL',''),'environment':os.environ.get('APP_ENV','production'),'backup':'available','r2_backup':r2_backup_status(),'sentry':{'configured':bool((os.environ.get('SENTRY_DSN') or '').strip()),'enabled':bool(SENTRY_ENABLED)}})
+                return self.send_json({'ok':True,'version':VERSION,'database':'postgresql' if str(DB_PATH).startswith(('postgres://','postgresql://')) else 'sqlite','wallet':wallet_status(),'queue':{'pending':pending,'failed':failed},'encryption':bool(_secret_box()),'pii_encryption':pii_key_configured(),'meta':meta_embedded_signup_configured(),'meta_webhook':{'configured':bool(meta_webhook_verify_token() and (os.environ.get('META_APP_SECRET') or '').strip()),'url':meta_webhook_url()},'global_email':email_configured(global_email_config()),'public_base_url':os.environ.get('PUBLIC_BASE_URL',''),'environment':os.environ.get('APP_ENV','production'),'backup':'available','r2_backup':r2_backup_status(),'sentry':{'configured':bool((os.environ.get('SENTRY_DSN') or '').strip()),'enabled':bool(SENTRY_ENABLED)}})
         if path == '/api/manager/backup':
             return self.send_json({'ok':False,'error':'backup_requires_reauthentication'},405)
         if path == '/api/privacy/export':
@@ -2778,6 +2853,21 @@ class Handler(BaseHTTPRequestHandler):
             if path in ['/login','/join']:
                 return self.send_redirect('/login?error=1' if path == '/login' else '/join?error=1')
             return self.send_json({'ok':False,'error':'invalid_json'},400)
+        if path=='/api/webhooks/meta/whatsapp':
+            raw=getattr(self,'_raw_body',b'')
+            if not validate_meta_webhook_signature(self.headers,raw):
+                print('[META] whatsapp webhook signature rejected',flush=True)
+                return self.send_json({'ok':False,'error':'invalid_signature'},403)
+            try:
+                with connect(DB_PATH) as conn:
+                    processed=process_meta_whatsapp_webhook(conn,payload)
+                print('[META] whatsapp webhook accepted events=%s' % processed,flush=True)
+                return self.send_json({'ok':True})
+            except Exception as exc:
+                print('[META] whatsapp webhook processing error type=%s' % type(exc).__name__,flush=True)
+                if sentry_sdk: sentry_sdk.capture_exception(exc)
+                # 500 força a Meta a repetir a entrega em vez de perder o evento.
+                return self.send_json({'ok':False,'error':'webhook_processing_failed'},500)
         if path=='/api/public/signup':
             name=str(payload.get('responsible_name') or '').strip()[:100]; company=str(payload.get('company_name') or '').strip()[:120]; email=normalize_email(payload.get('email')); phone=str(payload.get('phone') or '').strip()[:40]; document=str(payload.get('document') or '').strip()[:30]; password=str(payload.get('password') or ''); plan=normalize_plan(payload.get('plan')); loyalty=str(payload.get('loyalty_type') or 'stamps').lower(); device_id=str(payload.get('mp_device_id') or '').strip()[:240]; billing_option=normalize_billing_option(plan,payload.get('billing_option'))
             if not payload.get('terms_accepted') or not payload.get('privacy_accepted'):return self.send_json({'ok':False,'error':'legal_acceptance_required'},400)
