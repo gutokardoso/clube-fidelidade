@@ -1,5 +1,11 @@
-# Fidelizaê! v161
+# Fidelizaê! v162
 
+
+## v162 — Diferenciação WhatsApp Básico × WhatsApp Oficial
+- Plano INTERMEDIÁRIO passa a apresentar **WhatsApp Básico via QR Code** como proposta de canal, com aviso explícito de que a conexão não oficial pode sofrer restrição/bloqueio em maior volume ou em caso de denúncias de spam.
+- Plano PRO passa a identificar claramente o recurso como **WhatsApp Oficial (Meta)**, preservando a integração oficial já implementada.
+- Tabela comparativa e cards de preços foram atualizados para deixar a diferença comercial transparente.
+- Importante: esta versão **não simula nem finge uma conexão QR**. Para o QR funcionar de verdade é necessário adicionar um serviço de sessão WhatsApp Web (bridge) separado; isso não pode ser validado apenas dentro deste ZIP sem o serviço externo.
 
 ## v161 — WhatsApp: templates oficiais e status real de entrega
 - Envios proativos por WhatsApp (automações e campanhas) agora exigem o nome do template oficial aprovado na Meta e o idioma correspondente.
