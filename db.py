@@ -983,6 +983,31 @@ def init_db(db_path=None, seed=True):
             """)
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v159',?)",(now_ts(),))
 
+        # Migração v161: templates oficiais da Meta e status final de entrega do WhatsApp.
+        if _is_postgres(target):
+            conn.execute("ALTER TABLE message_templates ADD COLUMN IF NOT EXISTS meta_template_name TEXT")
+            conn.execute("ALTER TABLE message_templates ADD COLUMN IF NOT EXISTS meta_template_language TEXT DEFAULT 'pt_BR'")
+            conn.execute("ALTER TABLE automation_rules ADD COLUMN IF NOT EXISTS meta_template_name TEXT")
+            conn.execute("ALTER TABLE automation_rules ADD COLUMN IF NOT EXISTS meta_template_language TEXT DEFAULT 'pt_BR'")
+            conn.execute("ALTER TABLE marketing_campaigns ADD COLUMN IF NOT EXISTS meta_template_name TEXT")
+            conn.execute("ALTER TABLE marketing_campaigns ADD COLUMN IF NOT EXISTS meta_template_language TEXT DEFAULT 'pt_BR'")
+            conn.execute("ALTER TABLE message_queue ADD COLUMN IF NOT EXISTS provider_error_code TEXT")
+            conn.execute("ALTER TABLE message_queue ADD COLUMN IF NOT EXISTS provider_error_title TEXT")
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v161',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            def _add_v161_col(table,col,typ):
+                cols={r['name'] for r in conn.execute(f'PRAGMA table_info({table})').fetchall()}
+                if col not in cols: conn.execute(f'ALTER TABLE {table} ADD COLUMN {col} {typ}')
+            _add_v161_col('message_templates','meta_template_name','TEXT')
+            _add_v161_col('message_templates','meta_template_language',"TEXT DEFAULT 'pt_BR'")
+            _add_v161_col('automation_rules','meta_template_name','TEXT')
+            _add_v161_col('automation_rules','meta_template_language',"TEXT DEFAULT 'pt_BR'")
+            _add_v161_col('marketing_campaigns','meta_template_name','TEXT')
+            _add_v161_col('marketing_campaigns','meta_template_language',"TEXT DEFAULT 'pt_BR'")
+            _add_v161_col('message_queue','provider_error_code','TEXT')
+            _add_v161_col('message_queue','provider_error_title','TEXT')
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v161',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:

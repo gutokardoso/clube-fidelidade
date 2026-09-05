@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v160'
+VERSION='v161'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -1196,14 +1196,14 @@ def whatsapp_test_delivery_config(conn,campaign_id,phone):
         return test_cfg,'meta_test'
     return None,'unavailable'
 
-def send_whatsapp_cloud(phone, message, config=None):
+def _whatsapp_graph_send(phone, payload, config=None):
     c=config or whatsapp_config_for_client()
     version=c.get('version',''); phone_number_id=c.get('phone_number_id',''); token=c.get('token','')
     if not (version and phone_number_id and token): raise RuntimeError('whatsapp_not_configured')
     url=f'https://graph.facebook.com/{urllib.parse.quote(version)}/{urllib.parse.quote(phone_number_id)}/messages'
-    body=json.dumps({'messaging_product':'whatsapp','recipient_type':'individual','to':str(phone),'type':'text',
-        'text':{'preview_url':False,'body':str(message)}}).encode('utf-8')
-    req=urllib.request.Request(url,data=body,method='POST',headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+    body=dict(payload or {})
+    body.update({'messaging_product':'whatsapp','recipient_type':'individual','to':str(phone)})
+    req=urllib.request.Request(url,data=json.dumps(body,ensure_ascii=False).encode('utf-8'),method='POST',headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
     try:
         with urllib.request.urlopen(req,timeout=15) as resp: return json.loads(resp.read().decode('utf-8') or '{}')
     except urllib.error.HTTPError as exc:
@@ -1211,6 +1211,31 @@ def send_whatsapp_cloud(phone, message, config=None):
         try: detail=json.loads(raw)
         except Exception: detail={'error':raw[:500]}
         raise RuntimeError(json.dumps(detail,ensure_ascii=False)) from exc
+
+def send_whatsapp_cloud(phone, message, config=None):
+    return _whatsapp_graph_send(phone,{'type':'text','text':{'preview_url':False,'body':str(message)}},config)
+
+def send_whatsapp_template(phone, template_name, language='pt_BR', parameters=None, config=None):
+    name=str(template_name or '').strip()
+    if not name: raise RuntimeError('whatsapp_template_required')
+    params=[]
+    for value in (parameters or []):
+        params.append({'type':'text','text':str(value)[:1024]})
+    tpl={'name':name,'language':{'code':str(language or 'pt_BR').strip() or 'pt_BR'}}
+    if params: tpl['components']=[{'type':'body','parameters':params}]
+    return _whatsapp_graph_send(phone,{'type':'template','template':tpl},config)
+
+def whatsapp_template_parameters(body, campaign, customer_name='Cliente'):
+    values={
+      'nome':customer_name,
+      'empresa':campaign.get('name') or 'Empresa',
+      'cliente':campaign.get('name') or 'Empresa',
+      'selos':'3',
+      'meta':str(campaign.get('goal') or 10),
+      'recompensa':campaign.get('reward_name') or 'sua recompensa'
+    }
+    keys=re.findall(r'\{(nome|empresa|cliente|selos|meta|recompensa)\}',str(body or ''))
+    return [values[k] for k in keys]
 
 def meta_public_base_url():
     base=(os.environ.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
@@ -1306,7 +1331,7 @@ def process_meta_whatsapp_webhook(conn, payload):
                     error_code=str(errors[0].get('code') or '')[:40]
                     error_title=str(errors[0].get('title') or errors[0].get('message') or '')[:240]
                 if message_id:
-                    conn.execute('UPDATE message_queue SET provider_status=?,provider_status_at=? WHERE external_message_id=?',(provider_status or None,now_ts(),message_id))
+                    conn.execute('UPDATE message_queue SET provider_status=?,provider_status_at=?,provider_error_code=?,provider_error_title=? WHERE external_message_id=?',(provider_status or None,now_ts(),error_code or None,error_title or None,message_id))
                 conn.execute('''INSERT INTO whatsapp_webhook_events(campaign_id,company_id,waba_id,phone_number_id,event_type,external_message_id,provider_status,error_code,error_title,payload_hash,received_at)
                                 VALUES(?,?,?,?,?,?,?,?,?,?,?)''',(campaign_id,company_id,entry_waba or None,phone_id or None,'status',message_id or None,provider_status or None,error_code or None,error_title or None,hashlib.sha256(jdump(st)).hexdigest(),now_ts()))
                 processed+=1
@@ -1368,7 +1393,11 @@ def _queue_send(item, conn):
         return send_campaign_email(item['recipient'],payload.get('name',''),payload.get('message',''),payload.get('image_data'),payload.get('subject','Mensagem do Fidelizaê!'),email_config_for_client(conn,campaign_id))
     if kind=='whatsapp':
         try:
-            response=send_whatsapp_cloud(item['recipient'],payload.get('message',''),whatsapp_config_for_client(conn,campaign_id))
+            cfg=whatsapp_config_for_client(conn,campaign_id)
+            if payload.get('meta_template_name'):
+                response=send_whatsapp_template(item['recipient'],payload.get('meta_template_name'),payload.get('meta_template_language') or 'pt_BR',payload.get('meta_template_parameters') or [],cfg)
+            else:
+                response=send_whatsapp_cloud(item['recipient'],payload.get('message',''),cfg)
             return {'sent':True,'message_id':((response.get('messages') or [{}])[0]).get('id')}
         except Exception as exc:return {'sent':False,'reason':str(exc)[:500]}
     if kind=='platform_company_email':
@@ -1524,6 +1553,9 @@ def run_automations_once():
         for c in campaigns: ensure_automation_defaults(conn,c['id'])
         rules=conn.execute('SELECT r.*,c.name client_name,c.loyalty_type FROM automation_rules r JOIN campaigns c ON c.id=r.campaign_id WHERE r.enabled=1 AND c.active=1').fetchall()
         for rule in rules:
+            if rule['channel'] in ('whatsapp','both') and not str(rule['meta_template_name'] or '').strip():
+                # Não dispara automações proativas por WhatsApp sem template oficial aprovado.
+                continue
             rows=conn.execute('''SELECT m.id membership_id,m.progress,m.rewards_available,m.public_id,m.created_at membership_created,c.goal,cu.id customer_id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.marketing_email,cu.marketing_whatsapp,
               COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at) last_activity
               FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.campaign_id=? AND m.status='active' ''',(rule['campaign_id'],)).fetchall()
@@ -1542,8 +1574,8 @@ def run_automations_once():
                 queued=False; channel=rule['channel']
                 if channel in ('email','both') and x['email'] and x['marketing_email'] and email_configured(email_config_for_client(conn,rule['campaign_id'])):
                     enqueue_message(conn,rule['campaign_id'],'campaign_email',x['email'],{'name':x['name'],'message':msg,'subject':'Fidelizaê! • '+rule['client_name']}); queued=True
-                if channel in ('whatsapp','both') and x['phone'] and x['marketing_whatsapp'] and whatsapp_cloud_configured(whatsapp_config_for_client(conn,rule['campaign_id'])):
-                    enqueue_message(conn,rule['campaign_id'],'whatsapp',x['phone'],{'message':msg}); queued=True
+                if channel in ('whatsapp','both') and rule['meta_template_name'] and x['phone'] and x['marketing_whatsapp'] and whatsapp_cloud_configured(whatsapp_config_for_client(conn,rule['campaign_id'])):
+                    enqueue_message(conn,rule['campaign_id'],'whatsapp',x['phone'],{'message':msg,'meta_template_name':rule['meta_template_name'] or '', 'meta_template_language':rule['meta_template_language'] or 'pt_BR','meta_template_parameters':whatsapp_template_parameters(rule['message'],{'name':rule['client_name'],'goal':x['goal']},x['name'])}); queued=True
                 if queued:
                     conn.execute('INSERT INTO automation_runs(rule_id,membership_id,period_key,created_at) VALUES(?,?,?,?) ON CONFLICT(rule_id,membership_id,period_key) DO NOTHING',(rule['id'],x['membership_id'],period,now_ts()))
 
@@ -2229,6 +2261,16 @@ class Handler(BaseHTTPRequestHandler):
                 base=(os.environ.get('PUBLIC_BASE_URL') or ('https://'+self.headers.get('Host',''))).rstrip('/')
                 img=qrcode.make(base+'/join?campaign='+urllib.parse.quote(c['code'])); bio=BytesIO(); img.save(bio,format='PNG')
                 return self.send_bytes(bio.getvalue(),'image/png',200,{'Cache-Control':'no-store'})
+        if path == '/api/admin/template/test-status':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                message_id=str((qs.get('message_id') or [''])[0]).strip()[:255]
+                if not message_id:return self.send_json({'ok':False,'error':'invalid_message_id'},400)
+                row=conn.execute('''SELECT provider_status,provider_status_at,provider_error_code,provider_error_title FROM message_queue WHERE campaign_id=? AND external_message_id=? ORDER BY id DESC LIMIT 1''',(sess['campaign_id'],message_id)).fetchone()
+                if not row:return self.send_json({'ok':False,'error':'message_status_not_found'},404)
+                return self.send_json({'ok':True,'status':row['provider_status'] or 'accepted','status_at':row['provider_status_at'],'error_code':row['provider_error_code'],'error_title':row['provider_error_title']})
         if path == '/api/admin/templates':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')
@@ -2797,7 +2839,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess:return
                 if not plan_allows(conn,sess['campaign_id'],'communications'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
                 if not sess['campaign_id']:return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                rows=[queue_rowdict(r) for r in conn.execute("SELECT id,kind,recipient,recipient_hash,status,attempts,last_error,created_at,sent_at,available_at FROM message_queue WHERE campaign_id=? ORDER BY id DESC LIMIT 30",(sess['campaign_id'],)).fetchall()]
+                rows=[queue_rowdict(r) for r in conn.execute("SELECT id,kind,recipient,recipient_hash,status,attempts,last_error,created_at,sent_at,available_at,provider_status,provider_status_at,provider_error_code,provider_error_title FROM message_queue WHERE campaign_id=? ORDER BY id DESC LIMIT 30",(sess['campaign_id'],)).fetchall()]
                 return self.send_json({'ok':True,'messages':rows})
         if path == '/api/admin/branches':
             with connect(DB_PATH) as conn:
@@ -3633,9 +3675,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/admin/marketing-campaign/save':
                 if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not plan_allows(conn,s['campaign_id'],'communications'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
-                name=str(payload.get('name','')).strip()[:100]; segment=str(payload.get('segment','all')); channel=str(payload.get('channel','both')); message=str(payload.get('message','')).strip()[:4096]
+                name=str(payload.get('name','')).strip()[:100]; segment=str(payload.get('segment','all')); channel=str(payload.get('channel','both')); message=str(payload.get('message','')).strip()[:4096]; meta_name=str(payload.get('meta_template_name','')).strip()[:512]; meta_lang=str(payload.get('meta_template_language','pt_BR')).strip()[:30] or 'pt_BR'
                 if len(name)<2 or not message or segment not in ('all','new','active','recurrent','vip','at_risk','inactive','inactive60','inactive90','almost_reward','reward_ready','birthdays') or channel not in ('email','whatsapp','both'):return self.send_json({'ok':False,'error':'invalid_campaign'},400)
-                mid=insert_id(conn,'INSERT INTO marketing_campaigns(campaign_id,name,segment,channel,message,status,created_at) VALUES(?,?,?,?,?,?,?)',(s['campaign_id'],name,segment,channel,message,'draft',now_ts()))
+                if channel in ('whatsapp','both') and not meta_name:return self.send_json({'ok':False,'error':'whatsapp_meta_template_required'},400)
+                mid=insert_id(conn,'INSERT INTO marketing_campaigns(campaign_id,name,segment,channel,message,meta_template_name,meta_template_language,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)',(s['campaign_id'],name,segment,channel,message,meta_name or None,meta_lang,'draft',now_ts()))
                 audit(conn,s['company_id'],s['user_id'],'marketing_campaign_create','marketing_campaign',mid,details=name,ip_address=self._ip())
                 return self.send_json({'ok':True,'id':mid})
             if path == '/api/admin/marketing-campaign/send':
@@ -3644,13 +3687,14 @@ class Handler(BaseHTTPRequestHandler):
                 mid=int(payload.get('id') or 0); mc=conn.execute('SELECT * FROM marketing_campaigns WHERE id=? AND campaign_id=?',(mid,s['campaign_id'])).fetchone()
                 if not mc:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
                 if mc['status']=='sent':return self.send_json({'ok':False,'error':'already_sent'},409)
+                if mc['channel'] in ('whatsapp','both') and not str(mc['meta_template_name'] or '').strip():return self.send_json({'ok':False,'error':'whatsapp_meta_template_required'},409)
                 rows=campaign_recipient_rows(conn,s['campaign_id'],mc['segment']); queued=0; sent_at=now_ts()
                 for r in rows:
                     q=False
                     if mc['channel'] in ('email','both') and r['email'] and r['marketing_email'] and email_configured(email_config_for_client(conn,s['campaign_id'])):
                         enqueue_message(conn,s['campaign_id'],'campaign_email',r['email'],{'name':r['name'],'message':mc['message'],'subject':'Fidelizaê! • '+mc['name']}); q=True
                     if mc['channel'] in ('whatsapp','both') and r['phone'] and r['marketing_whatsapp'] and whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])):
-                        enqueue_message(conn,s['campaign_id'],'whatsapp',r['phone'],{'message':mc['message']}); q=True
+                        enqueue_message(conn,s['campaign_id'],'whatsapp',r['phone'],{'message':mc['message'],'meta_template_name':mc['meta_template_name'] or '', 'meta_template_language':mc['meta_template_language'] or 'pt_BR','meta_template_parameters':whatsapp_template_parameters(mc['message'],{'name':s['client_name'] or 'Empresa'},r['name'])}); q=True
                     if q:
                         cur=conn.execute('INSERT INTO marketing_campaign_recipients(marketing_campaign_id,membership_id,sent_at) VALUES(?,?,?) ON CONFLICT(marketing_campaign_id,membership_id) DO NOTHING',(mid,r['membership_id'],sent_at))
                         # O contador representa destinatários efetivamente novos.
@@ -3768,6 +3812,13 @@ class Handler(BaseHTTPRequestHandler):
                 if not plan_allows(conn,s['campaign_id'],'communications'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
                 recipient=str(payload.get('recipient','')).strip()
                 message=str(payload.get('message','')).strip()
+                try: template_id=int(payload.get('template_id') or 0)
+                except (TypeError,ValueError): template_id=0
+                tpl=None
+                if template_id:
+                    tpl=conn.execute("SELECT id,body,meta_template_name,meta_template_language FROM message_templates WHERE id=? AND campaign_id=? AND channel IN ('whatsapp','both')",(template_id,s['campaign_id'])).fetchone()
+                    if not tpl:return self.send_json({'ok':False,'error':'template_not_found'},404)
+                    if not str(tpl['meta_template_name'] or '').strip():return self.send_json({'ok':False,'error':'whatsapp_meta_template_required'},400)
                 if not message or len(message)>4096: return self.send_json({'ok':False,'error':'invalid_message'},400)
                 if recipient == 'all' or recipient.startswith('segment:'):
                     extra=''; args=[s['campaign_id'],'']
@@ -3787,8 +3838,13 @@ class Handler(BaseHTTPRequestHandler):
                 cloud=whatsapp_cloud_configured(wa_cfg)
                 if not cloud:return self.send_json({'ok':False,'error':'whatsapp_not_configured'},503)
                 results=[]
+                camp_ctx=conn.execute('SELECT name,goal,reward_name FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone()
+                camp_ctx=rowdict(camp_ctx) if camp_ctx else {'name':s['client_name'] or 'Empresa'}
                 for r in rows:
-                    qid=enqueue_message(conn,s['campaign_id'],'whatsapp',r['phone'],{'message':message})
+                    wa_payload={'message':message}
+                    if tpl:
+                        wa_payload.update({'meta_template_name':tpl['meta_template_name'],'meta_template_language':tpl['meta_template_language'] or 'pt_BR','meta_template_parameters':whatsapp_template_parameters(tpl['body'],camp_ctx,r['name'])})
+                    qid=enqueue_message(conn,s['campaign_id'],'whatsapp',r['phone'],wa_payload)
                     results.append({'customer_id':r['id'],'name':r['name'],'phone':r['phone'],'queued':True,'queue_id':qid})
                     audit(conn,s['company_id'],s['user_id'],'whatsapp_queued','customer',r['id'],details=f'queue={qid}',ip_address=self._ip())
                 return self.send_json({'ok':True,'queued_count':len(results),'results':results})
@@ -3831,9 +3887,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/admin/template/save':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not plan_allows(conn,s['campaign_id'],'communications'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
-                name=str(payload.get('name','')).strip()[:80];channel=str(payload.get('channel','both'));subject=str(payload.get('subject','')).strip()[:150];body=str(payload.get('body','')).strip()[:4000]
+                name=str(payload.get('name','')).strip()[:80];channel=str(payload.get('channel','both'));subject=str(payload.get('subject','')).strip()[:150];body=str(payload.get('body','')).strip()[:4000];meta_name=str(payload.get('meta_template_name','')).strip()[:512];meta_lang=str(payload.get('meta_template_language','pt_BR')).strip()[:30] or 'pt_BR'
                 if not name or not body or channel not in ('email','whatsapp','both'):return self.send_json({'ok':False,'error':'invalid_template'},400)
-                tid=insert_id(conn,'INSERT INTO message_templates(campaign_id,name,channel,subject,body,created_at) VALUES(?,?,?,?,?,?)',(s['campaign_id'],name,channel,subject,body,now_ts()))
+                if channel in ('whatsapp','both') and not meta_name:return self.send_json({'ok':False,'error':'whatsapp_meta_template_required'},400)
+                tid=insert_id(conn,'INSERT INTO message_templates(campaign_id,name,channel,subject,body,meta_template_name,meta_template_language,created_at) VALUES(?,?,?,?,?,?,?,?)',(s['campaign_id'],name,channel,subject,body,meta_name or None,meta_lang,now_ts()))
                 return self.send_json({'ok':True,'template_id':tid})
             if path == '/api/admin/template/test':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
@@ -3849,7 +3906,7 @@ class Handler(BaseHTTPRequestHandler):
                     WHERE cu.id=? AND m.campaign_id=?''',(customer_id,s['campaign_id'])).fetchone()
                 if not customer:return self.send_json({'ok':False,'error':'customer_not_found'},404)
                 customer=customer_rowdict(customer)
-                tpl=conn.execute('SELECT id,name,channel,subject,body FROM message_templates WHERE id=? AND campaign_id=?',(template_id,s['campaign_id'])).fetchone()
+                tpl=conn.execute('SELECT id,name,channel,subject,body,meta_template_name,meta_template_language FROM message_templates WHERE id=? AND campaign_id=?',(template_id,s['campaign_id'])).fetchone()
                 if not tpl:return self.send_json({'ok':False,'error':'template_not_found'},404)
                 allowed={'email':('email',),'whatsapp':('whatsapp',),'both':('email','whatsapp','both')}
                 if channel not in allowed.get(tpl['channel'],()):return self.send_json({'ok':False,'error':'template_channel_mismatch'},409)
@@ -3881,15 +3938,25 @@ class Handler(BaseHTTPRequestHandler):
                             return self.send_json({'ok':False,'error':'meta_test_recipient_not_allowed'},403)
                         return self.send_json({'ok':False,'error':'whatsapp_test_mode_not_configured'},503)
                     try:
-                        response=send_whatsapp_cloud(phone,message,cfg)
+                        meta_name=str(tpl['meta_template_name'] or '').strip()
+                        meta_lang=str(tpl['meta_template_language'] or 'pt_BR').strip() or 'pt_BR'
+                        if meta_name:
+                            params=whatsapp_template_parameters(tpl['body'],rowdict(camp),customer['name'])
+                            response=send_whatsapp_template(phone,meta_name,meta_lang,params,cfg)
+                        else:
+                            response=send_whatsapp_cloud(phone,message,cfg)
                     except Exception as exc:
                         reason=str(exc)[:700]
                         print(f'[WHATSAPP_TEST] SEND_FAILED campaign_id={s["campaign_id"]} template_id={template_id} mode={wa_mode} reason={reason}')
                         return self.send_json({'ok':False,'error':'whatsapp_test_failed','detail':reason,'mode':wa_mode},502)
                     message_id=((response.get('messages') or [{}])[0]).get('id') if isinstance(response,dict) else None
-                    audit(conn,s['company_id'],s['user_id'],'whatsapp_test_send','message_template',template_id,details=f'mode={wa_mode};phone=***{phone[-4:]};message_id={message_id or ""}',ip_address=self._ip())
+                    if message_id:
+                        stored=encrypt_pii(phone,'phone'); rh=pii_lookup_hash(phone,'phone')
+                        insert_id(conn,'''INSERT INTO message_queue(campaign_id,kind,recipient,recipient_hash,payload_json,status,attempts,available_at,created_at,sent_at,external_message_id,provider_status,provider_status_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(s['campaign_id'],'whatsapp',stored,rh,json.dumps({'message':message,'test':True,'meta_template_name':meta_name},ensure_ascii=False),'sent',1,now_ts(),now_ts(),now_ts(),message_id,'accepted',now_ts()))
+                    audit(conn,s['company_id'],s['user_id'],'whatsapp_test_send','message_template',template_id,details=f'mode={wa_mode};phone=***{phone[-4:]};message_id={message_id or ""};template={meta_name or "free_text"}',ip_address=self._ip())
                     sent.append('WhatsApp' + (' (Modo de teste Meta)' if wa_mode=='meta_test' else ''))
-                return self.send_json({'ok':True,'message':'Teste enviado com sucesso por '+(' e '.join(sent))+'.','preview':message,'channels':sent})
+                response_message='Envio aceito pelo provedor. Aguardando confirmação de entrega.' if channel in ('whatsapp','both') else 'Teste enviado com sucesso por '+(' e '.join(sent))+'.'
+                return self.send_json({'ok':True,'message':response_message,'preview':message,'channels':sent,'whatsapp_message_id':message_id if channel in ('whatsapp','both') else None,'delivery_status':'accepted' if channel in ('whatsapp','both') else 'sent'})
             if path == '/api/admin/template/delete':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not plan_allows(conn,s['campaign_id'],'communications'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
@@ -4081,14 +4148,15 @@ class Handler(BaseHTTPRequestHandler):
                 if not plan_allows(conn,s['campaign_id'],'automations'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
                 try: rule_id=int(payload.get('rule_id',0))
                 except: rule_id=0
-                channel=str(payload.get('channel','email')); enabled=1 if payload.get('enabled') else 0; message=str(payload.get('message','')).strip()[:1000]
+                channel=str(payload.get('channel','email')); enabled=1 if payload.get('enabled') else 0; message=str(payload.get('message','')).strip()[:1000]; meta_name=str(payload.get('meta_template_name','')).strip()[:512]; meta_lang=str(payload.get('meta_template_language','pt_BR')).strip()[:30] or 'pt_BR'
                 if channel not in ('email','whatsapp','both') or not message:return self.send_json({'ok':False,'error':'invalid_rule'},400)
+                if enabled and channel in ('whatsapp','both') and not meta_name:return self.send_json({'ok':False,'error':'whatsapp_meta_template_required'},400)
                 r=conn.execute('SELECT id,rule_type FROM automation_rules WHERE id=? AND campaign_id=?',(rule_id,s['campaign_id'])).fetchone()
                 if not r:return self.send_json({'ok':False,'error':'rule_not_found'},404)
                 if r['rule_type']=='one_to_reward':
                     campaign=conn.execute('SELECT loyalty_type FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone()
                     if not campaign or campaign['loyalty_type']!='stamps':return self.send_json({'ok':False,'error':'rule_not_available'},409)
-                conn.execute('UPDATE automation_rules SET channel=?,enabled=?,message=? WHERE id=?',(channel,enabled,message,rule_id)); audit(conn,s['company_id'],s['user_id'],'automation_update','automation',rule_id,details=f'{channel}:{enabled}',ip_address=self._ip())
+                conn.execute('UPDATE automation_rules SET channel=?,enabled=?,message=?,meta_template_name=?,meta_template_language=? WHERE id=?',(channel,enabled,message,meta_name or None,meta_lang,rule_id)); audit(conn,s['company_id'],s['user_id'],'automation_update','automation',rule_id,details=f'{channel}:{enabled}',ip_address=self._ip())
                 return self.send_json({'ok':True})
             if path == '/api/admin/branch/update':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)

@@ -1,5 +1,13 @@
-# Fidelizaê! v160
+# Fidelizaê! v161
 
+
+## v161 — WhatsApp: templates oficiais e status real de entrega
+- Envios proativos por WhatsApp (automações e campanhas) agora exigem o nome do template oficial aprovado na Meta e o idioma correspondente.
+- O backend envia mensagens do tipo `template` pela WhatsApp Cloud API quando o template Meta estiver configurado, evitando a dependência da janela de 24 horas para iniciar/reabrir conversas.
+- Parâmetros do corpo são derivados, em ordem, dos placeholders `{nome}`, `{empresa}`, `{cliente}`, `{selos}`, `{meta}` e `{recompensa}` para corresponder a `{{1}}`, `{{2}}` etc. no template aprovado.
+- Testes de WhatsApp deixam de exibir sucesso definitivo assim que a Meta aceita a requisição: o painel aguarda o webhook e mostra `delivered/read` ou a falha real do provedor.
+- A fila passa a exibir o status do provedor e código/título do erro do WhatsApp.
+- Migração v161 adiciona os campos de template Meta e detalhes de erro sem remover dados existentes.
 
 ## v160
 
@@ -309,7 +317,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v160
+**Versão atual:** v161
 
 
 ## Novidades da v117
