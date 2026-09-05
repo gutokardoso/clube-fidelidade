@@ -674,4 +674,5 @@ body:has(#editClientCard.manager-inline-modal:not(.hidden))::before,body:has(#cl
 @supports not (height:100dvh){.platform-alert-composer-card{max-height:calc(100vh - 40px)}}
 .platform-alert-audience-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:end;margin-top:12px}.platform-alert-audience-actions{margin-top:0;justify-content:flex-end}.platform-alert-audience-row select{width:100%}@media(max-width:760px){.platform-alert-audience-row{grid-template-columns:1fr}.platform-alert-audience-actions{justify-content:flex-start}}
 
-.pricing-wa-risk{margin:18px 0 0;padding:16px 18px;border:1px solid #f1c27d;border-radius:14px;background:#fff8ec;color:#6b5f55;font-size:14px;line-height:1.55}.pricing-wa-risk strong{color:#3d342e}
+/* v162 • WhatsApp Básico */
+.wa-risk-notice{display:flex;gap:14px;align-items:flex-start;padding:16px 18px;border:1px solid #f2c56b;background:#fff8e8;border-radius:16px;margin:12px 0 18px;color:#5f6470}.wa-risk-notice p{margin:0;line-height:1.55}.wa-risk-icon{font-size:25px;line-height:1}.wa-basic-qr{margin:16px 0;padding:18px;text-align:center;border:1px solid var(--line);border-radius:18px;background:#fff}.wa-basic-qr img{display:block;width:min(280px,80vw);height:auto;margin:14px auto;border-radius:10px}.whatsapp-basic-box{max-width:760px}

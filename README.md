@@ -1,19 +1,13 @@
 # Fidelizaê! v162
 
 
-## v162 — Diferenciação WhatsApp Básico × WhatsApp Oficial
-- Plano INTERMEDIÁRIO passa a apresentar **WhatsApp Básico via QR Code** como proposta de canal, com aviso explícito de que a conexão não oficial pode sofrer restrição/bloqueio em maior volume ou em caso de denúncias de spam.
-- Plano PRO passa a identificar claramente o recurso como **WhatsApp Oficial (Meta)**, preservando a integração oficial já implementada.
-- Tabela comparativa e cards de preços foram atualizados para deixar a diferença comercial transparente.
-- Importante: esta versão **não simula nem finge uma conexão QR**. Para o QR funcionar de verdade é necessário adicionar um serviço de sessão WhatsApp Web (bridge) separado; isso não pode ser validado apenas dentro deste ZIP sem o serviço externo.
-
-## v161 — WhatsApp: templates oficiais e status real de entrega
+## v162 — WhatsApp: templates oficiais e status real de entrega
 - Envios proativos por WhatsApp (automações e campanhas) agora exigem o nome do template oficial aprovado na Meta e o idioma correspondente.
 - O backend envia mensagens do tipo `template` pela WhatsApp Cloud API quando o template Meta estiver configurado, evitando a dependência da janela de 24 horas para iniciar/reabrir conversas.
 - Parâmetros do corpo são derivados, em ordem, dos placeholders `{nome}`, `{empresa}`, `{cliente}`, `{selos}`, `{meta}` e `{recompensa}` para corresponder a `{{1}}`, `{{2}}` etc. no template aprovado.
 - Testes de WhatsApp deixam de exibir sucesso definitivo assim que a Meta aceita a requisição: o painel aguarda o webhook e mostra `delivered/read` ou a falha real do provedor.
 - A fila passa a exibir o status do provedor e código/título do erro do WhatsApp.
-- Migração v161 adiciona os campos de template Meta e detalhes de erro sem remover dados existentes.
+- Migração v162 adiciona os campos de template Meta e detalhes de erro sem remover dados existentes.
 
 ## v160
 
@@ -323,7 +317,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v161
+**Versão atual:** v162
 
 
 ## Novidades da v117
@@ -704,3 +698,9 @@ Dados jurídicos padrão configurados: `CLUBE_LEGAL_COMPANY_NAME=Agência Taboo`
 
 ### Backup e restauração
 O backup contém dados pessoais, hashes de senha e segredos de integração criptografados. Preserve separadamente a mesma `CLUBE_ENCRYPTION_KEY`. Validação: `python tools/backup_restore.py validate backup.json`. Ensaio: `python tools/backup_restore.py restore-sqlite backup.json /tmp/fidelizae-restore.sqlite3`.
+
+
+## WhatsApp Básico — plano Intermediário (v162)
+O plano Intermediário pode usar uma conexão de WhatsApp por QR Code, destinada a mensagens individuais e baixo volume. A interface exibe aviso permanente de que a conexão é não oficial e pode sofrer restrições/bloqueio. Campanhas em massa, templates Meta e WhatsApp Cloud API oficial continuam exclusivos do PRO.
+
+O conector QR é desacoplado do app e deve ser configurado no Railway com `WHATSAPP_BASIC_API_URL` e `WHATSAPP_BASIC_API_KEY`, apontando para um serviço compatível com os endpoints Evolution API v2 (`instance/create`, `instance/connect`, `instance/connectionState`, `message/sendText`). Sem essas variáveis o recurso aparece como indisponível e não simula conexão.

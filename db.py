@@ -461,6 +461,15 @@ def init_db(db_path=None, seed=True):
             for col,typ in wa_signup_cols:
                 if col not in campaign_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
 
+        # Migração v162: WhatsApp Básico por QR Code para o plano Intermediário.
+        wa_basic_cols=[('whatsapp_basic_instance','TEXT'),('whatsapp_basic_status','TEXT'),('whatsapp_basic_connected_at','TEXT')]
+        if _is_postgres(target):
+            for col,typ in wa_basic_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS {col} {typ}')
+        else:
+            campaign_cols={r['name'] for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()}
+            for col,typ in wa_basic_cols:
+                if col not in campaign_cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
+
         # Migração v21: integrações SMTP e WhatsApp isoladas por cliente.
         integration_cols = [
             ('smtp_host','TEXT'),('smtp_port','TEXT'),('smtp_user','TEXT'),('smtp_password_enc','TEXT'),

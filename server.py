@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v161'
+VERSION='v162'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -784,9 +784,9 @@ def send_password_recovery_email(email, reset_token, smtp_config=None):
 
 
 PLAN_FEATURES={
- 'beginner':{'client_limit':50,'staff_limit':1,'points':False,'communications':False,'advanced':False,'coupons':False,'reports':True,'complete_reports':False,'advanced_reports':False,'nps':False,'vip_tiers':False,'multipliers':False,'gift_cards':False,'automations':False,'customer_area':False},
- 'intermediate':{'client_limit':0,'staff_limit':5,'points':True,'communications':False,'advanced':False,'coupons':True,'reports':True,'complete_reports':True,'advanced_reports':False,'nps':False,'vip_tiers':False,'multipliers':False,'gift_cards':False,'automations':False,'customer_area':False},
- 'pro':{'client_limit':0,'staff_limit':0,'points':True,'communications':True,'advanced':True,'coupons':True,'reports':True,'complete_reports':True,'advanced_reports':True,'nps':True,'vip_tiers':True,'multipliers':True,'gift_cards':True,'automations':True,'customer_area':True},
+ 'beginner':{'client_limit':50,'staff_limit':1,'points':False,'communications':False,'whatsapp_basic':False,'whatsapp_official':False,'advanced':False,'coupons':False,'reports':True,'complete_reports':False,'advanced_reports':False,'nps':False,'vip_tiers':False,'multipliers':False,'gift_cards':False,'automations':False,'customer_area':False},
+ 'intermediate':{'client_limit':0,'staff_limit':5,'points':True,'communications':False,'whatsapp_basic':True,'whatsapp_official':False,'advanced':False,'coupons':True,'reports':True,'complete_reports':True,'advanced_reports':False,'nps':False,'vip_tiers':False,'multipliers':False,'gift_cards':False,'automations':False,'customer_area':False},
+ 'pro':{'client_limit':0,'staff_limit':0,'points':True,'communications':True,'whatsapp_basic':False,'whatsapp_official':True,'advanced':True,'coupons':True,'reports':True,'complete_reports':True,'advanced_reports':True,'nps':True,'vip_tiers':True,'multipliers':True,'gift_cards':True,'automations':True,'customer_area':True},
 }
 def normalize_plan(v):
     v=str(v or 'beginner').strip().lower()
@@ -1162,6 +1162,58 @@ def whatsapp_config_for_client(conn=None,campaign_id=None):
                     'version':x.get('whatsapp_api_version') or 'v24.0','source':'client'}
     return {'phone_number_id':'','waba_id':'','token':'','version':'v24.0','source':'client'}
 
+def whatsapp_basic_provider_configured():
+    return bool((os.environ.get('WHATSAPP_BASIC_API_URL') or '').strip() and (os.environ.get('WHATSAPP_BASIC_API_KEY') or '').strip())
+
+def _whatsapp_basic_request(method,path,payload=None,timeout=20):
+    base=(os.environ.get('WHATSAPP_BASIC_API_URL') or '').strip().rstrip('/')
+    key=(os.environ.get('WHATSAPP_BASIC_API_KEY') or '').strip()
+    if not (base and key): raise RuntimeError('whatsapp_basic_provider_not_configured')
+    data=None if payload is None else json.dumps(payload,ensure_ascii=False).encode('utf-8')
+    req=urllib.request.Request(base+'/'+path.lstrip('/'),data=data,method=method,headers={'Content-Type':'application/json','apikey':key,'Authorization':'Bearer '+key})
+    try:
+        with urllib.request.urlopen(req,timeout=timeout) as resp:
+            raw=resp.read().decode('utf-8','replace'); return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        detail=exc.read().decode('utf-8','replace')[:500]
+        raise RuntimeError('whatsapp_basic_provider_error:'+str(exc.code)+':'+detail)
+
+def whatsapp_basic_instance_name(campaign_id): return 'fidelizae-'+str(int(campaign_id))
+
+def whatsapp_basic_status(conn,campaign_id):
+    c=conn.execute('SELECT whatsapp_basic_instance,whatsapp_basic_status FROM campaigns WHERE id=?',(campaign_id,)).fetchone()
+    if not c:return {'configured':False,'status':'not_configured'}
+    instance=(c['whatsapp_basic_instance'] or '').strip()
+    if not instance:return {'configured':whatsapp_basic_provider_configured(),'status':'not_connected'}
+    try:
+        r=_whatsapp_basic_request('GET',f'instance/connectionState/{urllib.parse.quote(instance)}')
+        state=str(((r.get('instance') or {}).get('state') or r.get('state') or '')).lower()
+        status='connected' if state in ('open','connected') else ('connecting' if state in ('connecting','qr') else 'not_connected')
+        conn.execute('UPDATE campaigns SET whatsapp_basic_status=? WHERE id=?',(status,campaign_id))
+        return {'configured':True,'status':status,'instance':instance}
+    except Exception:
+        return {'configured':whatsapp_basic_provider_configured(),'status':c['whatsapp_basic_status'] or 'not_connected','instance':instance}
+
+def whatsapp_basic_qr(conn,campaign_id):
+    if not whatsapp_basic_provider_configured(): raise RuntimeError('whatsapp_basic_provider_not_configured')
+    c=conn.execute('SELECT whatsapp_basic_instance FROM campaigns WHERE id=?',(campaign_id,)).fetchone(); instance=((c['whatsapp_basic_instance'] if c else '') or '').strip() or whatsapp_basic_instance_name(campaign_id)
+    if not (c and c['whatsapp_basic_instance']):
+        try:_whatsapp_basic_request('POST','instance/create',{'instanceName':instance,'qrcode':True,'integration':'WHATSAPP-BAILEYS'})
+        except RuntimeError as exc:
+            if '403' not in str(exc) and '409' not in str(exc): raise
+        conn.execute('UPDATE campaigns SET whatsapp_basic_instance=?,whatsapp_basic_status=? WHERE id=?',(instance,'connecting',campaign_id))
+    r=_whatsapp_basic_request('GET',f'instance/connect/{urllib.parse.quote(instance)}')
+    qr=r.get('base64') or ((r.get('qrcode') or {}).get('base64') if isinstance(r.get('qrcode'),dict) else None) or r.get('code')
+    return {'instance':instance,'qr':qr,'pairing_code':r.get('pairingCode') or r.get('pairing_code')}
+
+def send_whatsapp_basic(conn,campaign_id,phone,message):
+    st=whatsapp_basic_status(conn,campaign_id)
+    if st.get('status')!='connected': raise RuntimeError('whatsapp_basic_not_connected')
+    number=_normalize_phone(phone)
+    r=_whatsapp_basic_request('POST',f'message/sendText/{urllib.parse.quote(st["instance"])}',{'number':number,'text':str(message)})
+    mid=((r.get('key') or {}).get('id') if isinstance(r,dict) else None)
+    return {'sent':True,'message_id':mid}
+
 def whatsapp_cloud_configured(config=None):
     c=config or whatsapp_config_for_client()
     return all(c.get(k,'') for k in ('token','phone_number_id','version'))
@@ -1393,6 +1445,9 @@ def _queue_send(item, conn):
         return send_campaign_email(item['recipient'],payload.get('name',''),payload.get('message',''),payload.get('image_data'),payload.get('subject','Mensagem do Fidelizaê!'),email_config_for_client(conn,campaign_id))
     if kind=='whatsapp':
         try:
+            plan=campaign_plan(conn,campaign_id)
+            if plan=='intermediate':
+                return send_whatsapp_basic(conn,campaign_id,item['recipient'],payload.get('message',''))
             cfg=whatsapp_config_for_client(conn,campaign_id)
             if payload.get('meta_template_name'):
                 response=send_whatsapp_template(item['recipient'],payload.get('meta_template_name'),payload.get('meta_template_language') or 'pt_BR',payload.get('meta_template_parameters') or [],cfg)
@@ -2668,12 +2723,25 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant')
                 if not s:return
                 if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
-                c=conn.execute('SELECT id,name,code,logo_image,plan,loyalty_type,points_spend_cents,goal,reward_name,card_theme,min_stamp_interval_sec,max_stamps_per_hour,email_provider,smtp_host,smtp_port,smtp_user,smtp_from,smtp_from_name,smtp_security,brevo_sender_email,brevo_sender_name,brevo_reply_to,whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_api_version,whatsapp_integration_mode,whatsapp_signup_status,whatsapp_connected_at,ecommerce_platform,ecommerce_store_url,ecommerce_webhook_secret,ecommerce_status FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
+                c=conn.execute('SELECT id,name,code,logo_image,plan,loyalty_type,points_spend_cents,goal,reward_name,card_theme,min_stamp_interval_sec,max_stamps_per_hour,email_provider,smtp_host,smtp_port,smtp_user,smtp_from,smtp_from_name,smtp_security,brevo_sender_email,brevo_sender_name,brevo_reply_to,whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_api_version,whatsapp_integration_mode,whatsapp_signup_status,whatsapp_connected_at,whatsapp_basic_instance,whatsapp_basic_status,whatsapp_basic_connected_at,ecommerce_platform,ecommerce_store_url,ecommerce_webhook_secret,ecommerce_status FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
                 if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
-                company=rowdict(c); company['email_configured']=bool(email_configured(email_config_for_client(conn,s['campaign_id']))); company['whatsapp_configured']=bool(whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])))
+                company=rowdict(c); company['email_configured']=bool(email_configured(email_config_for_client(conn,s['campaign_id']))); company['whatsapp_configured']=bool(whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id']))); company['whatsapp_basic']=whatsapp_basic_status(conn,s['campaign_id']) if normalize_plan(c['plan'])=='intermediate' else {'configured':False,'status':'not_available'}
                 company['ecommerce_platform']=normalize_ecommerce_platform(company.get('ecommerce_platform')); company['ecommerce_status']=company.get('ecommerce_status') or ('awaiting_connection' if company['ecommerce_platform']!='none' else 'not_connected')
                 public_base=(os.environ.get('PUBLIC_BASE_URL') or 'https://app.fidelizae.com.br').rstrip('/'); company['ecommerce_webhook_url']=(public_base+f"/api/integrations/ecommerce/{company['id']}/{company.get('ecommerce_webhook_secret')}") if company.get('ecommerce_webhook_secret') else ''; company.pop('ecommerce_webhook_secret',None)
                 return self.send_json({'ok':True,'company':company,'features':PLAN_FEATURES[normalize_plan(c['plan'])]})
+        if path == '/api/client-admin/integration/whatsapp-basic/status':
+            with connect(DB_PATH) as conn:
+                s=self._require_auth(conn,'attendant')
+                if not s:return
+                if not s['is_client_admin'] or campaign_plan(conn,s['campaign_id'])!='intermediate':return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                st=whatsapp_basic_status(conn,s['campaign_id']); return self.send_json({'ok':True,**st,'provider_configured':whatsapp_basic_provider_configured()})
+        if path == '/api/client-admin/integration/whatsapp-basic/qr':
+            with connect(DB_PATH) as conn:
+                s=self._require_auth(conn,'attendant')
+                if not s:return
+                if not s['is_client_admin'] or campaign_plan(conn,s['campaign_id'])!='intermediate':return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                try:r=whatsapp_basic_qr(conn,s['campaign_id']); return self.send_json({'ok':True,**r})
+                except Exception as exc:return self.send_json({'ok':False,'error':str(exc)[:500]},503)
         if path == '/api/attendant/recent':
             with connect(DB_PATH) as conn:
                 s=self._require_auth(conn,'attendant')
@@ -2735,7 +2803,7 @@ class Handler(BaseHTTPRequestHandler):
                 staff=conn.execute("SELECT COUNT(*) n FROM users WHERE campaign_id=? AND role='attendant' AND is_client_admin=0 AND active=1",(cid,)).fetchone()['n']
                 clients=conn.execute("SELECT COUNT(*) n FROM memberships WHERE campaign_id=?",(cid,)).fetchone()['n']
                 rewards=conn.execute("SELECT COUNT(*) n FROM reward_catalog WHERE campaign_id=? AND active=1",(cid,)).fetchone()['n']
-                comm=bool(email_configured(email_config_for_client(conn,cid)) or whatsapp_cloud_configured(whatsapp_config_for_client(conn,cid)))
+                comm=bool(email_configured(email_config_for_client(conn,cid)) or whatsapp_cloud_configured(whatsapp_config_for_client(conn,cid)) or (campaign_plan(conn,cid)=='intermediate' and whatsapp_basic_status(conn,cid).get('status')=='connected'))
                 wallet=conn.execute("SELECT COUNT(*) n FROM wallet_registrations wr JOIN memberships m ON m.id=wr.membership_id WHERE m.campaign_id=?",(cid,)).fetchone()['n']
                 steps=[
                   {'key':'company','label':'Empresa e logo configuradas','done':bool(c and c['name'] and c['logo_image']),'target':'company'},
@@ -2807,7 +2875,7 @@ class Handler(BaseHTTPRequestHandler):
                 month=datetime.now(ZoneInfo('America/Sao_Paulo')).month
                 birthdays=[c for c in customers if c.get('birth_date') and len(c['birth_date'])>=10 and int(c['birth_date'][5:7])==month]
                 birthdays.sort(key=lambda c: (int(c['birth_date'][8:10]), c['name'].lower()))
-                comm=plan_allows(conn,s['campaign_id'],'communications'); return self.send_json({'ok':True,'customers':customers,'birthdays':birthdays,'month':month,'whatsapp_cloud':comm and whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])),'whatsapp_configured':comm and whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])),'email_configured':comm and email_configured(email_config_for_client(conn,s['campaign_id']))})
+                plan=campaign_plan(conn,s['campaign_id']); official=(plan=='pro' and whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id']))); basic=(plan=='intermediate' and whatsapp_basic_status(conn,s['campaign_id']).get('status')=='connected'); return self.send_json({'ok':True,'customers':customers,'birthdays':birthdays,'month':month,'whatsapp_cloud':official,'whatsapp_basic':basic,'whatsapp_configured':official or basic,'email_configured':plan=='pro' and email_configured(email_config_for_client(conn,s['campaign_id']))})
 
         if path == '/api/card/rewards':
             public_id=(qs.get('id') or [''])[0].strip()
@@ -2837,7 +2905,7 @@ class Handler(BaseHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')
                 if not sess:return
-                if not plan_allows(conn,sess['campaign_id'],'communications'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                if campaign_plan(conn,sess['campaign_id']) not in ('intermediate','pro'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
                 if not sess['campaign_id']:return self.send_json({'ok':False,'error':'attendant_without_client'},403)
                 rows=[queue_rowdict(r) for r in conn.execute("SELECT id,kind,recipient,recipient_hash,status,attempts,last_error,created_at,sent_at,available_at,provider_status,provider_status_at,provider_error_code,provider_error_title FROM message_queue WHERE campaign_id=? ORDER BY id DESC LIMIT 30",(sess['campaign_id'],)).fetchall()]
                 return self.send_json({'ok':True,'messages':rows})
@@ -3809,12 +3877,14 @@ class Handler(BaseHTTPRequestHandler):
                 if s['role']=='attendant' and not self._need_permission(s,'send_messages'): return
                 if s['role']!='attendant': return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                if not plan_allows(conn,s['campaign_id'],'communications'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                plan=campaign_plan(conn,s['campaign_id'])
+                if plan not in ('intermediate','pro'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
                 recipient=str(payload.get('recipient','')).strip()
                 message=str(payload.get('message','')).strip()
                 try: template_id=int(payload.get('template_id') or 0)
                 except (TypeError,ValueError): template_id=0
                 tpl=None
+                if plan=='intermediate' and (template_id or recipient=='all' or recipient.startswith('segment:')):return self.send_json({'ok':False,'error':'whatsapp_basic_individual_only'},403)
                 if template_id:
                     tpl=conn.execute("SELECT id,body,meta_template_name,meta_template_language FROM message_templates WHERE id=? AND campaign_id=? AND channel IN ('whatsapp','both')",(template_id,s['campaign_id'])).fetchone()
                     if not tpl:return self.send_json({'ok':False,'error':'template_not_found'},404)
@@ -3836,7 +3906,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not rows: return self.send_json({'ok':False,'error':'no_recipients'},404)
                 wa_cfg=whatsapp_config_for_client(conn,s['campaign_id'])
                 cloud=whatsapp_cloud_configured(wa_cfg)
-                if not cloud:return self.send_json({'ok':False,'error':'whatsapp_not_configured'},503)
+                if plan=='intermediate':
+                    if whatsapp_basic_status(conn,s['campaign_id']).get('status')!='connected':return self.send_json({'ok':False,'error':'whatsapp_basic_not_connected'},503)
+                elif not cloud:return self.send_json({'ok':False,'error':'whatsapp_not_configured'},503)
                 results=[]
                 camp_ctx=conn.execute('SELECT name,goal,reward_name FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone()
                 camp_ctx=rowdict(camp_ctx) if camp_ctx else {'name':s['client_name'] or 'Empresa'}
@@ -4282,6 +4354,15 @@ class Handler(BaseHTTPRequestHandler):
                 except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
                 except integrity_errors():return self.send_json({'ok':False,'error':'campaign_code_exists'},409)
                 audit(conn,s['company_id'],s['user_id'],'client_admin_company_update','campaign',s['campaign_id'],details=f'plan={plan}',ip_address=self._ip());return self.send_json({'ok':True})
+            if path == '/api/client-admin/integration/whatsapp-basic/disconnect':
+                if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if campaign_plan(conn,s['campaign_id'])!='intermediate':return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                c=conn.execute('SELECT whatsapp_basic_instance FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone(); instance=((c['whatsapp_basic_instance'] if c else '') or '').strip()
+                if instance and whatsapp_basic_provider_configured():
+                    try:_whatsapp_basic_request('DELETE',f'instance/logout/{urllib.parse.quote(instance)}')
+                    except Exception:pass
+                conn.execute('UPDATE campaigns SET whatsapp_basic_status=?,whatsapp_basic_connected_at=NULL WHERE id=?',('not_connected',s['campaign_id']))
+                audit(conn,s['company_id'],s['user_id'],'whatsapp_basic_disconnected','campaign',s['campaign_id'],ip_address=self._ip()); return self.send_json({'ok':True})
             if path == '/api/client-admin/integration/whatsapp/embedded-complete':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 c=conn.execute('SELECT id,plan FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
