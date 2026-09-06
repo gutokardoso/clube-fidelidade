@@ -1,5 +1,12 @@
-# Fidelizaê! v162
+# Fidelizaê! v163
 
+
+
+## v163 — refinamentos do WhatsApp Básico
+- Status da conexão via QR Code passa a ser atualizado automaticamente por até 3 minutos após o pareamento, sem exigir recarregar a página.
+- Quando o WhatsApp Básico está conectado, o botão “Conectar por QR Code” é ocultado e permanece apenas “Desconectar”.
+- A área Comunicação do plano Intermediário informa corretamente que o envio é individual e de baixo volume, sem sugerir disparo em massa.
+- O fluxo de desconexão encerra a verificação automática e restaura corretamente o estado visual para nova conexão.
 
 ## v162 — WhatsApp: templates oficiais e status real de entrega
 - Envios proativos por WhatsApp (automações e campanhas) agora exigem o nome do template oficial aprovado na Meta e o idioma correspondente.
@@ -317,7 +324,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v162
+**Versão atual:** v163
 
 
 ## Novidades da v117
