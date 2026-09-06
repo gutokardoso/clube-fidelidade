@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v163'
+VERSION='v164'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -1491,7 +1491,11 @@ def _queue_send(item, conn):
 def process_message_queue_once(limit=15):
     with connect(DB_PATH) as conn:
         now=now_ts()
-        conn.execute("UPDATE message_queue SET status='retry',available_at=? WHERE status='processing' AND available_at<=?",(now,now))
+        # Segurança contra duplicidade: um WhatsApp que ficou em `processing` pode ter
+        # sido aceito pelo provedor antes de uma falha local. Reenviar automaticamente
+        # após o lease de 120s pode duplicar a mensagem indefinidamente.
+        conn.execute("UPDATE message_queue SET status='failed',last_error='delivery_uncertain_after_processing_timeout' WHERE kind='whatsapp' AND status='processing' AND available_at<=?",(now,))
+        conn.execute("UPDATE message_queue SET status='retry',available_at=? WHERE kind<>'whatsapp' AND status='processing' AND available_at<=?",(now,now))
         rows=conn.execute("SELECT id FROM message_queue WHERE status IN ('pending','retry') AND available_at<=? ORDER BY id LIMIT ?",(now,limit)).fetchall()
         for candidate in rows:
             item_id=candidate['id']; lease_until=now_ts()+120
@@ -1506,7 +1510,20 @@ def process_message_queue_once(limit=15):
             except Exception as exc: result={'sent':False,'reason':type(exc).__name__+':'+str(exc)[:300]}
             if result.get('sent'):
                 sent_at=now_ts(); external_message_id=str(result.get('message_id') or '').strip() or None
-                conn.execute("UPDATE message_queue SET status='sent',sent_at=?,last_error=NULL,external_message_id=COALESCE(?,external_message_id),provider_status=CASE WHEN ? IS NOT NULL THEN 'sent' ELSE provider_status END,provider_status_at=CASE WHEN ? IS NOT NULL THEN ? ELSE provider_status_at END WHERE id=? AND status='processing'",(sent_at,external_message_id,external_message_id,external_message_id,sent_at,item_id))
+                # Primeiro confirma o envio usando somente as colunas essenciais.
+                # Assim, qualquer problema posterior com metadados opcionais do provedor
+                # nunca deixa a linha em `processing` e nunca provoca reenvio do WhatsApp.
+                cur=conn.execute("UPDATE message_queue SET status='sent',sent_at=?,last_error=NULL WHERE id=? AND status='processing'",(sent_at,item_id))
+                if getattr(cur,'rowcount',0)==1:
+                    conn.commit()
+                # Metadados do provedor são complementares; falha aqui não deve reabrir a fila.
+                if external_message_id:
+                    try:
+                        conn.execute("UPDATE message_queue SET external_message_id=COALESCE(?,external_message_id),provider_status='sent',provider_status_at=? WHERE id=? AND status='sent'",(external_message_id,sent_at,item_id))
+                    except Exception as meta_exc:
+                        print('[QUEUE_METADATA]',type(meta_exc).__name__,str(meta_exc)[:300])
+                        try: conn.rollback()
+                        except Exception: pass
                 if item.get('kind')=='platform_company_email':
                     conn.execute("UPDATE platform_email_recipients SET status='sent',sent_at=?,last_error=NULL WHERE queue_id=?",(sent_at,item_id))
             else:

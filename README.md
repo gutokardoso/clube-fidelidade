@@ -1,8 +1,8 @@
-# Fidelizaê! v163
+# Fidelizaê! v164
 
 
 
-## v163 — refinamentos do WhatsApp Básico
+## v164 — refinamentos do WhatsApp Básico
 - Status da conexão via QR Code passa a ser atualizado automaticamente por até 3 minutos após o pareamento, sem exigir recarregar a página.
 - Quando o WhatsApp Básico está conectado, o botão “Conectar por QR Code” é ocultado e permanece apenas “Desconectar”.
 - A área Comunicação do plano Intermediário informa corretamente que o envio é individual e de baixo volume, sem sugerir disparo em massa.
@@ -324,7 +324,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v163
+**Versão atual:** v164
 
 
 ## Novidades da v117
@@ -711,3 +711,9 @@ O backup contém dados pessoais, hashes de senha e segredos de integração crip
 O plano Intermediário pode usar uma conexão de WhatsApp por QR Code, destinada a mensagens individuais e baixo volume. A interface exibe aviso permanente de que a conexão é não oficial e pode sofrer restrições/bloqueio. Campanhas em massa, templates Meta e WhatsApp Cloud API oficial continuam exclusivos do PRO.
 
 O conector QR é desacoplado do app e deve ser configurado no Railway com `WHATSAPP_BASIC_API_URL` e `WHATSAPP_BASIC_API_KEY`, apontando para um serviço compatível com os endpoints Evolution API v2 (`instance/create`, `instance/connect`, `instance/connectionState`, `message/sendText`). Sem essas variáveis o recurso aparece como indisponível e não simula conexão.
+
+
+## v164 — correção de duplicidade no WhatsApp Básico
+- Impede reenvio automático de mensagens WhatsApp que ficaram em estado `processing` após o provedor já ter aceitado o envio.
+- Mensagens WhatsApp com lease expirado passam para `failed` com `delivery_uncertain_after_processing_timeout` em vez de voltarem para `retry`.
+- O status `sent` agora é confirmado primeiro com as colunas essenciais da fila; metadados opcionais do provedor são gravados depois, sem reabrir o envio em caso de erro.
