@@ -1,4 +1,14 @@
-# Fidelizaê! v178
+# Fidelizaê! v179
+
+
+## v179 — escala, API e operação em worker
+
+- Pesquisa de **Clientes cadastrados** passa a ser filtrada e paginada no banco por nome/e-mail e por hash exato de CPF/telefone, evitando carregar toda a base em pesquisas comuns.
+- `/api/v1/customers` agora possui paginação (`page`, `size`, máximo 100), busca (`q`) e inteligência em lote, removendo o N+1 remanescente.
+- Destinatários de Comunicação usam busca sob demanda no servidor, com limite de resultados e debounce no painel; a tela não baixa mais toda a base de clientes.
+- Novos índices de pesquisa para nome, e-mail e hashes de CPF/telefone.
+- `Procfile` expõe `web` e `worker`; `railway.worker.json` serve como configuração do serviço worker separado. No Railway, configure `CLUBE_RUN_BACKGROUND_WORKER=0` no serviço web e use `python worker.py` em um segundo serviço apontando para o mesmo PostgreSQL. Não desligue o worker interno antes de criar o segundo serviço.
+- Testes de regressão ampliados para migração/versão, índices, hashing/autenticação, isolamento básico de tenant, inteligência em lote e disponibilidade do worker.
 
 ## v178 — textos, métricas, estoque e Gestão avançada
 - No Programa de Fidelidade, substitui as referências à Agência Taboo por “plataforma” nos textos explicativos solicitados.

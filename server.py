@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v178'
+VERSION='v179'
 _DASHBOARD_CACHE={}
 _DASHBOARD_CACHE_TTL=max(5,int(os.environ.get('DASHBOARD_CACHE_TTL','15')))
 TERMS_VERSION='1.1'
@@ -3114,12 +3114,28 @@ class Handler(BaseHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 ctx=self._api_context(conn)
                 if not ctx:return
-                rows=conn.execute("""SELECT cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.gender,cu.cpf,cu.cpf_enc,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,m.created_at
-                                     FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? ORDER BY cu.name LIMIT 1000""",(ctx['campaign_id'],)).fetchall()
-                out=[]
+                try: page=max(1,int((qs.get('page') or ['1'])[0])); size=max(10,min(100,int((qs.get('size') or ['50'])[0])))
+                except ValueError: page,size=1,50
+                q=((qs.get('q') or [''])[0] or '').strip()
+                where=['m.campaign_id=?']; params=[ctx['campaign_id']]
+                if q:
+                    like='%'+q.lower()+'%'; parts=['lower(cu.name) LIKE ?',"lower(COALESCE(cu.email,'')) LIKE ?"]; qparams=[like,like]
+                    cpf=normalize_cpf(q); phone=normalize_phone(q)
+                    if cpf: parts.append('cu.cpf_hash=?'); qparams.append(pii_lookup_hash(cpf,'cpf'))
+                    if phone: parts.append('cu.phone_hash=?'); qparams.append(pii_lookup_hash(phone,'phone'))
+                    where.append('('+ ' OR '.join(parts) +')'); params.extend(qparams)
+                clause=' AND '.join(where)
+                total=int(conn.execute(f'''SELECT COUNT(*) n FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE {clause}''',tuple(params)).fetchone()['n'] or 0)
+                rows=conn.execute(f'''SELECT cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.gender,cu.cpf,cu.cpf_enc,
+                    m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,m.created_at,c.loyalty_type,c.goal
+                    FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id
+                    WHERE {clause} ORDER BY cu.name LIMIT ? OFFSET ?''',tuple(params+[size,(page-1)*size])).fetchall()
+                out=[]; members=[]
                 for r in rows:
-                    d=customer_rowdict(r); intel=customer_intelligence(conn,{**d,'id':conn.execute('SELECT id FROM memberships WHERE public_id=?',(d['public_id'],)).fetchone()['id'],'campaign_id':ctx['campaign_id'],'loyalty_type':ctx['loyalty_type'],'goal':ctx['goal']},ctx); d.update(intel); out.append(d)
-                return self.send_json({'ok':True,'data':out})
+                    d=customer_rowdict(r); out.append(d); members.append({**d,'id':d['membership_id'],'campaign_id':ctx['campaign_id']})
+                intel_map=customer_intelligence_bulk(conn,members,{'id':ctx['campaign_id'],'loyalty_type':ctx['loyalty_type']})
+                for d in out: d.update(intel_map.get(int(d['membership_id']),{})); d.pop('membership_id',None)
+                return self.send_json({'ok':True,'data':out,'pagination':{'page':page,'size':size,'total':total,'pages':max(1,(total+size-1)//size)}})
         if path.startswith('/api/v1/customers/'):
             public_id=urllib.parse.unquote(path.rsplit('/',1)[1])
             with connect(DB_PATH) as conn:
@@ -3142,9 +3158,18 @@ class Handler(BaseHTTPRequestHandler):
                     (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND ((c.loyalty_type='points' AND t.type='adjustment' AND t.value>0) OR (c.loyalty_type='stamps' AND t.type='stamp' AND t.value>0))) visits,
                     (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND t.type='redeem') redeems
                     FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE m.campaign_id=?"""
-                total=int(conn.execute('SELECT COUNT(*) n FROM memberships WHERE campaign_id=?',(s['campaign_id'],)).fetchone()['n'] or 0)
-                if q or segment: raw=[customer_rowdict(r) for r in conn.execute(base_sql+' ORDER BY cu.name',(s['campaign_id'],)).fetchall()]
-                else: raw=[customer_rowdict(r) for r in conn.execute(base_sql+' ORDER BY cu.name LIMIT ? OFFSET ?',(s['campaign_id'],size,(page-1)*size)).fetchall()]
+                sql_params=[s['campaign_id']]; search_sql=''
+                if q:
+                    like='%'+q+'%'; parts=['lower(cu.name) LIKE ?',"lower(COALESCE(cu.email,'')) LIKE ?"]; search_params=[like,like]
+                    cpf=normalize_cpf(q); phone=normalize_phone(q)
+                    if cpf: parts.append('cu.cpf_hash=?'); search_params.append(pii_lookup_hash(cpf,'cpf'))
+                    if phone: parts.append('cu.phone_hash=?'); search_params.append(pii_lookup_hash(phone,'phone'))
+                    search_sql=' AND ('+' OR '.join(parts)+')'; sql_params.extend(search_params)
+                total=int(conn.execute('SELECT COUNT(*) n FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=?'+search_sql,tuple(sql_params)).fetchone()['n'] or 0)
+                # Busca textual é paginada no próprio banco. Filtros comportamentais precisam
+                # da inteligência agregada para preservar exatamente a classificação exibida.
+                if segment: raw=[customer_rowdict(r) for r in conn.execute(base_sql+search_sql+' ORDER BY cu.name',tuple(sql_params)).fetchall()]
+                else: raw=[customer_rowdict(r) for r in conn.execute(base_sql+search_sql+' ORDER BY cu.name LIMIT ? OFFSET ?',tuple(sql_params+[size,(page-1)*size])).fetchall()]
                 intel_input=[{**c,'id':c['membership_id'],'created_at':c.get('membership_created') or c.get('created_at'),'campaign_id':s['campaign_id']} for c in raw]
                 cr=conn.execute('SELECT loyalty_type FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone(); loyalty=raw[0]['loyalty_type'] if raw else (cr['loyalty_type'] if cr else 'stamps')
                 intel_map=customer_intelligence_bulk(conn,intel_input,{'id':s['campaign_id'],'loyalty_type':loyalty})
@@ -3159,10 +3184,9 @@ class Handler(BaseHTTPRequestHandler):
                     else:c['level']='VIP' if vip_enabled and int(c.get('visits') or 0)>=12 else ('Frequente' if int(c.get('visits') or 0)>=5 else 'Inicial')
                     c['to_reward']=max(0,int(cheapest or 0)-int(c.get('points_balance') or 0)) if c['loyalty_type']=='points' and cheapest else (None if c['loyalty_type']=='points' else max(0,int(c.get('goal') or 0)-int(c.get('progress') or 0)))
                     hay=' '.join(str(c.get(k) or '').lower() for k in ('name','cpf','email','phone'))
-                    if q and q not in hay:continue
                     if segment and c.get('segment')!=segment:continue
                     customers.append(c)
-                if q or segment: total=len(customers); customers=customers[(page-1)*size:page*size]
+                if segment: total=len(customers); customers=customers[(page-1)*size:page*size]
                 month=datetime.now(ZoneInfo('America/Sao_Paulo')).month
                 birthdays=[customer_rowdict(r) for r in conn.execute('SELECT cu.name,cu.birth_date,cu.phone,cu.phone_enc FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND substr(cu.birth_date,6,2)=? ORDER BY substr(cu.birth_date,9,2),cu.name',(s['campaign_id'],f'{month:02d}')).fetchall()]
                 plan=campaign_plan(conn,s['campaign_id']); official=(plan=='pro' and whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id']))); basic=(plan=='intermediate' and whatsapp_basic_status(conn,s['campaign_id']).get('status')=='connected')
@@ -3171,8 +3195,19 @@ class Handler(BaseHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 s=self._require_auth(conn,'attendant')
                 if not s:return
-                rows=[customer_rowdict(r) for r in conn.execute("SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND m.status='active' ORDER BY cu.name",(s['campaign_id'],)).fetchall()]
-                return self.send_json({'ok':True,'customers':rows})
+                q=((qs.get('q') or [''])[0] or '').strip(); channel=((qs.get('channel') or [''])[0] or '').strip()
+                try: limit=max(10,min(100,int((qs.get('limit') or ['50'])[0])))
+                except ValueError: limit=50
+                where=["m.campaign_id=?","m.status='active'"]; params=[s['campaign_id']]
+                if channel=='email': where.append("COALESCE(cu.email,'')<>''")
+                elif channel=='whatsapp': where.append("(cu.phone_hash IS NOT NULL OR COALESCE(cu.phone,'')<>'')")
+                if q:
+                    like='%'+q.lower()+'%'; parts=['lower(cu.name) LIKE ?',"lower(COALESCE(cu.email,'')) LIKE ?"]; qp=[like,like]
+                    phone=normalize_phone(q)
+                    if phone: parts.append('cu.phone_hash=?'); qp.append(pii_lookup_hash(phone,'phone'))
+                    where.append('('+ ' OR '.join(parts) +')'); params.extend(qp)
+                rows=[customer_rowdict(r) for r in conn.execute("SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE "+' AND '.join(where)+' ORDER BY cu.name LIMIT ?',tuple(params+[limit])).fetchall()]
+                return self.send_json({'ok':True,'customers':rows,'limit':limit,'has_more':len(rows)>=limit})
 
         if path == '/api/card/rewards':
             public_id=(qs.get('id') or [''])[0].strip()

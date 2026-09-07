@@ -1113,6 +1113,17 @@ def init_db(db_path=None, seed=True):
         else:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v178',?)",(now_ts(),))
 
+        # Migração v179: índices para pesquisa/paginação de clientes e destinatários.
+        conn.executescript("""CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name);
+        CREATE INDEX IF NOT EXISTS idx_customers_email ON customers(email);
+        CREATE INDEX IF NOT EXISTS idx_customers_phone_hash ON customers(phone_hash);
+        CREATE INDEX IF NOT EXISTS idx_customers_cpf_hash ON customers(cpf_hash);
+        """)
+        if _is_postgres(target):
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v179',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v179',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:
