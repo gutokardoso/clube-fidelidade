@@ -1,4 +1,12 @@
-# Fidelizaê! v166
+# Fidelizaê! v167
+
+## v167 — correções de ocupação e alinhamento responsivo
+
+- Programa de Fidelidade: Vale-presente e Cupons agora ocupam toda a largura útil do modal, mantendo duas colunas iguais em desktop e empilhando no mobile.
+- Cabeçalho mobile do administrador: removidas as lacunas entre botões nos planos Intermediário e PRO.
+- O wrapper de Gestão avançada deixa de ocupar espaço quando o recurso está oculto; os botões visíveis passam a preencher a grade em sequência.
+- No mobile, Programa de Fidelidade continua em largura total e os demais botões são distribuídos em duas colunas sem células vazias.
+
 
 ## v166 — ajustes do painel administrativo e navegação
 - Cabeçalho da empresa mostra “Administrador” e o plano contratado, por exemplo: “José Felipe • Administrador • Plano Intermediário”.
