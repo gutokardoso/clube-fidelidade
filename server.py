@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v173'
+VERSION='v174'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -1751,6 +1751,25 @@ def render_test_template(body, campaign, customer_name='Cliente Teste'):
     for key,value in values.items(): out=out.replace(key,str(value))
     return out
 
+def _automation_channel_reason(channel, x, rule, conn):
+    """Avalia cada canal separadamente para permitir fallback quando a regra usa `both`."""
+    if channel=='email':
+        if not x.get('email'): return False,'cliente sem e-mail cadastrado'
+        if not x.get('marketing_email'): return False,'cliente não autorizou e-mail'
+        if not email_configured(email_config_for_client(conn,rule['campaign_id'])): return False,'e-mail da empresa não configurado'
+        return True,'disponível'
+    if channel=='whatsapp':
+        if not str(rule['meta_template_name'] or '').strip(): return False,'modelo oficial do WhatsApp indisponível'
+        if not x.get('phone'): return False,'cliente sem WhatsApp cadastrado'
+        if not x.get('marketing_whatsapp'): return False,'cliente não autorizou WhatsApp'
+        if not whatsapp_cloud_configured(whatsapp_config_for_client(conn,rule['campaign_id'])): return False,'WhatsApp da empresa não conectado'
+        return True,'disponível'
+    return False,'canal inválido'
+
+def _automation_result_label(value):
+    labels={'queued':'programado para envio','not_requested':'não selecionado'}
+    return labels.get(value,value or 'não disponível')
+
 def run_automations_once():
     today=datetime.now(ZoneInfo('America/Sao_Paulo')).date(); now=now_ts()
     with connect(DB_PATH) as conn:
@@ -1758,9 +1777,6 @@ def run_automations_once():
         for c in campaigns: ensure_automation_defaults(conn,c['id'])
         rules=conn.execute('SELECT r.*,c.name client_name,c.loyalty_type FROM automation_rules r JOIN campaigns c ON c.id=r.campaign_id WHERE r.enabled=1 AND c.active=1').fetchall()
         for rule in rules:
-            if rule['channel'] in ('whatsapp','both') and not str(rule['meta_template_name'] or '').strip():
-                # Não dispara automações proativas por WhatsApp sem template oficial aprovado.
-                continue
             rows=conn.execute('''SELECT m.id membership_id,m.progress,m.rewards_available,m.public_id,m.created_at membership_created,c.goal,cu.id customer_id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.marketing_email,cu.marketing_whatsapp,
               COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at) last_activity
               FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.campaign_id=? AND m.status='active' ''',(rule['campaign_id'],)).fetchall()
@@ -1776,16 +1792,43 @@ def run_automations_once():
                 exists=conn.execute('SELECT id FROM automation_runs WHERE rule_id=? AND membership_id=? AND period_key=?',(rule['id'],x['membership_id'],period)).fetchone()
                 if exists: continue
                 msg=rule['message'].format(nome=x['name'],cliente=rule['client_name'])
-                queued=False; channel=rule['channel']
-                if channel in ('email','both') and x['email'] and x['marketing_email'] and email_configured(email_config_for_client(conn,rule['campaign_id'])):
-                    enqueue_message(conn,rule['campaign_id'],'campaign_email',x['email'],{'name':x['name'],'message':msg,'subject':'Fidelizaê! • '+rule['client_name']}); queued=True
-                if channel in ('whatsapp','both') and rule['meta_template_name'] and x['phone'] and x['marketing_whatsapp'] and whatsapp_cloud_configured(whatsapp_config_for_client(conn,rule['campaign_id'])):
-                    enqueue_message(conn,rule['campaign_id'],'whatsapp',x['phone'],{'message':msg,'meta_template_name':rule['meta_template_name'] or '', 'meta_template_language':rule['meta_template_language'] or 'pt_BR','meta_template_parameters':meta_parameters_for_purpose(rule['meta_template_name'],rule['message'],{'name':rule['client_name'],'goal':x['goal']},x['name'])}); queued=True
-                if queued:
-                    conn.execute('INSERT INTO automation_runs(rule_id,membership_id,period_key,created_at) VALUES(?,?,?,?) ON CONFLICT(rule_id,membership_id,period_key) DO NOTHING',(rule['id'],x['membership_id'],period,now_ts()))
+                requested=rule['channel']; email_result='not_requested'; whatsapp_result='not_requested'; queued_any=False
+                if requested in ('email','both'):
+                    ok,reason=_automation_channel_reason('email',x,rule,conn)
+                    if ok:
+                        try:
+                            enqueue_message(conn,rule['campaign_id'],'campaign_email',x['email'],{'name':x['name'],'message':msg,'subject':'Fidelizaê! • '+rule['client_name']})
+                            email_result='queued'; queued_any=True
+                        except Exception as exc:
+                            email_result='falha ao programar e-mail: '+str(exc)[:160]
+                    else: email_result=reason
+                if requested in ('whatsapp','both'):
+                    ok,reason=_automation_channel_reason('whatsapp',x,rule,conn)
+                    if ok:
+                        try:
+                            enqueue_message(conn,rule['campaign_id'],'whatsapp',x['phone'],{'message':msg,'meta_template_name':rule['meta_template_name'] or '', 'meta_template_language':rule['meta_template_language'] or 'pt_BR','meta_template_parameters':meta_parameters_for_purpose(rule['meta_template_name'],rule['message'],{'name':rule['client_name'],'goal':x['goal']},x['name'])})
+                            whatsapp_result='queued'; queued_any=True
+                        except Exception as exc:
+                            whatsapp_result='falha ao programar WhatsApp: '+str(exc)[:160]
+                    else: whatsapp_result=reason
+                parts=[]
+                if requested in ('email','both'): parts.append('E-mail: '+_automation_result_label(email_result))
+                if requested in ('whatsapp','both'): parts.append('WhatsApp: '+_automation_result_label(whatsapp_result))
+                if requested=='both' and queued_any and (email_result!='queued' or whatsapp_result!='queued'):
+                    summary='Envio parcial — '+'. '.join(parts)+'. O canal disponível continuou normalmente.'
+                elif queued_any:
+                    summary='Envio programado — '+'. '.join(parts)+'.'
+                else:
+                    summary='Não enviado — '+'. '.join(parts)+'.'
+                try:
+                    conn.execute('''INSERT INTO automation_events(rule_id,membership_id,period_key,customer_name,requested_channel,email_result,whatsapp_result,summary,created_at)
+                                    VALUES(?,?,?,?,?,?,?,?,?)''',(rule['id'],x['membership_id'],period,x['name'],requested,email_result,whatsapp_result,summary,now_ts()))
+                except Exception as exc:
+                    print('[AUTOMATION_EVENT]',type(exc).__name__,str(exc)[:200])
+                conn.execute('INSERT INTO automation_runs(rule_id,membership_id,period_key,created_at) VALUES(?,?,?,?) ON CONFLICT(rule_id,membership_id,period_key) DO NOTHING',(rule['id'],x['membership_id'],period,now_ts()))
 
 def run_meta_template_sync_once():
-    # Compatibilidade com conexões feitas antes da v173: na primeira execução após
+    # Compatibilidade com conexões feitas antes da v174: na primeira execução após
     # o deploy, sincroniza automaticamente sem exigir ação do cliente.
     with connect(DB_PATH) as conn:
         rows=conn.execute("SELECT id FROM campaigns WHERE active=1 AND plan='pro' AND whatsapp_phone_number_id IS NOT NULL AND whatsapp_phone_number_id<>'' AND whatsapp_access_token_enc IS NOT NULL AND (whatsapp_templates_status IS NULL OR whatsapp_templates_status='') ORDER BY id LIMIT 10").fetchall()
@@ -2690,6 +2733,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess:return
                 if not plan_allows(conn,sess['campaign_id'],'automations'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
                 ensure_automation_defaults(conn,sess['campaign_id']); campaign=conn.execute('SELECT loyalty_type FROM campaigns WHERE id=?',(sess['campaign_id'],)).fetchone(); loyalty_type=(campaign['loyalty_type'] if campaign else 'stamps') or 'stamps'; rows=[rowdict(r) for r in conn.execute("SELECT * FROM automation_rules WHERE campaign_id=? AND (?='stamps' OR rule_type<>'one_to_reward') ORDER BY id",(sess['campaign_id'],loyalty_type)).fetchall()]
+                for item in rows:
+                    try:
+                        ev=conn.execute('SELECT customer_name,requested_channel,email_result,whatsapp_result,summary,created_at FROM automation_events WHERE rule_id=? ORDER BY id DESC LIMIT 1',(item['id'],)).fetchone()
+                        item['last_event']=rowdict(ev) if ev else None
+                    except Exception:
+                        item['last_event']=None
                 return self.send_json({'ok':True,'rules':rows,'can_edit':bool(sess['is_client_admin'])})
         if path == '/api/client-admin/staff':
             with connect(DB_PATH) as conn:

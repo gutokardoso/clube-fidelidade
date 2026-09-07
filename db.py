@@ -1040,6 +1040,28 @@ def init_db(db_path=None, seed=True):
                 conn.execute("UPDATE automation_rules SET meta_template_name=?,meta_template_language='pt_BR' WHERE rule_type=?",(_tpl,_rule))
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v172',?)",(now_ts(),))
 
+        # Migração v174: histórico das execuções de automações e fallback por canal.
+        if _is_postgres(target):
+            conn.executescript("""CREATE TABLE IF NOT EXISTS automation_events (
+              id BIGSERIAL PRIMARY KEY, rule_id BIGINT NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE,
+              membership_id BIGINT REFERENCES memberships(id) ON DELETE SET NULL, period_key TEXT NOT NULL,
+              customer_name TEXT, requested_channel TEXT NOT NULL, email_result TEXT, whatsapp_result TEXT,
+              summary TEXT NOT NULL, created_at BIGINT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_automation_events_rule_time ON automation_events(rule_id,created_at DESC);
+            """)
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v174',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.executescript("""CREATE TABLE IF NOT EXISTS automation_events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, rule_id INTEGER NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE,
+              membership_id INTEGER REFERENCES memberships(id) ON DELETE SET NULL, period_key TEXT NOT NULL,
+              customer_name TEXT, requested_channel TEXT NOT NULL, email_result TEXT, whatsapp_result TEXT,
+              summary TEXT NOT NULL, created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_automation_events_rule_time ON automation_events(rule_id,created_at DESC);
+            """)
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v174',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:

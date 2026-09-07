@@ -1,4 +1,12 @@
-# Fidelizaê! v173
+# Fidelizaê! v174
+
+## v174 — automações claras e fallback entre canais
+- A área de Automações agora explica quando cada regra é executada, mostra se está ativa e exibe a última execução.
+- Ao selecionar **Ambos**, e-mail e WhatsApp são avaliados de forma independente: se um canal não puder enviar, o outro continua normalmente.
+- O motivo do canal indisponível fica registrado e visível (sem e-mail/WhatsApp, consentimento ausente, integração não configurada etc.).
+- O botão agora é **Salvar automação** e, ao ativar, a interface explica que não é necessário nenhum disparo manual.
+- Novo histórico técnico `automation_events` evita tentativas repetidas para a mesma ocorrência e dá transparência sobre envios parciais ou não enviados.
+
 
 ## v173 — gestão automática dos templates oficiais do WhatsApp
 - Cada empresa PRO conectada pelo Cadastro Incorporado da Meta passa a ter os modelos oficiais do Fidelizaê! sincronizados automaticamente na própria WABA.

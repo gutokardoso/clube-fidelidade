@@ -851,27 +851,12 @@ body[data-plan="pro"] #npsCard{order:6}
 }
 
 
-/* v173 — automações mais claras e alinhadas */
+/* v174 — automações autoexplicativas, histórico e fallback de canais */
 #automationRules{display:grid;gap:14px;margin-top:18px}
-.automation-row{
-  display:grid;
-  grid-template-columns:minmax(170px,.8fr) minmax(250px,1fr) minmax(360px,1.8fr) auto;
-  grid-template-areas:"title settings message actions" "note note note note";
-  gap:12px 18px;align-items:end;padding:18px 16px 14px;margin:0;
-  border:1px solid rgba(0,0,0,.09);border-radius:16px;background:#fff;
-}
-.automation-title{grid-area:title;align-self:center}.automation-title b{font-size:16px;line-height:1.3}
-.automation-settings{grid-area:settings;display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.automation-message{grid-area:message;min-width:0}.automation-message label,.automation-settings label{display:block;margin-bottom:6px}
-.automation-row .auto-message{width:100%;min-height:86px;resize:vertical}
-.automation-actions{grid-area:actions}.automation-actions .btn{min-width:112px}
-.automation-meta-note{grid-area:note;margin:0;padding-top:11px;border-top:1px solid var(--line);white-space:nowrap}
-.template-manager-help{max-width:980px;line-height:1.5}
-@media(max-width:1050px){
- .automation-row{grid-template-columns:1fr 1fr;grid-template-areas:"title settings" "message message" "actions actions" "note note";align-items:stretch}
- .automation-actions .btn{width:100%}.automation-meta-note{white-space:normal}
-}
-@media(max-width:640px){
- .automation-row{grid-template-columns:1fr;grid-template-areas:"title" "settings" "message" "actions" "note";padding:16px}
- .automation-settings{grid-template-columns:1fr 1fr}.automation-meta-note{white-space:normal;line-height:1.45}
-}
+.automation-row{display:grid;grid-template-columns:minmax(250px,1fr) minmax(250px,.9fr) minmax(360px,1.35fr) auto;grid-template-areas:"head settings message actions" "note note note note" "last last last last";gap:12px 18px;align-items:end;padding:18px 16px 14px;margin:0;border:1px solid rgba(0,0,0,.09);border-radius:16px;background:#fff}
+.automation-head{grid-area:head;align-self:center}.automation-head>div{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.automation-head b{font-size:16px;line-height:1.3}.automation-head small{display:block;margin-top:7px;color:var(--muted);line-height:1.4}
+.automation-state{font-size:12px;font-weight:700;border-radius:999px;padding:5px 8px;white-space:nowrap}.automation-state.active{background:#e9f7ee;color:#267743}.automation-state.inactive{background:#f2f2f2;color:#777}
+.automation-settings{grid-area:settings;display:grid;grid-template-columns:1fr 1fr;gap:10px}.automation-message{grid-area:message;min-width:0}.automation-message label,.automation-settings label{display:block;margin-bottom:6px}.automation-row .auto-message{width:100%;min-height:86px;resize:vertical}.automation-actions{grid-area:actions}.automation-actions .btn{min-width:150px}
+.automation-meta-note{grid-area:note;margin:0;padding-top:11px;border-top:1px solid var(--line);white-space:nowrap}.automation-last{grid-area:last;border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.45;background:#f8f8f8;color:#555}.automation-last.ok{background:#f2faf4}.automation-last.partial{background:#fff8e7;color:#755000}.automation-last.failed{background:#fff1f0;color:#8b2d26}.automation-last.empty{color:#888}.template-manager-help{max-width:980px;line-height:1.5}
+@media(max-width:1120px){.automation-row{grid-template-columns:1fr 1fr;grid-template-areas:"head settings" "message message" "actions actions" "note note" "last last";align-items:stretch}.automation-actions .btn{width:100%}.automation-meta-note{white-space:normal}}
+@media(max-width:640px){.automation-row{grid-template-columns:1fr;grid-template-areas:"head" "settings" "message" "actions" "note" "last";padding:16px}.automation-settings{grid-template-columns:1fr 1fr}.automation-meta-note{white-space:normal;line-height:1.45}}
