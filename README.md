@@ -1,5 +1,14 @@
-# Fidelizaê! v164
+# Fidelizaê! v165
 
+
+
+## v165 — imagem no WhatsApp Básico e melhoria de layout
+- O plano Intermediário agora permite anexar uma imagem PNG, JPG ou WEBP (até 700 KB) no envio individual via WhatsApp Básico.
+- A mensagem de texto passa a ser opcional quando há imagem e, quando preenchida, é enviada como legenda.
+- A imagem é pré-visualizada antes do envio e pode ser removida do formulário.
+- O envio usa o endpoint `message/sendMedia` da Evolution API para imagens e mantém `message/sendText` para mensagens somente de texto.
+- A caixa de WhatsApp ocupa toda a largura disponível quando o e-mail não está habilitado, eliminando o espaço vazio lateral no plano Intermediário.
+- Texto informativo do plano Intermediário atualizado conforme solicitado.
 
 
 ## v164 — refinamentos do WhatsApp Básico

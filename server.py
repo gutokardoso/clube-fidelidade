@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v164'
+VERSION='v165'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -1206,11 +1206,23 @@ def whatsapp_basic_qr(conn,campaign_id):
     qr=r.get('base64') or ((r.get('qrcode') or {}).get('base64') if isinstance(r.get('qrcode'),dict) else None) or r.get('code')
     return {'instance':instance,'qr':qr,'pairing_code':r.get('pairingCode') or r.get('pairing_code')}
 
-def send_whatsapp_basic(conn,campaign_id,phone,message):
+def send_whatsapp_basic(conn,campaign_id,phone,message,image_data=None):
     st=whatsapp_basic_status(conn,campaign_id)
     if st.get('status')!='connected': raise RuntimeError('whatsapp_basic_not_connected')
     number=_normalize_phone(phone)
-    r=_whatsapp_basic_request('POST',f'message/sendText/{urllib.parse.quote(st["instance"])}',{'number':number,'text':str(message)})
+    if image_data:
+        raw,subtype=decode_image_data(image_data)
+        mime='image/jpeg' if subtype=='jpeg' else 'image/'+subtype
+        r=_whatsapp_basic_request('POST',f'message/sendMedia/{urllib.parse.quote(st["instance"])}',{
+            'number':number,
+            'mediatype':'image',
+            'mimetype':mime,
+            'media':base64.b64encode(raw).decode('ascii'),
+            'caption':str(message or '').strip(),
+            'fileName':'fidelizae.'+('jpg' if subtype=='jpeg' else subtype)
+        },timeout=35)
+    else:
+        r=_whatsapp_basic_request('POST',f'message/sendText/{urllib.parse.quote(st["instance"])}',{'number':number,'text':str(message)})
     mid=((r.get('key') or {}).get('id') if isinstance(r,dict) else None)
     return {'sent':True,'message_id':mid}
 
@@ -1447,7 +1459,7 @@ def _queue_send(item, conn):
         try:
             plan=campaign_plan(conn,campaign_id)
             if plan=='intermediate':
-                return send_whatsapp_basic(conn,campaign_id,item['recipient'],payload.get('message',''))
+                return send_whatsapp_basic(conn,campaign_id,item['recipient'],payload.get('message',''),payload.get('image_data'))
             cfg=whatsapp_config_for_client(conn,campaign_id)
             if payload.get('meta_template_name'):
                 response=send_whatsapp_template(item['recipient'],payload.get('meta_template_name'),payload.get('meta_template_language') or 'pt_BR',payload.get('meta_template_parameters') or [],cfg)
@@ -3898,6 +3910,7 @@ class Handler(BaseHTTPRequestHandler):
                 if plan not in ('intermediate','pro'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
                 recipient=str(payload.get('recipient','')).strip()
                 message=str(payload.get('message','')).strip()
+                image_data=payload.get('image_data')
                 try: template_id=int(payload.get('template_id') or 0)
                 except (TypeError,ValueError): template_id=0
                 tpl=None
@@ -3906,7 +3919,15 @@ class Handler(BaseHTTPRequestHandler):
                     tpl=conn.execute("SELECT id,body,meta_template_name,meta_template_language FROM message_templates WHERE id=? AND campaign_id=? AND channel IN ('whatsapp','both')",(template_id,s['campaign_id'])).fetchone()
                     if not tpl:return self.send_json({'ok':False,'error':'template_not_found'},404)
                     if not str(tpl['meta_template_name'] or '').strip():return self.send_json({'ok':False,'error':'whatsapp_meta_template_required'},400)
-                if not message or len(message)>4096: return self.send_json({'ok':False,'error':'invalid_message'},400)
+                if len(message)>4096: return self.send_json({'ok':False,'error':'invalid_message'},400)
+                if plan=='intermediate':
+                    if not message and not image_data:return self.send_json({'ok':False,'error':'message_or_image_required'},400)
+                    try:
+                        if image_data:decode_image_data(image_data)
+                    except ValueError as exc:
+                        return self.send_json({'ok':False,'error':str(exc)},400)
+                elif not message:
+                    return self.send_json({'ok':False,'error':'invalid_message'},400)
                 if recipient == 'all' or recipient.startswith('segment:'):
                     extra=''; args=[s['campaign_id'],'']
                     if recipient=='segment:birthdays': extra=" AND substr(cu.birth_date,6,2)=?"; args.append(datetime.now(ZoneInfo('America/Sao_Paulo')).strftime('%m'))
@@ -3930,7 +3951,8 @@ class Handler(BaseHTTPRequestHandler):
                 camp_ctx=conn.execute('SELECT name,goal,reward_name FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone()
                 camp_ctx=rowdict(camp_ctx) if camp_ctx else {'name':s['client_name'] or 'Empresa'}
                 for r in rows:
-                    wa_payload={'message':message}
+                    wa_payload={'message':message};
+                    if plan=='intermediate' and image_data:wa_payload['image_data']=image_data
                     if tpl:
                         wa_payload.update({'meta_template_name':tpl['meta_template_name'],'meta_template_language':tpl['meta_template_language'] or 'pt_BR','meta_template_parameters':whatsapp_template_parameters(tpl['body'],camp_ctx,r['name'])})
                     qid=enqueue_message(conn,s['campaign_id'],'whatsapp',r['phone'],wa_payload)
