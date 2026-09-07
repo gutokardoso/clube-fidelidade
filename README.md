@@ -1,4 +1,9 @@
-# Fidelizaê! v168
+# Fidelizaê! v169
+
+## v169 — texto do Vale-presente
+
+- Atualizado o texto explicativo do Vale-presente para orientar o preenchimento de valor, comprador e beneficiário.
+- Removido o rótulo redundante “Valor” acima do campo de valor.
 
 ## v168 — realinhamento do Programa de Fidelidade PRO e navegação de Comunicação
 - No painel PRO, os cards do Programa de Fidelidade foram reorganizados em pares de mesma largura: Níveis VIP + Cupons, Vale-presente + Acelerador de pontos, Validade dos pontos + NPS / Satisfação.
