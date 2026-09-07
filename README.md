@@ -1,9 +1,9 @@
-# Fidelizaê! v172
+# Fidelizaê! v173
 
-## v172 — gestão automática dos templates oficiais do WhatsApp
+## v173 — gestão automática dos templates oficiais do WhatsApp
 - Cada empresa PRO conectada pelo Cadastro Incorporado da Meta passa a ter os modelos oficiais do Fidelizaê! sincronizados automaticamente na própria WABA.
 - O sistema consulta os modelos existentes e cria apenas os que estiverem faltando: `fidelizae_aniversario`, `fidelizae_recompensa`, `fidelizae_pontos`, `fidelizae_selo`, `fidelizae_pontos_expirando` e `fidelizae_campanha`.
-- O status da sincronização fica registrado por empresa (`active`, `pending`, `error`) e conexões anteriores à v172 são sincronizadas automaticamente após o deploy.
+- O status da sincronização fica registrado por empresa (`active`, `pending`, `error`) e conexões anteriores à v173 são sincronizadas automaticamente após o deploy.
 - O painel do cliente deixa de exigir nomes técnicos de templates Meta em campanhas, automações e templates de comunicação. O Fidelizaê! escolhe o modelo oficial adequado e preenche automaticamente nome do cliente, nome da empresa e conteúdo da campanha.
 - Campanhas e mensagens personalizadas por WhatsApp usam automaticamente `fidelizae_campanha`; aniversário, recompensa e selos usam seus modelos específicos.
 - Foi incluído status visual dos modelos Meta no painel da empresa e opção de nova tentativa apenas em caso de falha de sincronização.
@@ -763,3 +763,8 @@ O conector QR é desacoplado do app e deve ser configurado no Railway com `WHATS
 - Impede reenvio automático de mensagens WhatsApp que ficaram em estado `processing` após o provedor já ter aceitado o envio.
 - Mensagens WhatsApp com lease expirado passam para `failed` com `delivery_uncertain_after_processing_timeout` em vez de voltarem para `retry`.
 - O status `sent` agora é confirmado primeiro com as colunas essenciais da fila; metadados opcionais do provedor são gravados depois, sem reabrir o envio em caso de erro.
+
+
+## v173
+- Redesenho da área Automações com colunas alinhadas, mensagem em destaque e observação do WhatsApp em uma única linha no rodapé do card em telas amplas.
+- “Templates de comunicação” renomeado para “Mensagens salvas”, com explicação de uso e botão USAR para levar a mensagem à área de Comunicação; ENVIAR TESTE permanece apenas para validação de entrega.

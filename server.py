@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v172'
+VERSION='v173'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -1785,7 +1785,7 @@ def run_automations_once():
                     conn.execute('INSERT INTO automation_runs(rule_id,membership_id,period_key,created_at) VALUES(?,?,?,?) ON CONFLICT(rule_id,membership_id,period_key) DO NOTHING',(rule['id'],x['membership_id'],period,now_ts()))
 
 def run_meta_template_sync_once():
-    # Compatibilidade com conexões feitas antes da v172: na primeira execução após
+    # Compatibilidade com conexões feitas antes da v173: na primeira execução após
     # o deploy, sincroniza automaticamente sem exigir ação do cliente.
     with connect(DB_PATH) as conn:
         rows=conn.execute("SELECT id FROM campaigns WHERE active=1 AND plan='pro' AND whatsapp_phone_number_id IS NOT NULL AND whatsapp_phone_number_id<>'' AND whatsapp_access_token_enc IS NOT NULL AND (whatsapp_templates_status IS NULL OR whatsapp_templates_status='') ORDER BY id LIMIT 10").fetchall()
