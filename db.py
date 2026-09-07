@@ -298,16 +298,31 @@ class PgConnection:
         self._conn.close()
 
 
+_PG_POOL = None
+
+def _postgres_pool(target):
+    global _PG_POOL
+    if _PG_POOL is None:
+        try:
+            from psycopg_pool import ConnectionPool
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError('PostgreSQL configurado, mas psycopg-pool não está instalado. Execute pip install -r requirements.txt.') from exc
+        _PG_POOL = ConnectionPool(
+            conninfo=target, min_size=max(1, int(os.environ.get('DB_POOL_MIN','1'))),
+            max_size=max(2, int(os.environ.get('DB_POOL_MAX','10'))),
+            kwargs={'row_factory': dict_row}, timeout=float(os.environ.get('DB_POOL_TIMEOUT','5')),
+            open=True,
+        )
+    return _PG_POOL
+
 @contextmanager
 def connect(db_path=None):
     target = db_path or DATABASE_URL or DEFAULT_DB
+    pool_conn = None
     if _is_postgres(target):
-        try:
-            import psycopg
-            from psycopg.rows import dict_row
-        except ImportError as exc:
-            raise RuntimeError('PostgreSQL configurado, mas psycopg não está instalado. Execute pip install -r requirements.txt.') from exc
-        raw = psycopg.connect(target, row_factory=dict_row)
+        pool_conn = _postgres_pool(target).connection()
+        raw = pool_conn.__enter__()
         conn = PgConnection(raw)
     else:
         raw = sqlite3.connect(target)
@@ -321,7 +336,10 @@ def connect(db_path=None):
         conn.rollback()
         raise
     finally:
-        conn.close()
+        if pool_conn is not None:
+            pool_conn.__exit__(None, None, None)
+        else:
+            conn.close()
 
 
 def integrity_errors():
@@ -1082,6 +1100,18 @@ def init_db(db_path=None, seed=True):
             conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v177',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
         else:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v177',?)",(now_ts(),))
+
+        # Migração v178: índices para dashboard, paginação, automações e filas.
+        conn.executescript("""CREATE INDEX IF NOT EXISTS idx_memberships_campaign_status ON memberships(campaign_id,status);
+        CREATE INDEX IF NOT EXISTS idx_transactions_membership_type_time ON transactions(membership_id,type,created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_purchase_records_membership_time ON purchase_records(membership_id,created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_message_queue_campaign_status_available ON message_queue(campaign_id,status,available_at);
+        CREATE INDEX IF NOT EXISTS idx_automation_rules_enabled_campaign ON automation_rules(enabled,campaign_id);
+        """)
+        if _is_postgres(target):
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v178',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v178',?)",(now_ts(),))
 
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()

@@ -41,13 +41,15 @@ from antifraud import validate_stamp, FraudError
 from wallet import wallet_status, apple_pass_link, google_wallet_link, build_apple_pkpass, google_save_url, google_update_object, apple_auth_token, apple_push_update
 from platform_features import has_permission, session_permissions, active_multiplier, add_point_lot, consume_point_lots, expire_points_once, record_purchase
 from integrations import platform_order
-from intelligence import customer_intelligence, campaign_intelligence
+from intelligence import customer_intelligence, campaign_intelligence, customer_intelligence_bulk
 
 BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v177'
+VERSION='v178'
+_DASHBOARD_CACHE={}
+_DASHBOARD_CACHE_TTL=max(5,int(os.environ.get('DASHBOARD_CACHE_TTL','15')))
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -1966,6 +1968,18 @@ def _parse_import_file(filename, data_b64):
 
 class Handler(BaseHTTPRequestHandler):
     sys_version = ''
+    def handle_one_request(self):
+        started=time.monotonic()
+        try:return super().handle_one_request()
+        finally:
+            elapsed=(time.monotonic()-started)*1000
+            threshold=float(os.environ.get('SLOW_REQUEST_MS','500'))
+            if elapsed>=threshold:
+                path=urllib.parse.urlparse(getattr(self,'path','') or '').path
+                print(f'[PERF] slow_request path={path} elapsed_ms={elapsed:.1f}')
+                if SENTRY_ENABLED and sentry_sdk is not None:
+                    try:sentry_sdk.capture_message(f'Slow request {path}: {elapsed:.0f} ms',level='warning')
+                    except Exception:pass
     def _need_permission(self,sess,key):
         if has_permission(rowdict(sess),key): return True
         self.send_json({'ok':False,'error':'permission_denied','permission':key},403); return False
@@ -2071,12 +2085,20 @@ class Handler(BaseHTTPRequestHandler):
         forwarded=(self.headers.get('X-Forwarded-For') or '').split(',')[0].strip()
         return _safe_ip(forwarded,direct)
 
+    def _maybe_compress(self, data, ctype):
+        ae=(self.headers.get('Accept-Encoding') or '').lower()
+        compressible=ctype.startswith('text/') or 'json' in ctype or 'javascript' in ctype or 'svg+xml' in ctype
+        if compressible and len(data)>=1024 and 'gzip' in ae:
+            return gzip.compress(data, compresslevel=5), 'gzip'
+        return data, None
+
     def send_json(self, obj, status=200, headers=None):
-        data = jdump(obj)
+        data,encoding = self._maybe_compress(jdump(obj), 'application/json; charset=utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'no-store')
+        if encoding:self.send_header('Content-Encoding',encoding); self.send_header('Vary','Accept-Encoding')
         self._security_headers(False)
         if headers:
             for k,v in headers.items():
@@ -2085,13 +2107,16 @@ class Handler(BaseHTTPRequestHandler):
                 else:self.send_header(k,str(v))
         self.end_headers(); self.wfile.write(data)
 
-    def send_text(self, text, status=200, ctype='text/html; charset=utf-8'):
-        data = text.encode('utf-8')
+    def send_text(self, text, status=200, ctype='text/html; charset=utf-8', headers=None):
+        data,encoding = self._maybe_compress(text.encode('utf-8'), ctype)
         self.send_response(status)
         self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(data)))
-        self.send_header('Cache-Control', 'no-store')
+        if not headers or 'Cache-Control' not in headers:self.send_header('Cache-Control', 'no-store')
+        if encoding:self.send_header('Content-Encoding',encoding); self.send_header('Vary','Accept-Encoding')
         self._security_headers(ctype.startswith('text/html'))
+        if headers:
+            for k,v in headers.items(): self.send_header(k,str(v))
         self.end_headers(); self.wfile.write(data)
 
     def send_bytes(self, data, ctype='application/octet-stream', status=200, headers=None):
@@ -2286,7 +2311,7 @@ class Handler(BaseHTTPRequestHandler):
             import mimetypes
             ctype = mimetypes.guess_type(str(target))[0] or 'application/octet-stream'
             if ctype.startswith('text/') or ctype in ('application/javascript','application/json','image/svg+xml'):
-                return self.send_text(target.read_text(encoding='utf-8'),200,ctype + ('; charset=utf-8' if ctype.startswith('text/') or ctype in ('application/javascript','application/json') else ''))
+                return self.send_text(target.read_text(encoding='utf-8'),200,ctype + ('; charset=utf-8' if ctype.startswith('text/') or ctype in ('application/javascript','application/json') else ''), {'Cache-Control':'public, max-age=86400, stale-while-revalidate=604800','ETag':f'\"{VERSION}-{int(target.stat().st_mtime)}-{target.stat().st_size}\"'})
             return self.send_bytes(target.read_bytes(),ctype,200,{'Cache-Control':'public, max-age=3600'})
         if path == '/reset-password':
             target=STATIC/'reset-password.html'; return self.send_text(target.read_text(encoding='utf-8').replace('{{VERSION}}',VERSION),200,'text/html; charset=utf-8')
@@ -2639,6 +2664,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not sess:return
                 if not sess['is_client_admin'] and not self._need_permission(sess,'view_reports'): return
                 cid=sess['campaign_id']; now=now_ts(); month_start=int(datetime.now(ZoneInfo('America/Sao_Paulo')).replace(day=1,hour=0,minute=0,second=0,microsecond=0).timestamp())
+                cached=_DASHBOARD_CACHE.get(cid)
+                if cached and now-cached[0]<_DASHBOARD_CACHE_TTL:return self.send_json(cached[1],headers={'X-Fidelizae-Cache':'HIT'})
                 metrics={}
                 metrics['active_cards']=conn.execute("SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND status='active'",(cid,)).fetchone()['n']
                 metrics['new_month']=conn.execute('SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND created_at>=?',(cid,month_start)).fetchone()['n']
@@ -2700,9 +2727,13 @@ class Handler(BaseHTTPRequestHandler):
                 # Financeiro: usa valores de compra registrados tanto em pontos quanto em selos.
                 fin=conn.execute('SELECT COALESCE(SUM(pr.amount_cents),0) revenue,COUNT(*) purchases FROM purchase_records pr JOIN memberships m ON m.id=pr.membership_id WHERE m.campaign_id=? AND pr.created_at>=?',(cid,month_start)).fetchone()
                 metrics['revenue_month_cents']=int(fin['revenue'] or 0); metrics['purchases_month']=int(fin['purchases'] or 0); metrics['avg_ticket_cents']=round(metrics['revenue_month_cents']/max(metrics['purchases_month'],1))
-                intel_summary=campaign_intelligence(conn,cid)
-                metrics['segments_smart']=intel_summary['segments']; metrics['smart_return_rate']=intel_summary['return_rate']
-                metrics['avg_frequency_days']=intel_summary['avg_frequency_days']; metrics['avg_ltv_cents']=intel_summary['avg_ltv_cents']
+                intel_members=[rowdict(r) for r in conn.execute('SELECT m.*,c.goal,c.loyalty_type FROM memberships m JOIN campaigns c ON c.id=m.campaign_id WHERE m.campaign_id=? AND m.status=\'active\'',(cid,)).fetchall()]
+                intel_map=customer_intelligence_bulk(conn,intel_members,{'id':cid,'loyalty_type':loyalty_type})
+                intel_data=list(intel_map.values()); smart_counts={k:0 for k in ('new','active','recurrent','vip','at_risk','inactive','almost_reward','reward_ready')}
+                for item in intel_data: smart_counts[item['segment']]=smart_counts.get(item['segment'],0)+1
+                metrics['segments_smart']=smart_counts; metrics['smart_return_rate']=round(sum(1 for x in intel_data if x['purchases']>=2)*100/max(len(intel_data),1),1)
+                freqs=[x['frequency_days'] for x in intel_data if x['frequency_days']]; ltvs=[x['ltv_estimated_cents'] for x in intel_data if x['ltv_estimated_cents']]
+                metrics['avg_frequency_days']=round(sum(freqs)/len(freqs),1) if freqs else None; metrics['avg_ltv_cents']=round(sum(ltvs)/len(ltvs)) if ltvs else 0
                 metrics['campaign_revenue_cents']=int(conn.execute('SELECT COALESCE(SUM(mcr.attributed_revenue_cents),0) n FROM marketing_campaign_recipients mcr JOIN marketing_campaigns mc ON mc.id=mcr.marketing_campaign_id WHERE mc.campaign_id=? AND mcr.returned_at>=?',(cid,month_start)).fetchone()['n'] or 0)
                 finance=[]
                 for back in range(5,-1,-1):
@@ -2732,7 +2763,7 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception: age_counts['unknown']+=1
                     dev=(dr['last_device_os'] or 'other').lower(); device_counts[dev if dev in ('android','ios') else 'other']+=1
                 metrics['demographics']={'gender':gender_counts,'age':age_counts,'device':device_counts}
-                return self.send_json({'ok':True,'metrics':metrics})
+                payload={'ok':True,'metrics':metrics}; _DASHBOARD_CACHE[cid]=(now,payload); return self.send_json(payload,headers={'X-Fidelizae-Cache':'MISS'})
         if path == '/api/admin/engagement':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')
@@ -3101,30 +3132,47 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/attendant/customers':
             with connect(DB_PATH) as conn:
                 s=self._require_auth(conn,'attendant')
-                if not s: return
-                if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
-                customers=[customer_rowdict(r) for r in conn.execute('''SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.gender,cu.cpf,cu.cpf_enc,cu.created_at,m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,c.loyalty_type,c.goal,
+                if not s:return
+                if not s['campaign_id']:return self.send_json({'ok':False,'error':'attendant_without_client'},403)
+                try: page=max(1,int((qs.get('page') or ['1'])[0])); size=max(10,min(100,int((qs.get('size') or ['25'])[0])))
+                except ValueError: page,size=1,25
+                q=((qs.get('q') or [''])[0] or '').strip().lower(); segment=((qs.get('segment') or [''])[0] or '').strip()
+                base_sql="""SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.birth_date,cu.gender,cu.cpf,cu.cpf_enc,cu.created_at,m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,m.created_at membership_created,c.loyalty_type,c.goal,
                     COALESCE((SELECT MAX(t.created_at) FROM transactions t WHERE t.membership_id=m.id),m.created_at) last_activity,
                     (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND ((c.loyalty_type='points' AND t.type='adjustment' AND t.value>0) OR (c.loyalty_type='stamps' AND t.type='stamp' AND t.value>0))) visits,
                     (SELECT COUNT(*) FROM transactions t WHERE t.membership_id=m.id AND t.type='redeem') redeems
-                    FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id
-                    WHERE m.campaign_id=? ORDER BY cu.name''',(s['campaign_id'],)).fetchall()]
-                cheapest=conn.execute("SELECT MIN(points_cost) n FROM reward_catalog WHERE campaign_id=? AND active=1",(s['campaign_id'],)).fetchone()['n']
-                vip_enabled=plan_allows(conn,s['campaign_id'],'vip_tiers')
-                tiers=[rowdict(r) for r in conn.execute("SELECT name,min_points,benefit FROM loyalty_tiers WHERE campaign_id=? AND active=1 ORDER BY min_points",(s['campaign_id'],)).fetchall()] if vip_enabled else []
-                for c in customers:
-                    intel=customer_intelligence(conn,{**c,'id':c['membership_id'],'campaign_id':s['campaign_id']},c)
-                    c.update(intel)
-                    if c['segment']=='vip' and not vip_enabled:c['segment']='recurrent'
+                    FROM customers cu JOIN memberships m ON m.customer_id=cu.id JOIN campaigns c ON c.id=m.campaign_id WHERE m.campaign_id=?"""
+                total=int(conn.execute('SELECT COUNT(*) n FROM memberships WHERE campaign_id=?',(s['campaign_id'],)).fetchone()['n'] or 0)
+                if q or segment: raw=[customer_rowdict(r) for r in conn.execute(base_sql+' ORDER BY cu.name',(s['campaign_id'],)).fetchall()]
+                else: raw=[customer_rowdict(r) for r in conn.execute(base_sql+' ORDER BY cu.name LIMIT ? OFFSET ?',(s['campaign_id'],size,(page-1)*size)).fetchall()]
+                intel_input=[{**c,'id':c['membership_id'],'created_at':c.get('membership_created') or c.get('created_at'),'campaign_id':s['campaign_id']} for c in raw]
+                cr=conn.execute('SELECT loyalty_type FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone(); loyalty=raw[0]['loyalty_type'] if raw else (cr['loyalty_type'] if cr else 'stamps')
+                intel_map=customer_intelligence_bulk(conn,intel_input,{'id':s['campaign_id'],'loyalty_type':loyalty})
+                cheapest=conn.execute('SELECT MIN(points_cost) n FROM reward_catalog WHERE campaign_id=? AND active=1',(s['campaign_id'],)).fetchone()['n']
+                vip_enabled=plan_allows(conn,s['campaign_id'],'vip_tiers'); tiers=[rowdict(r) for r in conn.execute('SELECT name,min_points,benefit FROM loyalty_tiers WHERE campaign_id=? AND active=1 ORDER BY min_points',(s['campaign_id'],)).fetchall()] if vip_enabled else []
+                customers=[]
+                for c in raw:
+                    c.update(intel_map.get(int(c['membership_id']),{}))
+                    if c.get('segment')=='vip' and not vip_enabled:c['segment']='recurrent'
                     if tiers and c['loyalty_type']=='points':
-                        eligible=[t for t in tiers if int(c.get('points_balance') or 0)>=int(t.get('min_points') or 0)]; c['level']=(eligible[-1]['name'] if eligible else 'Inicial')
-                    else: c['level']='VIP' if vip_enabled and int(c.get('visits') or 0)>=12 else ('Frequente' if int(c.get('visits') or 0)>=5 else 'Inicial')
-                    if c['loyalty_type']=='points': c['to_reward']=max(0,int(cheapest or 0)-int(c.get('points_balance') or 0)) if cheapest else None
-                    else: c['to_reward']=max(0,int(c.get('goal') or 0)-int(c.get('progress') or 0))
+                        eligible=[t for t in tiers if int(c.get('points_balance') or 0)>=int(t.get('min_points') or 0)]; c['level']=eligible[-1]['name'] if eligible else 'Inicial'
+                    else:c['level']='VIP' if vip_enabled and int(c.get('visits') or 0)>=12 else ('Frequente' if int(c.get('visits') or 0)>=5 else 'Inicial')
+                    c['to_reward']=max(0,int(cheapest or 0)-int(c.get('points_balance') or 0)) if c['loyalty_type']=='points' and cheapest else (None if c['loyalty_type']=='points' else max(0,int(c.get('goal') or 0)-int(c.get('progress') or 0)))
+                    hay=' '.join(str(c.get(k) or '').lower() for k in ('name','cpf','email','phone'))
+                    if q and q not in hay:continue
+                    if segment and c.get('segment')!=segment:continue
+                    customers.append(c)
+                if q or segment: total=len(customers); customers=customers[(page-1)*size:page*size]
                 month=datetime.now(ZoneInfo('America/Sao_Paulo')).month
-                birthdays=[c for c in customers if c.get('birth_date') and len(c['birth_date'])>=10 and int(c['birth_date'][5:7])==month]
-                birthdays.sort(key=lambda c: (int(c['birth_date'][8:10]), c['name'].lower()))
-                plan=campaign_plan(conn,s['campaign_id']); official=(plan=='pro' and whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id']))); basic=(plan=='intermediate' and whatsapp_basic_status(conn,s['campaign_id']).get('status')=='connected'); return self.send_json({'ok':True,'customers':customers,'birthdays':birthdays,'month':month,'whatsapp_cloud':official,'whatsapp_basic':basic,'whatsapp_configured':official or basic,'email_configured':plan=='pro' and email_configured(email_config_for_client(conn,s['campaign_id']))})
+                birthdays=[customer_rowdict(r) for r in conn.execute('SELECT cu.name,cu.birth_date,cu.phone,cu.phone_enc FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND substr(cu.birth_date,6,2)=? ORDER BY substr(cu.birth_date,9,2),cu.name',(s['campaign_id'],f'{month:02d}')).fetchall()]
+                plan=campaign_plan(conn,s['campaign_id']); official=(plan=='pro' and whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id']))); basic=(plan=='intermediate' and whatsapp_basic_status(conn,s['campaign_id']).get('status')=='connected')
+                return self.send_json({'ok':True,'customers':customers,'pagination':{'page':page,'size':size,'total':total,'pages':max(1,(total+size-1)//size)},'birthdays':birthdays,'month':month,'loyalty_type':loyalty,'whatsapp_cloud':official,'whatsapp_basic':basic,'whatsapp_configured':official or basic,'email_configured':plan=='pro' and email_configured(email_config_for_client(conn,s['campaign_id']))})
+        if path == '/api/attendant/customer-recipients':
+            with connect(DB_PATH) as conn:
+                s=self._require_auth(conn,'attendant')
+                if not s:return
+                rows=[customer_rowdict(r) for r in conn.execute("SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND m.status='active' ORDER BY cu.name",(s['campaign_id'],)).fetchall()]
+                return self.send_json({'ok':True,'customers':rows})
 
         if path == '/api/card/rewards':
             public_id=(qs.get('id') or [''])[0].strip()
@@ -5277,7 +5325,7 @@ def main():
     ensure_configured_staff(DB_PATH)
     if args.init_only:
         print(f'Database initialized: {DB_PATH}'); return
-    threading.Thread(target=background_loop,daemon=True,name='clube-worker').start()
+    if os.environ.get('CLUBE_RUN_BACKGROUND_WORKER','1')=='1': threading.Thread(target=background_loop,daemon=True,name='clube-worker').start()
     srv=SentryHTTPServer((args.host,args.port),Handler)
     print(f'Fidelizaê! {VERSION} em http://{args.host}:{args.port}')
     try: srv.serve_forever()

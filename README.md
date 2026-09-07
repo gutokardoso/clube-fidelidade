@@ -1,6 +1,6 @@
-# Fidelizaê! v177
+# Fidelizaê! v178
 
-## v177 — textos, métricas, estoque e Gestão avançada
+## v178 — textos, métricas, estoque e Gestão avançada
 - No Programa de Fidelidade, substitui as referências à Agência Taboo por “plataforma” nos textos explicativos solicitados.
 - Na Visão geral, adiciona espaçamento visual entre o valor das métricas e seus textos, melhorando a leitura de itens como “1 / Clientes ativos”.
 - Em Recompensas, o estoque ilimitado deixa de aparecer como `-1`: o campo fica visualmente como “Ilimitado” quando não há limite e continua aceitando uma quantidade numérica quando necessário.
@@ -796,3 +796,13 @@ O conector QR é desacoplado do app e deve ser configurado no Railway com `WHATS
 ## v173
 - Redesenho da área Automações com colunas alinhadas, mensagem em destaque e observação do WhatsApp em uma única linha no rodapé do card em telas amplas.
 - “Templates de comunicação” renomeado para “Mensagens salvas”, com explicação de uso e botão USAR para levar a mensagem à área de Comunicação; ENVIAR TESTE permanece apenas para validação de entrega.
+
+
+## Performance v178
+- Pool de conexões PostgreSQL (`psycopg-pool`), configurável por `DB_POOL_MIN`, `DB_POOL_MAX` e `DB_POOL_TIMEOUT`.
+- Respostas JSON/texto maiores que 1 KB usam gzip quando o navegador aceita; CSS/JS/SVG recebem cache público com ETag.
+- Clientes cadastrados usam paginação real no backend (25/50/100), busca com debounce e endpoint leve separado para destinatários de comunicação.
+- Inteligência de clientes foi convertida para processamento em lote, removendo consultas N+1 de compras/transações.
+- Índices v178 aceleram memberships, transações, compras, fila e automações.
+- `worker.py` permite separar filas/automações/backups do processo HTTP. Em uma implantação com worker separado, use `CLUBE_RUN_BACKGROUND_WORKER=0` no serviço web e execute `python worker.py` no worker.
+- Smoke tests: `python -m unittest discover -s tests`.
