@@ -1,4 +1,11 @@
-# Fidelizaê! v176
+# Fidelizaê! v177
+
+## v177 — textos, métricas, estoque e Gestão avançada
+- No Programa de Fidelidade, substitui as referências à Agência Taboo por “plataforma” nos textos explicativos solicitados.
+- Na Visão geral, adiciona espaçamento visual entre o valor das métricas e seus textos, melhorando a leitura de itens como “1 / Clientes ativos”.
+- Em Recompensas, o estoque ilimitado deixa de aparecer como `-1`: o campo fica visualmente como “Ilimitado” quando não há limite e continua aceitando uma quantidade numérica quando necessário.
+- “Cadastrar atendente” deixa de ocupar um botão isolado no topo e passa a ser o primeiro item do submenu “Gestão avançada”.
+- Para planos que não têm os recursos avançados PRO, o submenu preserva “Cadastrar atendente” sem expor Unidades, Auditoria ou Integrações / API.
 
 ## v176 — alinhamento preciso das automações
 - Alinha a base dos campos Canal e Ativa e do botão SALVAR AUTOMAÇÃO exatamente com a base do campo Mensagem do e-mail em telas amplas.

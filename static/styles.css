@@ -946,3 +946,9 @@ body[data-plan="pro"] #npsCard{order:6}
       "last";
   }
 }
+
+
+/* v177 — refinamentos do Programa de Fidelidade, métricas e menu de gestão */
+.dashboard-metrics>.loyalty-metric{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px;min-width:0}
+.dashboard-metrics>.loyalty-metric b{display:block;font-size:30px;line-height:1;margin:0 0 9px}
+.dashboard-metrics>.loyalty-metric span{display:block;font-size:12px;line-height:1.35;color:var(--muted)}
