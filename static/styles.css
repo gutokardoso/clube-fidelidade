@@ -746,3 +746,31 @@ body[data-plan="pro"] #multiplierToolCard{order:4}
 body[data-plan="pro"] #pointsAdvanced{order:5}
 body[data-plan="pro"] #npsCard{order:6}
 @media(max-width:820px){.program-tools-grid{grid-template-columns:1fr}}
+
+/* v170 — ações da tabela de clientes sem sobreposição no desktop */
+@media (min-width:801px){
+  .customer-intelligence-table th:last-child,
+  .customer-intelligence-table td[data-label="Ações"]{
+    width:250px;
+    min-width:250px;
+  }
+  .customer-intelligence-table td[data-label="Ações"]{
+    padding-left:8px;
+    padding-right:8px;
+  }
+  .customer-intelligence-table td[data-label="Ações"] .row-actions{
+    display:flex;
+    flex-wrap:nowrap;
+    justify-content:flex-end;
+    align-items:center;
+    gap:6px;
+    width:100%;
+    margin:0;
+  }
+  .customer-intelligence-table td[data-label="Ações"] .btn-small{
+    flex:0 0 auto;
+    padding:8px 9px;
+    font-size:11px;
+    white-space:nowrap;
+  }
+}

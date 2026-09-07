@@ -1,6 +1,6 @@
-# Fidelizaê! v169
+# Fidelizaê! v170
 
-## v169 — texto do Vale-presente
+## v170 — texto do Vale-presente
 
 - Atualizado o texto explicativo do Vale-presente para orientar o preenchimento de valor, comprador e beneficiário.
 - Removido o rótulo redundante “Valor” acima do campo de valor.
