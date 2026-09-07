@@ -1,6 +1,11 @@
-# Fidelizaê! v165
+# Fidelizaê! v166
 
-
+## v166 — ajustes do painel administrativo e navegação
+- Cabeçalho da empresa mostra “Administrador” e o plano contratado, por exemplo: “José Felipe • Administrador • Plano Intermediário”.
+- A Fila de mensagens foi posicionada logo após a área de Comunicação/WhatsApp e o texto passou a mencionar apenas os últimos envios de WhatsApp.
+- No mobile, os botões do topo do administrador do cliente ocupam a grade sem lacunas: Programa de Fidelidade e Cadastrar atendente em largura total, Perfil + Alertas lado a lado e Sair em largura total.
+- Vale-presente e Cupons ficam lado a lado na tela Programa de Fidelidade em telas amplas e empilham responsivamente em telas menores.
+- Submenus do topo abrem somente por hover em computadores; em dispositivos sem hover, o clique permanece como fallback necessário para toque.
 
 ## v165 — imagem no WhatsApp Básico e melhoria de layout
 - O plano Intermediário agora permite anexar uma imagem PNG, JPG ou WEBP (até 700 KB) no envio individual via WhatsApp Básico.
