@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v171'
+VERSION='v172'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -1289,6 +1289,126 @@ def send_whatsapp_template(phone, template_name, language='pt_BR', parameters=No
     if params: tpl['components']=[{'type':'body','parameters':params}]
     return _whatsapp_graph_send(phone,{'type':'template','template':tpl},config)
 
+# Modelos oficiais gerenciados pelo Fidelizaê!. Cada empresa PRO conectada via
+# Embedded Signup recebe/sincroniza estes modelos em sua própria WABA.
+FIDELIZAE_META_TEMPLATES = {
+    'fidelizae_aniversario': {
+        'category':'MARKETING','language':'pt_BR',
+        'body':'Feliz aniversário, {{1}}! 🎉\nA {{2}} deseja a você um dia muito especial. Temos uma surpresa esperando por você! 🎁',
+        'examples':['Guto','Restaurante Comabem']},
+    'fidelizae_recompensa': {
+        'category':'MARKETING','language':'pt_BR',
+        'body':'Parabéns, {{1}}! 🎉 Você conquistou uma recompensa no programa de fidelidade da {{2}}. Consulte sua recompensa e aproveite! 🎁',
+        'examples':['Guto','Restaurante Comabem']},
+    'fidelizae_pontos': {
+        'category':'MARKETING','language':'pt_BR',
+        'body':'Olá, {{1}}! ⭐ Você tem novidades no seu programa de fidelidade da {{2}}. Consulte seus pontos e recompensas disponíveis.',
+        'examples':['Guto','Restaurante Comabem']},
+    'fidelizae_selo': {
+        'category':'MARKETING','language':'pt_BR',
+        'body':'Olá, {{1}}! 🎯 Seu cartão fidelidade da {{2}} foi atualizado. Continue acumulando selos para chegar à sua próxima recompensa!',
+        'examples':['Guto','Restaurante Comabem']},
+    'fidelizae_pontos_expirando': {
+        'category':'MARKETING','language':'pt_BR',
+        'body':'Olá, {{1}}! ⏰ Alguns dos seus pontos no programa de fidelidade da {{2}} estão próximos de expirar. Aproveite seus benefícios enquanto ainda estão disponíveis.',
+        'examples':['Guto','Restaurante Comabem']},
+    'fidelizae_campanha': {
+        'category':'MARKETING','language':'pt_BR',
+        'body':'Olá, {{1}}! 💛 A {{2}} tem uma novidade para você: {{3}} Aproveite!',
+        'examples':['Guto','Restaurante Comabem','Ganhe pontos em dobro nas suas compras neste fim de semana!']}
+}
+
+def meta_graph_request(method, path, token, payload=None, params=None, timeout=20):
+    version=(os.environ.get('META_GRAPH_VERSION') or 'v24.0').strip() or 'v24.0'
+    url=f'https://graph.facebook.com/{urllib.parse.quote(version)}/{path.lstrip("/")}'
+    if params:
+        url += ('&' if '?' in url else '?') + urllib.parse.urlencode(params)
+    data=None
+    headers={'Authorization':'Bearer '+str(token)}
+    if payload is not None:
+        data=json.dumps(payload,ensure_ascii=False).encode('utf-8')
+        headers['Content-Type']='application/json'
+    req=urllib.request.Request(url,data=data,method=method,headers=headers)
+    try:
+        with urllib.request.urlopen(req,timeout=timeout) as resp:
+            return json.loads(resp.read().decode('utf-8') or '{}')
+    except urllib.error.HTTPError as exc:
+        raw=exc.read().decode('utf-8',errors='replace')
+        try: detail=json.loads(raw)
+        except Exception: detail={'error':raw[:700]}
+        raise RuntimeError(json.dumps(detail,ensure_ascii=False)) from exc
+
+def meta_list_waba_templates(waba_id, token):
+    out=[]; after=None
+    for _ in range(10):
+        params={'fields':'id,name,status,language,category','limit':'100'}
+        if after: params['after']=after
+        data=meta_graph_request('GET',f'{urllib.parse.quote(str(waba_id))}/message_templates',token,params=params)
+        out.extend(data.get('data') or [])
+        paging=data.get('paging') or {}; cursors=paging.get('cursors') or {}; nxt=(paging.get('next') or '')
+        after=cursors.get('after') if nxt else None
+        if not after: break
+    return out
+
+def meta_create_waba_template(waba_id, token, name, spec):
+    component={'type':'BODY','text':spec['body']}
+    examples=list(spec.get('examples') or [])
+    if examples: component['example']={'body_text':[examples]}
+    payload={'name':name,'language':spec.get('language') or 'pt_BR','category':spec.get('category') or 'MARKETING','components':[component]}
+    return meta_graph_request('POST',f'{urllib.parse.quote(str(waba_id))}/message_templates',token,payload=payload)
+
+def sync_meta_templates_for_config(config):
+    c=config or {}; waba_id=str(c.get('waba_id') or '').strip(); token=str(c.get('token') or '').strip()
+    if not (waba_id and token): raise RuntimeError('whatsapp_not_configured')
+    existing=meta_list_waba_templates(waba_id,token)
+    by_key={(str(x.get('name') or ''),str(x.get('language') or '').lower()):x for x in existing}
+    result=[]
+    for name,spec in FIDELIZAE_META_TEMPLATES.items():
+        key=(name,str(spec.get('language') or 'pt_BR').lower())
+        row=by_key.get(key)
+        if row:
+            result.append({'name':name,'language':spec.get('language') or 'pt_BR','status':str(row.get('status') or 'UNKNOWN').upper(),'created':False})
+            continue
+        created=meta_create_waba_template(waba_id,token,name,spec)
+        result.append({'name':name,'language':spec.get('language') or 'pt_BR','status':str(created.get('status') or 'PENDING').upper(),'created':True,'id':created.get('id')})
+    return result
+
+def sync_company_meta_templates(conn, campaign_id):
+    cfg=whatsapp_config_for_client(conn,campaign_id)
+    try:
+        rows=sync_meta_templates_for_config(cfg)
+        states={r['status'] for r in rows}
+        overall='active' if rows and states.issubset({'APPROVED','ACTIVE'}) else ('pending' if rows else 'unknown')
+        conn.execute('UPDATE campaigns SET whatsapp_templates_status=?,whatsapp_templates_synced_at=?,whatsapp_templates_error=NULL WHERE id=?',(overall,now_ts(),campaign_id))
+        ensure_automation_defaults(conn,campaign_id)
+        automatic_meta_templates(conn,campaign_id)
+        return {'ok':True,'status':overall,'templates':rows}
+    except Exception as exc:
+        conn.execute('UPDATE campaigns SET whatsapp_templates_status=?,whatsapp_templates_synced_at=?,whatsapp_templates_error=? WHERE id=?',('error',now_ts(),str(exc)[:700],campaign_id))
+        return {'ok':False,'status':'error','error':str(exc)[:700],'templates':[]}
+
+def automatic_meta_templates(conn,campaign_id):
+    # O usuário da empresa nunca precisa digitar nomes técnicos de templates.
+    mapping={
+      'birthday':'fidelizae_aniversario',
+      'inactive30':'fidelizae_campanha',
+      'inactive60':'fidelizae_campanha',
+      'one_to_reward':'fidelizae_selo',
+      'reward_available':'fidelizae_recompensa'
+    }
+    for rule,name in mapping.items():
+        conn.execute('UPDATE automation_rules SET meta_template_name=?,meta_template_language=? WHERE campaign_id=? AND rule_type=?',(name,'pt_BR',campaign_id,rule))
+    conn.execute("UPDATE marketing_campaigns SET meta_template_name='fidelizae_campanha',meta_template_language='pt_BR' WHERE campaign_id=? AND channel IN ('whatsapp','both') AND (meta_template_name IS NULL OR meta_template_name='')",(campaign_id,))
+    conn.execute("UPDATE message_templates SET meta_template_name='fidelizae_campanha',meta_template_language='pt_BR' WHERE campaign_id=? AND channel IN ('whatsapp','both') AND (meta_template_name IS NULL OR meta_template_name='')",(campaign_id,))
+
+def meta_parameters_for_purpose(template_name, message, campaign, customer_name='Cliente'):
+    company=campaign.get('name') or 'Empresa'
+    name=str(template_name or '')
+    if name=='fidelizae_campanha':
+        rendered=render_test_template(message,campaign,customer_name) if 'render_test_template' in globals() else str(message or '')
+        return [customer_name,company,rendered]
+    return [customer_name,company]
+
 def whatsapp_template_parameters(body, campaign, customer_name='Cliente'):
     values={
       'nome':customer_name,
@@ -1615,7 +1735,8 @@ def ensure_automation_defaults(conn,campaign_id):
         # quando essa constraint não existe e deixa a transação abortada.
         exists=conn.execute('SELECT id FROM automation_rules WHERE campaign_id=? AND rule_type=? LIMIT 1',(campaign_id,rule)).fetchone()
         if not exists:
-            conn.execute('INSERT INTO automation_rules(campaign_id,rule_type,channel,enabled,message,created_at) VALUES(?,?,?,?,?,?)',(campaign_id,rule,channel,0,msg,now_ts()))
+            auto_map={'birthday':'fidelizae_aniversario','inactive30':'fidelizae_campanha','inactive60':'fidelizae_campanha','one_to_reward':'fidelizae_selo','reward_available':'fidelizae_recompensa'}
+            conn.execute('INSERT INTO automation_rules(campaign_id,rule_type,channel,enabled,message,meta_template_name,meta_template_language,created_at) VALUES(?,?,?,?,?,?,?,?)',(campaign_id,rule,channel,0,msg,auto_map.get(rule),'pt_BR',now_ts()))
 
 def render_test_template(body, campaign, customer_name='Cliente Teste'):
     values={
@@ -1659,9 +1780,18 @@ def run_automations_once():
                 if channel in ('email','both') and x['email'] and x['marketing_email'] and email_configured(email_config_for_client(conn,rule['campaign_id'])):
                     enqueue_message(conn,rule['campaign_id'],'campaign_email',x['email'],{'name':x['name'],'message':msg,'subject':'Fidelizaê! • '+rule['client_name']}); queued=True
                 if channel in ('whatsapp','both') and rule['meta_template_name'] and x['phone'] and x['marketing_whatsapp'] and whatsapp_cloud_configured(whatsapp_config_for_client(conn,rule['campaign_id'])):
-                    enqueue_message(conn,rule['campaign_id'],'whatsapp',x['phone'],{'message':msg,'meta_template_name':rule['meta_template_name'] or '', 'meta_template_language':rule['meta_template_language'] or 'pt_BR','meta_template_parameters':whatsapp_template_parameters(rule['message'],{'name':rule['client_name'],'goal':x['goal']},x['name'])}); queued=True
+                    enqueue_message(conn,rule['campaign_id'],'whatsapp',x['phone'],{'message':msg,'meta_template_name':rule['meta_template_name'] or '', 'meta_template_language':rule['meta_template_language'] or 'pt_BR','meta_template_parameters':meta_parameters_for_purpose(rule['meta_template_name'],rule['message'],{'name':rule['client_name'],'goal':x['goal']},x['name'])}); queued=True
                 if queued:
                     conn.execute('INSERT INTO automation_runs(rule_id,membership_id,period_key,created_at) VALUES(?,?,?,?) ON CONFLICT(rule_id,membership_id,period_key) DO NOTHING',(rule['id'],x['membership_id'],period,now_ts()))
+
+def run_meta_template_sync_once():
+    # Compatibilidade com conexões feitas antes da v172: na primeira execução após
+    # o deploy, sincroniza automaticamente sem exigir ação do cliente.
+    with connect(DB_PATH) as conn:
+        rows=conn.execute("SELECT id FROM campaigns WHERE active=1 AND plan='pro' AND whatsapp_phone_number_id IS NOT NULL AND whatsapp_phone_number_id<>'' AND whatsapp_access_token_enc IS NOT NULL AND (whatsapp_templates_status IS NULL OR whatsapp_templates_status='') ORDER BY id LIMIT 10").fetchall()
+        for row in rows:
+            result=sync_company_meta_templates(conn,row['id'])
+            print(f'[META_TEMPLATES] campaign_id={row["id"]} status={result.get("status")}')
 
 def background_loop():
     tick=299
@@ -1676,6 +1806,8 @@ def background_loop():
             try: run_automations_once()
             except Exception as exc: print('[AUTOMATION]',type(exc).__name__,str(exc)[:300])
         if tick%300==0:
+            try: run_meta_template_sync_once()
+            except Exception as exc: print('[META_TEMPLATES]',type(exc).__name__,str(exc)[:300])
             try: run_scheduled_r2_backup_once()
             except Exception as exc:
                 _R2_BACKUP_STATE.update({'configured':r2_backup_configured(),'last_error':str(exc)[:300]})
@@ -2355,6 +2487,15 @@ class Handler(BaseHTTPRequestHandler):
                 row=conn.execute('''SELECT provider_status,provider_status_at,provider_error_code,provider_error_title FROM message_queue WHERE campaign_id=? AND external_message_id=? ORDER BY id DESC LIMIT 1''',(sess['campaign_id'],message_id)).fetchone()
                 if not row:return self.send_json({'ok':False,'error':'message_status_not_found'},404)
                 return self.send_json({'ok':True,'status':row['provider_status'] or 'accepted','status_at':row['provider_status_at'],'error_code':row['provider_error_code'],'error_title':row['provider_error_title']})
+        if path == '/api/client-admin/integration/whatsapp/templates':
+            with connect(DB_PATH) as conn:
+                sess=self._require_auth(conn,'attendant')
+                if not sess:return
+                if not sess['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                row=conn.execute('SELECT whatsapp_templates_status,whatsapp_templates_synced_at,whatsapp_templates_error FROM campaigns WHERE id=? AND company_id=?',(sess['campaign_id'],sess['company_id'])).fetchone()
+                if not row:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                automatic_meta_templates(conn,sess['campaign_id'])
+                return self.send_json({'ok':True,'status':row['whatsapp_templates_status'] or 'not_synced','synced_at':row['whatsapp_templates_synced_at'],'error':row['whatsapp_templates_error'],'managed_templates':list(FIDELIZAE_META_TEMPLATES.keys())})
         if path == '/api/admin/templates':
             with connect(DB_PATH) as conn:
                 sess=self._require_auth(conn,'attendant')
@@ -2752,7 +2893,7 @@ class Handler(BaseHTTPRequestHandler):
                 s=self._require_auth(conn,'attendant')
                 if not s:return
                 if not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
-                c=conn.execute('SELECT id,name,code,logo_image,plan,loyalty_type,points_spend_cents,goal,reward_name,card_theme,min_stamp_interval_sec,max_stamps_per_hour,email_provider,smtp_host,smtp_port,smtp_user,smtp_from,smtp_from_name,smtp_security,brevo_sender_email,brevo_sender_name,brevo_reply_to,whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_api_version,whatsapp_integration_mode,whatsapp_signup_status,whatsapp_connected_at,whatsapp_basic_instance,whatsapp_basic_status,whatsapp_basic_connected_at,ecommerce_platform,ecommerce_store_url,ecommerce_webhook_secret,ecommerce_status FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
+                c=conn.execute('SELECT id,name,code,logo_image,plan,loyalty_type,points_spend_cents,goal,reward_name,card_theme,min_stamp_interval_sec,max_stamps_per_hour,email_provider,smtp_host,smtp_port,smtp_user,smtp_from,smtp_from_name,smtp_security,brevo_sender_email,brevo_sender_name,brevo_reply_to,whatsapp_phone_number_id,whatsapp_waba_id,whatsapp_api_version,whatsapp_integration_mode,whatsapp_signup_status,whatsapp_connected_at,whatsapp_templates_status,whatsapp_templates_synced_at,whatsapp_templates_error,whatsapp_basic_instance,whatsapp_basic_status,whatsapp_basic_connected_at,ecommerce_platform,ecommerce_store_url,ecommerce_webhook_secret,ecommerce_status FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
                 if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
                 company=rowdict(c); company['email_configured']=bool(email_configured(email_config_for_client(conn,s['campaign_id']))); company['whatsapp_configured']=bool(whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id']))); company['whatsapp_basic']=whatsapp_basic_status(conn,s['campaign_id']) if normalize_plan(c['plan'])=='intermediate' else {'configured':False,'status':'not_available'}
                 company['ecommerce_platform']=normalize_ecommerce_platform(company.get('ecommerce_platform')); company['ecommerce_status']=company.get('ecommerce_status') or ('awaiting_connection' if company['ecommerce_platform']!='none' else 'not_connected')
@@ -3772,9 +3913,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/admin/marketing-campaign/save':
                 if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not plan_allows(conn,s['campaign_id'],'communications'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
-                name=str(payload.get('name','')).strip()[:100]; segment=str(payload.get('segment','all')); channel=str(payload.get('channel','both')); message=str(payload.get('message','')).strip()[:4096]; meta_name=str(payload.get('meta_template_name','')).strip()[:512]; meta_lang=str(payload.get('meta_template_language','pt_BR')).strip()[:30] or 'pt_BR'
+                name=str(payload.get('name','')).strip()[:100]; segment=str(payload.get('segment','all')); channel=str(payload.get('channel','both')); message=str(payload.get('message','')).strip()[:4096]; meta_name='fidelizae_campanha' if channel in ('whatsapp','both') else ''; meta_lang='pt_BR'
                 if len(name)<2 or not message or segment not in ('all','new','active','recurrent','vip','at_risk','inactive','inactive60','inactive90','almost_reward','reward_ready','birthdays') or channel not in ('email','whatsapp','both'):return self.send_json({'ok':False,'error':'invalid_campaign'},400)
-                if channel in ('whatsapp','both') and not meta_name:return self.send_json({'ok':False,'error':'whatsapp_meta_template_required'},400)
                 mid=insert_id(conn,'INSERT INTO marketing_campaigns(campaign_id,name,segment,channel,message,meta_template_name,meta_template_language,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)',(s['campaign_id'],name,segment,channel,message,meta_name or None,meta_lang,'draft',now_ts()))
                 audit(conn,s['company_id'],s['user_id'],'marketing_campaign_create','marketing_campaign',mid,details=name,ip_address=self._ip())
                 return self.send_json({'ok':True,'id':mid})
@@ -3791,7 +3931,7 @@ class Handler(BaseHTTPRequestHandler):
                     if mc['channel'] in ('email','both') and r['email'] and r['marketing_email'] and email_configured(email_config_for_client(conn,s['campaign_id'])):
                         enqueue_message(conn,s['campaign_id'],'campaign_email',r['email'],{'name':r['name'],'message':mc['message'],'subject':'Fidelizaê! • '+mc['name']}); q=True
                     if mc['channel'] in ('whatsapp','both') and r['phone'] and r['marketing_whatsapp'] and whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])):
-                        enqueue_message(conn,s['campaign_id'],'whatsapp',r['phone'],{'message':mc['message'],'meta_template_name':mc['meta_template_name'] or '', 'meta_template_language':mc['meta_template_language'] or 'pt_BR','meta_template_parameters':whatsapp_template_parameters(mc['message'],{'name':s['client_name'] or 'Empresa'},r['name'])}); q=True
+                        enqueue_message(conn,s['campaign_id'],'whatsapp',r['phone'],{'message':mc['message'],'meta_template_name':mc['meta_template_name'] or '', 'meta_template_language':mc['meta_template_language'] or 'pt_BR','meta_template_parameters':meta_parameters_for_purpose(mc['meta_template_name'],mc['message'],{'name':s['client_name'] or 'Empresa'},r['name'])}); q=True
                     if q:
                         cur=conn.execute('INSERT INTO marketing_campaign_recipients(marketing_campaign_id,membership_id,sent_at) VALUES(?,?,?) ON CONFLICT(marketing_campaign_id,membership_id) DO NOTHING',(mid,r['membership_id'],sent_at))
                         # O contador representa destinatários efetivamente novos.
@@ -3954,7 +4094,7 @@ class Handler(BaseHTTPRequestHandler):
                     wa_payload={'message':message};
                     if plan=='intermediate' and image_data:wa_payload['image_data']=image_data
                     if tpl:
-                        wa_payload.update({'meta_template_name':tpl['meta_template_name'],'meta_template_language':tpl['meta_template_language'] or 'pt_BR','meta_template_parameters':whatsapp_template_parameters(tpl['body'],camp_ctx,r['name'])})
+                        wa_payload.update({'meta_template_name':tpl['meta_template_name'],'meta_template_language':tpl['meta_template_language'] or 'pt_BR','meta_template_parameters':meta_parameters_for_purpose(tpl['meta_template_name'],tpl['body'],camp_ctx,r['name'])})
                     qid=enqueue_message(conn,s['campaign_id'],'whatsapp',r['phone'],wa_payload)
                     results.append({'customer_id':r['id'],'name':r['name'],'phone':r['phone'],'queued':True,'queue_id':qid})
                     audit(conn,s['company_id'],s['user_id'],'whatsapp_queued','customer',r['id'],details=f'queue={qid}',ip_address=self._ip())
@@ -3998,9 +4138,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/admin/template/save':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not plan_allows(conn,s['campaign_id'],'communications'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
-                name=str(payload.get('name','')).strip()[:80];channel=str(payload.get('channel','both'));subject=str(payload.get('subject','')).strip()[:150];body=str(payload.get('body','')).strip()[:4000];meta_name=str(payload.get('meta_template_name','')).strip()[:512];meta_lang=str(payload.get('meta_template_language','pt_BR')).strip()[:30] or 'pt_BR'
+                name=str(payload.get('name','')).strip()[:80];channel=str(payload.get('channel','both'));subject=str(payload.get('subject','')).strip()[:150];body=str(payload.get('body','')).strip()[:4000];meta_name='fidelizae_campanha' if channel in ('whatsapp','both') else '';meta_lang='pt_BR'
                 if not name or not body or channel not in ('email','whatsapp','both'):return self.send_json({'ok':False,'error':'invalid_template'},400)
-                if channel in ('whatsapp','both') and not meta_name:return self.send_json({'ok':False,'error':'whatsapp_meta_template_required'},400)
                 tid=insert_id(conn,'INSERT INTO message_templates(campaign_id,name,channel,subject,body,meta_template_name,meta_template_language,created_at) VALUES(?,?,?,?,?,?,?,?)',(s['campaign_id'],name,channel,subject,body,meta_name or None,meta_lang,now_ts()))
                 return self.send_json({'ok':True,'template_id':tid})
             if path == '/api/admin/template/test':
@@ -4052,7 +4191,7 @@ class Handler(BaseHTTPRequestHandler):
                         meta_name=str(tpl['meta_template_name'] or '').strip()
                         meta_lang=str(tpl['meta_template_language'] or 'pt_BR').strip() or 'pt_BR'
                         if meta_name:
-                            params=whatsapp_template_parameters(tpl['body'],rowdict(camp),customer['name'])
+                            params=meta_parameters_for_purpose(meta_name,tpl['body'],rowdict(camp),customer['name'])
                             response=send_whatsapp_template(phone,meta_name,meta_lang,params,cfg)
                         else:
                             response=send_whatsapp_cloud(phone,message,cfg)
@@ -4259,9 +4398,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not plan_allows(conn,s['campaign_id'],'automations'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
                 try: rule_id=int(payload.get('rule_id',0))
                 except: rule_id=0
-                channel=str(payload.get('channel','email')); enabled=1 if payload.get('enabled') else 0; message=str(payload.get('message','')).strip()[:1000]; meta_name=str(payload.get('meta_template_name','')).strip()[:512]; meta_lang=str(payload.get('meta_template_language','pt_BR')).strip()[:30] or 'pt_BR'
+                channel=str(payload.get('channel','email')); enabled=1 if payload.get('enabled') else 0; message=str(payload.get('message','')).strip()[:1000]
+                auto_map={'birthday':'fidelizae_aniversario','inactive30':'fidelizae_campanha','inactive60':'fidelizae_campanha','one_to_reward':'fidelizae_selo','reward_available':'fidelizae_recompensa'}
+                current=conn.execute('SELECT rule_type FROM automation_rules WHERE id=? AND campaign_id=?',(rule_id,s['campaign_id'])).fetchone()
+                meta_name=auto_map.get(current['rule_type'] if current else '') if channel in ('whatsapp','both') else None; meta_lang='pt_BR'
                 if channel not in ('email','whatsapp','both') or not message:return self.send_json({'ok':False,'error':'invalid_rule'},400)
-                if enabled and channel in ('whatsapp','both') and not meta_name:return self.send_json({'ok':False,'error':'whatsapp_meta_template_required'},400)
                 r=conn.execute('SELECT id,rule_type FROM automation_rules WHERE id=? AND campaign_id=?',(rule_id,s['campaign_id'])).fetchone()
                 if not r:return self.send_json({'ok':False,'error':'rule_not_found'},404)
                 if r['rule_type']=='one_to_reward':
@@ -4420,12 +4561,21 @@ class Handler(BaseHTTPRequestHandler):
                     meta_subscribe_waba(waba_id,token)
                     token_enc=encrypt_secret(token)
                     version=(os.environ.get('META_GRAPH_VERSION') or 'v24.0').strip() or 'v24.0'
-                    conn.execute("""UPDATE campaigns SET whatsapp_integration_mode='embedded',whatsapp_signup_status='connected',whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_connected_at=? WHERE id=? AND company_id=?""",(phone_id,waba_id,token_enc,version,now_iso(),s['campaign_id'],s['company_id']))
-                    audit(conn,s['company_id'],s['user_id'],'whatsapp_embedded_connected','campaign',s['campaign_id'],details=f'waba={waba_id[-6:]};phone_id={phone_id[-6:]}',ip_address=self._ip())
-                    return self.send_json({'ok':True,'phone_number_id':phone_id,'waba_id':waba_id,'verified_name':phone_info.get('verified_name'),'display_phone_number':phone_info.get('display_phone_number')})
+                    conn.execute("""UPDATE campaigns SET whatsapp_integration_mode='embedded',whatsapp_signup_status='connected',whatsapp_phone_number_id=?,whatsapp_waba_id=?,whatsapp_access_token_enc=?,whatsapp_api_version=?,whatsapp_connected_at=?,whatsapp_templates_status='syncing',whatsapp_templates_error=NULL WHERE id=? AND company_id=?""",(phone_id,waba_id,token_enc,version,now_iso(),s['campaign_id'],s['company_id']))
+                    template_sync=sync_company_meta_templates(conn,s['campaign_id'])
+                    audit(conn,s['company_id'],s['user_id'],'whatsapp_embedded_connected','campaign',s['campaign_id'],details=f'waba={waba_id[-6:]};phone_id={phone_id[-6:]};templates={template_sync.get("status")}',ip_address=self._ip())
+                    return self.send_json({'ok':True,'phone_number_id':phone_id,'waba_id':waba_id,'verified_name':phone_info.get('verified_name'),'display_phone_number':phone_info.get('display_phone_number'),'template_sync':template_sync})
                 except Exception as exc:
                     if sentry_sdk:sentry_sdk.capture_exception(exc)
                     return self.send_json({'ok':False,'error':'embedded_signup_failed','detail':str(exc)[:700]},502)
+            if path == '/api/client-admin/integration/whatsapp/templates/sync':
+                if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                if campaign_plan(conn,s['campaign_id'])!='pro':return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                if not whatsapp_cloud_configured(whatsapp_config_for_client(conn,s['campaign_id'])):return self.send_json({'ok':False,'error':'whatsapp_not_configured'},503)
+                result=sync_company_meta_templates(conn,s['campaign_id'])
+                audit(conn,s['company_id'],s['user_id'],'whatsapp_templates_sync','campaign',s['campaign_id'],details=result.get('status') or 'unknown',ip_address=self._ip())
+                return self.send_json(result,200 if result.get('ok') else 502)
             if path == '/api/client-admin/integration/ecommerce/rotate-secret':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)

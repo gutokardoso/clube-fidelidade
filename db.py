@@ -1017,6 +1017,29 @@ def init_db(db_path=None, seed=True):
             _add_v161_col('message_queue','provider_error_title','TEXT')
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v161',?)",(now_ts(),))
 
+        # Migração v172: sincronização automática dos templates oficiais Meta por WABA.
+        if _is_postgres(target):
+            conn.execute("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS whatsapp_templates_status TEXT")
+            conn.execute("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS whatsapp_templates_synced_at BIGINT")
+            conn.execute("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS whatsapp_templates_error TEXT")
+            conn.execute("UPDATE marketing_campaigns SET meta_template_name='fidelizae_campanha',meta_template_language='pt_BR' WHERE channel IN ('whatsapp','both') AND (meta_template_name IS NULL OR meta_template_name='')")
+            conn.execute("UPDATE message_templates SET meta_template_name='fidelizae_campanha',meta_template_language='pt_BR' WHERE channel IN ('whatsapp','both') AND (meta_template_name IS NULL OR meta_template_name='')")
+            for _rule,_tpl in (('birthday','fidelizae_aniversario'),('inactive30','fidelizae_campanha'),('inactive60','fidelizae_campanha'),('one_to_reward','fidelizae_selo'),('reward_available','fidelizae_recompensa')):
+                conn.execute("UPDATE automation_rules SET meta_template_name=?,meta_template_language='pt_BR' WHERE rule_type=?",(_tpl,_rule))
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v172',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            def _add_v172_campaign_col(col,typ):
+                cols={r['name'] for r in conn.execute('PRAGMA table_info(campaigns)').fetchall()}
+                if col not in cols: conn.execute(f'ALTER TABLE campaigns ADD COLUMN {col} {typ}')
+            _add_v172_campaign_col('whatsapp_templates_status','TEXT')
+            _add_v172_campaign_col('whatsapp_templates_synced_at','INTEGER')
+            _add_v172_campaign_col('whatsapp_templates_error','TEXT')
+            conn.execute("UPDATE marketing_campaigns SET meta_template_name='fidelizae_campanha',meta_template_language='pt_BR' WHERE channel IN ('whatsapp','both') AND (meta_template_name IS NULL OR meta_template_name='')")
+            conn.execute("UPDATE message_templates SET meta_template_name='fidelizae_campanha',meta_template_language='pt_BR' WHERE channel IN ('whatsapp','both') AND (meta_template_name IS NULL OR meta_template_name='')")
+            for _rule,_tpl in (('birthday','fidelizae_aniversario'),('inactive30','fidelizae_campanha'),('inactive60','fidelizae_campanha'),('one_to_reward','fidelizae_selo'),('reward_available','fidelizae_recompensa')):
+                conn.execute("UPDATE automation_rules SET meta_template_name=?,meta_template_language='pt_BR' WHERE rule_type=?",(_tpl,_rule))
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v172',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:

@@ -1,4 +1,13 @@
-# Fidelizaê! v171
+# Fidelizaê! v172
+
+## v172 — gestão automática dos templates oficiais do WhatsApp
+- Cada empresa PRO conectada pelo Cadastro Incorporado da Meta passa a ter os modelos oficiais do Fidelizaê! sincronizados automaticamente na própria WABA.
+- O sistema consulta os modelos existentes e cria apenas os que estiverem faltando: `fidelizae_aniversario`, `fidelizae_recompensa`, `fidelizae_pontos`, `fidelizae_selo`, `fidelizae_pontos_expirando` e `fidelizae_campanha`.
+- O status da sincronização fica registrado por empresa (`active`, `pending`, `error`) e conexões anteriores à v172 são sincronizadas automaticamente após o deploy.
+- O painel do cliente deixa de exigir nomes técnicos de templates Meta em campanhas, automações e templates de comunicação. O Fidelizaê! escolhe o modelo oficial adequado e preenche automaticamente nome do cliente, nome da empresa e conteúdo da campanha.
+- Campanhas e mensagens personalizadas por WhatsApp usam automaticamente `fidelizae_campanha`; aniversário, recompensa e selos usam seus modelos específicos.
+- Foi incluído status visual dos modelos Meta no painel da empresa e opção de nova tentativa apenas em caso de falha de sincronização.
+- A configuração manual avançada da API continua disponível apenas como recurso técnico de contingência.
 
 ## v171 — responsividade entre 801 e 1100 px
 - A tabela de Clientes cadastrados passa para um layout responsivo em cards de duas colunas nessa faixa intermediária, evitando conteúdo e botões saindo da tela.
