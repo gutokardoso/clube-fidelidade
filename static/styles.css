@@ -896,3 +896,53 @@ body[data-plan="pro"] #npsCard{order:6}
   .automation-whatsapp-title{align-items:flex-start;flex-direction:column}
   .automation-meta-badge{white-space:normal}
 }
+
+/* v176 — alinhamento exato da base dos controles com a base da mensagem */
+@media(min-width:1121px){
+  .automation-row{
+    grid-template-columns:minmax(250px,1fr) minmax(250px,.9fr) minmax(360px,1.35fr) auto;
+    grid-template-areas:
+      "head settings message actions"
+      ". . emailhelp ."
+      "wa wa wa wa"
+      "last last last last";
+    align-items:end;
+  }
+  .automation-settings,
+  .automation-message,
+  .automation-actions{align-self:end}
+  .automation-settings>div{display:flex;flex-direction:column;justify-content:flex-end}
+  .automation-settings select{height:48px;margin:0}
+  .automation-email-editor{display:flex;flex-direction:column;justify-content:flex-end}
+  .automation-row .auto-message{height:92px;min-height:92px;margin:0;box-sizing:border-box}
+  .automation-actions{display:flex;align-items:flex-end}
+  .automation-actions .btn{height:48px;margin:0}
+  .automation-email-help{grid-area:emailhelp;display:block;margin:0;line-height:1.35;min-width:0}
+}
+@media(max-width:1120px){
+  .automation-email-help{display:block;margin-top:-4px;line-height:1.35}
+}
+@media(max-width:1120px){
+  .automation-row{
+    grid-template-areas:
+      "head settings"
+      "message message"
+      "emailhelp emailhelp"
+      "actions actions"
+      "wa wa"
+      "last last";
+  }
+  .automation-email-help{grid-area:emailhelp}
+}
+@media(max-width:640px){
+  .automation-row{
+    grid-template-areas:
+      "head"
+      "settings"
+      "message"
+      "emailhelp"
+      "actions"
+      "wa"
+      "last";
+  }
+}

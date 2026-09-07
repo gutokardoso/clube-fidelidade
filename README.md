@@ -1,4 +1,9 @@
-# Fidelizaê! v175
+# Fidelizaê! v176
+
+## v176 — alinhamento preciso das automações
+- Alinha a base dos campos Canal e Ativa e do botão SALVAR AUTOMAÇÃO exatamente com a base do campo Mensagem do e-mail em telas amplas.
+- Move o texto auxiliar do e-mail para uma linha própria abaixo do campo, evitando que ele altere o alinhamento vertical dos controles.
+- Mantém o layout responsivo das automações em tablets e celulares.
 
 ## v175 — mensagens separadas por canal nas automações
 - O texto editável da automação agora é identificado como **Mensagem do e-mail** e pode ser personalizado livremente pela empresa.
