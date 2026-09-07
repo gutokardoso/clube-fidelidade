@@ -774,3 +774,78 @@ body[data-plan="pro"] #npsCard{order:6}
     white-space:nowrap;
   }
 }
+
+/* v171 — faixa intermediária 801–1100px: tabela de clientes responsiva sem overflow */
+@media (min-width:801px) and (max-width:1100px){
+  #customersCard{min-width:0;overflow:hidden}
+  .customer-responsive-table{
+    display:block!important;
+    width:100%!important;
+    max-width:100%!important;
+    overflow:visible!important;
+    border-collapse:separate!important;
+  }
+  .customer-responsive-table tbody{
+    display:grid!important;
+    gap:12px;
+    width:100%!important;
+    min-width:0;
+  }
+  .customer-responsive-table tbody>tr:first-child{display:none!important}
+  .customer-responsive-table tbody>tr:not(:first-child){
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    column-gap:22px;
+    width:100%!important;
+    min-width:0!important;
+    padding:14px 16px;
+    border:1px solid #eadfd5;
+    border-radius:16px;
+    background:#fff;
+    box-shadow:0 4px 14px rgba(70,45,25,.035);
+  }
+  .customer-responsive-table tbody>tr:not(:first-child)>td{
+    display:grid!important;
+    grid-template-columns:minmax(104px,36%) minmax(0,1fr);
+    align-items:start;
+    gap:10px;
+    width:100%!important;
+    min-width:0!important;
+    padding:9px 2px!important;
+    border-bottom:1px solid #f0e7df!important;
+    text-align:left!important;
+    background:transparent!important;
+    overflow-wrap:anywhere;
+    word-break:break-word;
+  }
+  .customer-responsive-table tbody>tr:not(:first-child)>td[data-label="Cliente"],
+  .customer-responsive-table tbody>tr:not(:first-child)>td[data-label="Ações"]{
+    grid-column:1/-1;
+  }
+  .customer-responsive-table tbody>tr:not(:first-child)>td[data-label="Ações"]{
+    width:100%!important;
+    min-width:0!important;
+    border-bottom:0!important;
+    padding-bottom:2px!important;
+  }
+  .customer-responsive-table td::before{
+    content:attr(data-label);
+    font-size:10px;
+    font-weight:900;
+    letter-spacing:.055em;
+    text-transform:uppercase;
+    color:#8b7b6f;
+    line-height:1.45;
+  }
+  .customer-responsive-table td[data-label="Ações"] .row-actions{
+    justify-content:flex-start!important;
+    flex-wrap:wrap!important;
+    gap:7px!important;
+    width:100%!important;
+    margin:0!important;
+  }
+  .customer-responsive-table td[data-label="Ações"] .btn-small{
+    flex:0 0 auto;
+    white-space:nowrap;
+  }
+}

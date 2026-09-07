@@ -1,4 +1,9 @@
-# Fidelizaê! v170
+# Fidelizaê! v171
+
+## v171 — responsividade entre 801 e 1100 px
+- A tabela de Clientes cadastrados passa para um layout responsivo em cards de duas colunas nessa faixa intermediária, evitando conteúdo e botões saindo da tela.
+- Cliente e ações ocupam a largura total do card; demais métricas se distribuem em duas colunas.
+- Em 800 px ou menos, permanece o layout mobile em uma coluna já existente.
 
 ## v170 — texto do Vale-presente
 
