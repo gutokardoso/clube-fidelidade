@@ -1,4 +1,9 @@
-# Fidelizaê! v167
+# Fidelizaê! v168
+
+## v168 — realinhamento do Programa de Fidelidade PRO e navegação de Comunicação
+- No painel PRO, os cards do Programa de Fidelidade foram reorganizados em pares de mesma largura: Níveis VIP + Cupons, Vale-presente + Acelerador de pontos, Validade dos pontos + NPS / Satisfação.
+- A seção Configurações avançadas de pontos foi simplificada para Validade dos pontos, removendo o texto auxiliar e o label duplicado.
+- No plano Intermediário, o item Comunicação do menu interno agora leva diretamente à caixa WhatsApp.
 
 ## v167 — correções de ocupação e alinhamento responsivo
 
