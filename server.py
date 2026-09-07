@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v174'
+VERSION='v175'
 TERMS_VERSION='1.1'
 PRIVACY_VERSION='1.1'
 DUMMY_PASSWORD_HASH=hash_password('Fidelizae-Dummy-Password-Only-For-Timing-Protection-2026')
@@ -1387,15 +1387,42 @@ def sync_company_meta_templates(conn, campaign_id):
         conn.execute('UPDATE campaigns SET whatsapp_templates_status=?,whatsapp_templates_synced_at=?,whatsapp_templates_error=? WHERE id=?',('error',now_ts(),str(exc)[:700],campaign_id))
         return {'ok':False,'status':'error','error':str(exc)[:700],'templates':[]}
 
+AUTOMATION_META_TEMPLATE_MAP = {
+    'birthday':'fidelizae_aniversario',
+    'inactive30':'fidelizae_campanha',
+    'inactive60':'fidelizae_campanha',
+    'one_to_reward':'fidelizae_selo',
+    'reward_available':'fidelizae_recompensa'
+}
+
+# O texto livre configurado pelo administrador é a mensagem do e-mail. No
+# WhatsApp, a automação sempre respeita o modelo oficial aprovado pela Meta.
+# Para o modelo genérico de campanha, {{3}} recebe um texto padronizado por
+# automação e nunca o texto livre do e-mail.
+AUTOMATION_WHATSAPP_CAMPAIGN_TEXT = {
+    'inactive30':'Sentimos sua falta! Volte e continue acumulando no seu programa.',
+    'inactive60':'Já faz um tempo. Temos saudades de você! Volte e continue aproveitando seus benefícios.'
+}
+
+def automation_whatsapp_template_name(rule_type):
+    return AUTOMATION_META_TEMPLATE_MAP.get(str(rule_type or '')) or ''
+
+def automation_whatsapp_campaign_text(rule_type):
+    return AUTOMATION_WHATSAPP_CAMPAIGN_TEXT.get(str(rule_type or '')) or ''
+
+def automation_whatsapp_preview(rule_type):
+    name=automation_whatsapp_template_name(rule_type)
+    spec=FIDELIZAE_META_TEMPLATES.get(name) or {}
+    body=str(spec.get('body') or '')
+    if not body: return ''
+    body=body.replace('{{1}}','{nome}').replace('{{2}}','{empresa}')
+    if '{{3}}' in body:
+        body=body.replace('{{3}}',automation_whatsapp_campaign_text(rule_type) or 'Novidade do programa de fidelidade.')
+    return body
+
 def automatic_meta_templates(conn,campaign_id):
     # O usuário da empresa nunca precisa digitar nomes técnicos de templates.
-    mapping={
-      'birthday':'fidelizae_aniversario',
-      'inactive30':'fidelizae_campanha',
-      'inactive60':'fidelizae_campanha',
-      'one_to_reward':'fidelizae_selo',
-      'reward_available':'fidelizae_recompensa'
-    }
+    mapping=AUTOMATION_META_TEMPLATE_MAP
     for rule,name in mapping.items():
         conn.execute('UPDATE automation_rules SET meta_template_name=?,meta_template_language=? WHERE campaign_id=? AND rule_type=?',(name,'pt_BR',campaign_id,rule))
     conn.execute("UPDATE marketing_campaigns SET meta_template_name='fidelizae_campanha',meta_template_language='pt_BR' WHERE campaign_id=? AND channel IN ('whatsapp','both') AND (meta_template_name IS NULL OR meta_template_name='')",(campaign_id,))
@@ -1735,7 +1762,7 @@ def ensure_automation_defaults(conn,campaign_id):
         # quando essa constraint não existe e deixa a transação abortada.
         exists=conn.execute('SELECT id FROM automation_rules WHERE campaign_id=? AND rule_type=? LIMIT 1',(campaign_id,rule)).fetchone()
         if not exists:
-            auto_map={'birthday':'fidelizae_aniversario','inactive30':'fidelizae_campanha','inactive60':'fidelizae_campanha','one_to_reward':'fidelizae_selo','reward_available':'fidelizae_recompensa'}
+            auto_map=AUTOMATION_META_TEMPLATE_MAP
             conn.execute('INSERT INTO automation_rules(campaign_id,rule_type,channel,enabled,message,meta_template_name,meta_template_language,created_at) VALUES(?,?,?,?,?,?,?,?)',(campaign_id,rule,channel,0,msg,auto_map.get(rule),'pt_BR',now_ts()))
 
 def render_test_template(body, campaign, customer_name='Cliente Teste'):
@@ -1806,7 +1833,8 @@ def run_automations_once():
                     ok,reason=_automation_channel_reason('whatsapp',x,rule,conn)
                     if ok:
                         try:
-                            enqueue_message(conn,rule['campaign_id'],'whatsapp',x['phone'],{'message':msg,'meta_template_name':rule['meta_template_name'] or '', 'meta_template_language':rule['meta_template_language'] or 'pt_BR','meta_template_parameters':meta_parameters_for_purpose(rule['meta_template_name'],rule['message'],{'name':rule['client_name'],'goal':x['goal']},x['name'])})
+                            wa_dynamic=automation_whatsapp_campaign_text(rule['rule_type'])
+                            enqueue_message(conn,rule['campaign_id'],'whatsapp',x['phone'],{'message':automation_whatsapp_preview(rule['rule_type']),'meta_template_name':rule['meta_template_name'] or '', 'meta_template_language':rule['meta_template_language'] or 'pt_BR','meta_template_parameters':meta_parameters_for_purpose(rule['meta_template_name'],wa_dynamic,{'name':rule['client_name'],'goal':x['goal']},x['name'])})
                             whatsapp_result='queued'; queued_any=True
                         except Exception as exc:
                             whatsapp_result='falha ao programar WhatsApp: '+str(exc)[:160]
@@ -2739,6 +2767,8 @@ class Handler(BaseHTTPRequestHandler):
                         item['last_event']=rowdict(ev) if ev else None
                     except Exception:
                         item['last_event']=None
+                    item['whatsapp_template_name']=automation_whatsapp_template_name(item.get('rule_type'))
+                    item['whatsapp_preview']=automation_whatsapp_preview(item.get('rule_type'))
                 return self.send_json({'ok':True,'rules':rows,'can_edit':bool(sess['is_client_admin'])})
         if path == '/api/client-admin/staff':
             with connect(DB_PATH) as conn:

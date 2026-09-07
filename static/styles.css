@@ -860,3 +860,39 @@ body[data-plan="pro"] #npsCard{order:6}
 .automation-meta-note{grid-area:note;margin:0;padding-top:11px;border-top:1px solid var(--line);white-space:nowrap}.automation-last{grid-area:last;border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.45;background:#f8f8f8;color:#555}.automation-last.ok{background:#f2faf4}.automation-last.partial{background:#fff8e7;color:#755000}.automation-last.failed{background:#fff1f0;color:#8b2d26}.automation-last.empty{color:#888}.template-manager-help{max-width:980px;line-height:1.5}
 @media(max-width:1120px){.automation-row{grid-template-columns:1fr 1fr;grid-template-areas:"head settings" "message message" "actions actions" "note note" "last last";align-items:stretch}.automation-actions .btn{width:100%}.automation-meta-note{white-space:normal}}
 @media(max-width:640px){.automation-row{grid-template-columns:1fr;grid-template-areas:"head" "settings" "message" "actions" "note" "last";padding:16px}.automation-settings{grid-template-columns:1fr 1fr}.automation-meta-note{white-space:normal;line-height:1.45}}
+
+/* v175 — canais separados nas automações e alinhamento dos controles */
+.automation-row{
+  grid-template-columns:minmax(250px,1fr) minmax(250px,.9fr) minmax(360px,1.35fr) auto;
+  grid-template-areas:"head settings message actions" "wa wa wa wa" "last last last last";
+  align-items:end;
+}
+.automation-head{align-self:end;padding-bottom:2px}
+.automation-settings,.automation-message,.automation-actions{align-self:end}
+.automation-settings select{height:48px}
+.automation-actions{display:flex;align-items:flex-end}
+.automation-actions .btn{height:48px;min-width:150px;padding-top:0;padding-bottom:0}
+.automation-email-editor>label{display:block;margin-bottom:6px}
+.automation-email-editor>small{display:block;margin-top:6px;line-height:1.35}
+.automation-row .auto-message{min-height:92px;margin:0;display:block}
+.automation-whatsapp-inline{min-width:0}
+.automation-whatsapp-detail{grid-area:wa;min-width:0}
+.automation-whatsapp-box{border:1px solid #e4d8cf;border-radius:12px;background:#fbf9f7;padding:13px 14px}
+.automation-whatsapp-box.detail{margin-top:1px}
+.automation-whatsapp-title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px;font-weight:700;font-size:14px}
+.automation-meta-badge{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:#e9f7ee;color:#267743;font-size:11px;font-weight:800;white-space:nowrap}
+.automation-whatsapp-copy{white-space:pre-wrap;line-height:1.45;color:#332b27;background:#fff;border:1px solid #eadfd8;border-radius:10px;padding:11px 12px;min-height:48px}
+.automation-whatsapp-help{margin-top:8px;line-height:1.4}
+.automation-last{grid-area:last}
+@media(max-width:1120px){
+  .automation-row{grid-template-columns:1fr 1fr;grid-template-areas:"head settings" "message message" "actions actions" "wa wa" "last last";align-items:stretch}
+  .automation-head{align-self:center;padding-bottom:0}
+  .automation-settings,.automation-message,.automation-actions{align-self:stretch}
+  .automation-actions .btn{width:100%}
+}
+@media(max-width:640px){
+  .automation-row{grid-template-columns:1fr;grid-template-areas:"head" "settings" "message" "actions" "wa" "last"}
+  .automation-settings{grid-template-columns:1fr 1fr}
+  .automation-whatsapp-title{align-items:flex-start;flex-direction:column}
+  .automation-meta-badge{white-space:normal}
+}

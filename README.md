@@ -1,4 +1,12 @@
-# Fidelizaê! v174
+# Fidelizaê! v175
+
+## v175 — mensagens separadas por canal nas automações
+- O texto editável da automação agora é identificado como **Mensagem do e-mail** e pode ser personalizado livremente pela empresa.
+- O WhatsApp exibe separadamente a **Mensagem do WhatsApp**, mostrando o modelo oficial aprovado pela Meta e deixando claro que esse texto técnico não é alterado pelo campo de e-mail.
+- Em **Ambos**, o e-mail usa a mensagem personalizada e o WhatsApp usa automaticamente o modelo oficial Meta, com nome do cliente e nome da empresa preenchidos pelo Fidelizaê!.
+- Para automações de 30 e 60 dias sem atividade, o parâmetro variável do modelo `fidelizae_campanha` passa a usar um texto padronizado da própria automação, evitando que uma edição do e-mail altere o WhatsApp.
+- Canal, Ativa, mensagem e botão **Salvar automação** tiveram o alinhamento vertical corrigido; os controles ficam alinhados pela base em telas amplas.
+- O fallback independente entre e-mail e WhatsApp da v174 foi preservado.
 
 ## v174 — automações claras e fallback entre canais
 - A área de Automações agora explica quando cada regra é executada, mostra se está ativa e exibe a última execução.
