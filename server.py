@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v179'
+VERSION='v181'
 _DASHBOARD_CACHE={}
 _DASHBOARD_CACHE_TTL=max(5,int(os.environ.get('DASHBOARD_CACHE_TTL','15')))
 TERMS_VERSION='1.1'
@@ -428,10 +428,15 @@ def normalize_cpf(value):
 
 
 def device_os_from_user_agent(user_agent):
+    """Retorna somente o SO móvel relevante para a métrica Android x iOS.
+
+    Desktop, bots e user-agents não identificáveis retornam None para não
+    contaminarem a métrica de dispositivo usado pelo cliente no cadastro.
+    """
     ua=(user_agent or '').lower()
     if 'android' in ua: return 'android'
     if any(x in ua for x in ('iphone','ipad','ipod')): return 'ios'
-    return 'other'
+    return None
 
 def normalize_birth_date(value):
     value = str(value or '').strip()
@@ -2362,8 +2367,13 @@ class Handler(BaseHTTPRequestHandler):
                                   FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id JOIN companies co ON co.id=c.company_id
                                   WHERE m.public_id=?''',(public_id,)).fetchone()
                 if not m: return self.send_json({'ok':False,'error':'card_not_found'},404)
+                # Mantém o último sistema operacional móvel conhecido do cliente.
+                # O cadastro inicial grava Android/iOS e cada nova abertura do próprio
+                # cartão em celular atualiza a métrica. Acessos desktop não apagam nem
+                # substituem o último Android/iOS identificado.
                 device_os=device_os_from_user_agent(self.headers.get('User-Agent'))
-                conn.execute('UPDATE memberships SET last_device_os=? WHERE id=?',(device_os,m['membership_id']))
+                if device_os:
+                    conn.execute('UPDATE memberships SET registration_device_os=?,last_device_os=? WHERE id=?',(device_os,device_os,m['membership_id']))
                 data=rowdict(m)
                 data['card_code']=f'CLUBE:{m["public_id"]}'
                 data['qr_value']=data['card_code']
@@ -2744,11 +2754,11 @@ class Handler(BaseHTTPRequestHandler):
                     rv=conn.execute('SELECT COALESCE(SUM(pr.amount_cents),0) n FROM purchase_records pr JOIN memberships m ON m.id=pr.membership_id WHERE m.campaign_id=? AND pr.created_at>=? AND pr.created_at<?',(cid,st,en)).fetchone()['n']
                     finance.append({'month':f'{mo:02d}/{str(y)[2:]}','revenue_cents':int(rv or 0)})
                 metrics['finance_trend']=finance
-                # Demografia: gênero informado no cadastro, idade calculada pela data de nascimento e dispositivo do último acesso ao cartão.
+                # Demografia: gênero/data de nascimento e dispositivo móvel usado pelo cliente ao criar o cartão.
                 gender_counts={'female':0,'male':0,'other':0,'prefer_not':0,'unknown':0}
                 age_counts={'under18':0,'a18_24':0,'a25_34':0,'a35_44':0,'a45_59':0,'a60plus':0,'unknown':0}
                 device_counts={'android':0,'ios':0,'other':0}
-                demo_rows=conn.execute("SELECT cu.birth_date,cu.gender,m.last_device_os FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND m.status='active'",(cid,)).fetchall()
+                demo_rows=conn.execute("SELECT cu.birth_date,cu.gender,m.registration_device_os FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE m.campaign_id=? AND m.status='active'",(cid,)).fetchall()
                 today=datetime.now(ZoneInfo('America/Sao_Paulo')).date()
                 for dr in demo_rows:
                     g=(dr['gender'] or '').lower(); gender_counts[g if g in gender_counts and g!='unknown' else 'unknown']+=1
@@ -2761,7 +2771,7 @@ class Handler(BaseHTTPRequestHandler):
                         elif age<60: age_counts['a45_59']+=1
                         else: age_counts['a60plus']+=1
                     except Exception: age_counts['unknown']+=1
-                    dev=(dr['last_device_os'] or 'other').lower(); device_counts[dev if dev in ('android','ios') else 'other']+=1
+                    dev=(dr['registration_device_os'] or '').lower(); device_counts[dev if dev in ('android','ios') else 'other']+=1
                 metrics['demographics']={'gender':gender_counts,'age':age_counts,'device':device_counts}
                 payload={'ok':True,'metrics':metrics}; _DASHBOARD_CACHE[cid]=(now,payload); return self.send_json(payload,headers={'X-Fidelizae-Cache':'MISS'})
         if path == '/api/admin/engagement':
@@ -3684,7 +3694,8 @@ class Handler(BaseHTTPRequestHandler):
                 plan=normalize_plan(c['plan'] if 'plan' in c.keys() else 'pro'); limit=PLAN_FEATURES[plan]['client_limit']; current=conn.execute("SELECT COUNT(*) n FROM memberships WHERE campaign_id=? AND status='active'",(c['id'],)).fetchone()['n'];
                 if limit and current>=limit: return self.send_redirect('/join?campaign='+urllib.parse.quote(code)+'&error=plan_client_limit') if path=='/join' else self.send_json({'ok':False,'error':'plan_client_limit','limit':limit},403)
                 public_id='mem_'+random_token(10); qr_token=random_token(24)
-                conn.execute('INSERT INTO memberships(customer_id,campaign_id,public_id,qr_token,created_at) VALUES(?,?,?,?,?)',(customer_id,c['id'],public_id,qr_token,now_ts()))
+                registration_device_os=device_os_from_user_agent(self.headers.get('User-Agent'))
+                conn.execute('INSERT INTO memberships(customer_id,campaign_id,public_id,qr_token,registration_device_os,last_device_os,created_at) VALUES(?,?,?,?,?,?,?)',(customer_id,c['id'],public_id,qr_token,registration_device_os,registration_device_os,now_ts()))
                 print(f'[JOIN] CREATED public_id={public_id} campaign={code} name={name!r}')
                 audit(conn,c['company_id'],None,'customer_join','membership',public_id,details=name,ip_address=self._ip())
                 welcome_result={'queued':False,'skipped':True,'reason':'email_provider_not_configured'}

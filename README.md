@@ -1,5 +1,22 @@
-# Fidelizaê! v179
+# Fidelizaê! v181
 
+
+## v181 — dispositivo móvel atual do cliente
+- A métrica **Dispositivo** passa a representar o último sistema móvel conhecido de cada cliente, e não somente o aparelho usado no cadastro inicial.
+- O cadastro do cartão continua registrando Android ou iOS quando identificável.
+- Sempre que o próprio cartão é aberto novamente em um celular, o sistema atualiza a informação para Android ou iOS, permitindo refletir uma futura troca de aparelho.
+- Aberturas em macOS, Windows, Linux ou outros desktops não apagam nem sobrescrevem o último Android/iOS conhecido.
+- O painel passa a identificar o indicador como **Último sistema móvel identificado**.
+- Migração e testes sincronizados para **v181**.
+
+
+## v180 — dispositivo do cliente no cadastro do cartão
+
+- O painel **Visão Geral > Dispositivo** agora mede o sistema operacional usado pelo próprio cliente na criação do cartão, e não acessos administrativos ou desktops posteriores.
+- O cadastro grava `registration_device_os` somente quando o navegador é identificado como **Android** ou **iOS**.
+- Aberturas posteriores do cartão em macOS/Windows/Linux não sobrescrevem mais um Android/iOS já identificado.
+- Para cadastros antigos, a migração reaproveita `last_device_os` apenas quando ele já contém `android` ou `ios`; registros antigos que foram sobrescritos como desktop permanecem como não identificados, pois o dado original não pode ser reconstruído.
+- Migração de banco e testes sincronizados para **v180**.
 
 ## v179 — escala, API e operação em worker
 

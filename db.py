@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS memberships (
   public_id TEXT NOT NULL UNIQUE,
   qr_token TEXT NOT NULL UNIQUE,
   last_device_os TEXT,
+  registration_device_os TEXT,
   progress INTEGER NOT NULL DEFAULT 0,
   points_balance INTEGER NOT NULL DEFAULT 0,
   cashback_balance_cents INTEGER NOT NULL DEFAULT 0,
@@ -202,6 +203,7 @@ CREATE TABLE IF NOT EXISTS memberships (
   public_id TEXT NOT NULL UNIQUE,
   qr_token TEXT NOT NULL UNIQUE,
   last_device_os TEXT,
+  registration_device_os TEXT,
   progress INTEGER NOT NULL DEFAULT 0,
   points_balance INTEGER NOT NULL DEFAULT 0,
   cashback_balance_cents INTEGER NOT NULL DEFAULT 0,
@@ -1123,6 +1125,28 @@ def init_db(db_path=None, seed=True):
             conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v179',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
         else:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v179',?)",(now_ts(),))
+
+        # Migração v180: dispositivo móvel usado na criação do cartão.
+        # Não usa acessos desktop posteriores na métrica Android x iOS.
+        if _is_postgres(target):
+            conn.execute('ALTER TABLE memberships ADD COLUMN IF NOT EXISTS registration_device_os TEXT')
+            conn.execute("UPDATE memberships SET registration_device_os=last_device_os WHERE registration_device_os IS NULL AND last_device_os IN ('android','ios')")
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v180',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            membership_cols={r['name'] for r in conn.execute('PRAGMA table_info(memberships)').fetchall()}
+            if 'registration_device_os' not in membership_cols:
+                conn.execute('ALTER TABLE memberships ADD COLUMN registration_device_os TEXT')
+            conn.execute("UPDATE memberships SET registration_device_os=last_device_os WHERE registration_device_os IS NULL AND last_device_os IN ('android','ios')")
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v180',?)",(now_ts(),))
+
+        # Migração v181: a métrica de dispositivo passa a representar o último
+        # sistema móvel (Android/iOS) identificado quando o cliente abre o cartão.
+        # Não há alteração estrutural; registration_device_os é mantido por
+        # compatibilidade e passa a armazenar o último SO móvel conhecido.
+        if _is_postgres():
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v181',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v181',?)",(now_ts(),))
 
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()

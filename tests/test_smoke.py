@@ -13,9 +13,9 @@ class PlatformRegression(unittest.TestCase):
 
     def test_version_and_latest_migration(self):
         import server
-        self.assertEqual(server.VERSION,'v179')
+        self.assertEqual(server.VERSION,'v181')
         with self.db.connect(self.path) as c:
-            self.assertIsNotNone(c.execute("SELECT version FROM schema_migrations WHERE version='v179'").fetchone())
+            self.assertIsNotNone(c.execute("SELECT version FROM schema_migrations WHERE version='v181'").fetchone())
 
     def test_performance_indexes_exist(self):
         with self.db.connect(self.path) as c:
@@ -47,6 +47,18 @@ class PlatformRegression(unittest.TestCase):
             mid=insert_id(c,"INSERT INTO memberships(customer_id,campaign_id,public_id,qr_token,created_at) VALUES(?,?,?,?,?)",(customer,cid,'mem_test','qr_test',ts))
             out=customer_intelligence_bulk(c,[{'id':mid,'created_at':ts,'progress':0,'points_balance':0,'rewards_available':0,'goal':5}],{'id':cid,'loyalty_type':'stamps'})
             self.assertIn(mid,out); self.assertIn('segment',out[mid]); self.assertIn('days_since_last',out[mid])
+
+    def test_mobile_device_detection_for_registration_metric(self):
+        import server
+        self.assertEqual(server.device_os_from_user_agent('Mozilla/5.0 (Linux; Android 14; Pixel 8)'), 'android')
+        self.assertEqual(server.device_os_from_user_agent('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)'), 'ios')
+        self.assertIsNone(server.device_os_from_user_agent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'))
+        with self.db.connect(self.path) as c:
+            cols={r['name'] for r in c.execute('PRAGMA table_info(memberships)').fetchall()}
+            self.assertIn('registration_device_os', cols)
+        with open(os.path.join(os.path.dirname(os.path.dirname(__file__)),'server.py'),encoding='utf-8') as fh:
+            source=fh.read()
+        self.assertIn('UPDATE memberships SET registration_device_os=?,last_device_os=? WHERE id=?',source)
 
     def test_worker_entrypoint_is_available(self):
         import worker
