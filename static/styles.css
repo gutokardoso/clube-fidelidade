@@ -968,7 +968,7 @@ body[data-plan="pro"] #npsCard{order:6}
 .recipient-search-help{margin:7px 0 0}.recipient-feedback{margin-top:5px}.recipient-result{min-height:56px}.recipient-result b{font-weight:800}.recipient-result small{font-size:12px}
 
 
-/* v188 — estado desabilitado evidente e autocomplete integrado ao campo */
+/* v189 — estado desabilitado evidente e autocomplete integrado ao campo */
 #waRecipientSearch:disabled,.recipient-input-wrap.is-disabled #waRecipientSearch{background:#e5e5e5!important;border-color:#c8c8c8!important;color:#888!important;opacity:1!important;cursor:not-allowed!important;box-shadow:inset 0 0 0 1px rgba(0,0,0,.02)!important}
 #waRecipientSearch:disabled::placeholder,.recipient-input-wrap.is-disabled #waRecipientSearch::placeholder{color:#999!important;opacity:1!important}
 .recipient-input-wrap{position:relative!important;width:100%!important}

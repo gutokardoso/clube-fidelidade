@@ -1,6 +1,6 @@
-# Fidelizaê! v188
+# Fidelizaê! v189
 
-## v188 — correção visual do seletor de destinatário WhatsApp
+## v189 — correção visual do seletor de destinatário WhatsApp
 
 - O campo de busca de cliente agora assume fundo cinza evidente sempre que estiver desabilitado.
 - Os resultados da busca agora abrem acoplados ao campo, ocupando toda a largura, como opções de um seletor/autocomplete.
