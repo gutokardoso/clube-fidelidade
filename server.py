@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v183'
+VERSION='v184'
 _DASHBOARD_CACHE={}
 _DASHBOARD_CACHE_TTL=max(5,int(os.environ.get('DASHBOARD_CACHE_TTL','15')))
 TERMS_VERSION='1.1'
@@ -3216,8 +3216,24 @@ class Handler(BaseHTTPRequestHandler):
                     phone=normalize_phone(q)
                     if phone: parts.append('cu.phone_hash=?'); qp.append(pii_lookup_hash(phone,'phone'))
                     where.append('('+ ' OR '.join(parts) +')'); params.extend(qp)
-                rows=[customer_rowdict(r) for r in conn.execute("SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE "+' AND '.join(where)+' ORDER BY cu.name LIMIT ?',tuple(params+[limit])).fetchall()]
-                return self.send_json({'ok':True,'customers':rows,'limit':limit,'has_more':len(rows)>=limit})
+                # Retorna também o consentimento do canal para que a interface consiga
+                # diferenciar "cliente inexistente" de "cliente sem permissão".
+                # Quando há busca, não filtramos previamente por telefone/e-mail: primeiro
+                # localizamos o cliente e depois informamos se ele está elegível ao canal.
+                search_where=["m.campaign_id=?","m.status='active'"]; search_params=[s['campaign_id']]
+                if q:
+                    like='%'+q.lower()+'%'; parts=['lower(cu.name) LIKE ?',"lower(COALESCE(cu.email,'')) LIKE ?"]; qp=[like,like]
+                    phone=normalize_phone(q)
+                    if phone: parts.append('cu.phone_hash=?'); qp.append(pii_lookup_hash(phone,'phone'))
+                    search_where.append('('+ ' OR '.join(parts) +')'); search_params.extend(qp)
+                elif channel=='email': search_where.append("COALESCE(cu.email,'')<>''")
+                elif channel=='whatsapp': search_where.append("(cu.phone_hash IS NOT NULL OR COALESCE(cu.phone,'')<>'')")
+                rows=[customer_rowdict(r) for r in conn.execute("SELECT cu.id,cu.name,cu.email,cu.phone,cu.phone_enc,cu.marketing_email,cu.marketing_whatsapp FROM customers cu JOIN memberships m ON m.customer_id=cu.id WHERE "+' AND '.join(search_where)+' ORDER BY cu.name LIMIT ?',tuple(search_params+[limit])).fetchall()]
+                for row in rows:
+                    if channel=='whatsapp': row['channel_allowed']=bool(row.get('phone')) and bool(row.get('marketing_whatsapp'))
+                    elif channel=='email': row['channel_allowed']=bool(row.get('email')) and bool(row.get('marketing_email'))
+                    else: row['channel_allowed']=True
+                return self.send_json({'ok':True,'customers':rows,'limit':limit,'has_more':len(rows)>=limit,'query':q})
 
         if path == '/api/card/rewards':
             public_id=(qs.get('id') or [''])[0].strip()

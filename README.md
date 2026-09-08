@@ -849,3 +849,10 @@ O conector QR é desacoplado do app e deve ser configurado no Railway com `WHATS
 - Índices v178 aceleram memberships, transações, compras, fila e automações.
 - `worker.py` permite separar filas/automações/backups do processo HTTP. Em uma implantação com worker separado, use `CLUBE_RUN_BACKGROUND_WORKER=0` no serviço web e execute `python worker.py` no worker.
 - Smoke tests: `python -m unittest discover -s tests`.
+
+## v184 — busca de destinatários no WhatsApp
+- A seleção de cliente do WhatsApp foi simplificada: não há mais um segundo campo select permanentemente abaixo da busca.
+- Os resultados aparecem como uma lista clara somente depois de digitar nome ou telefone, com ação Selecionar.
+- Busca sem correspondência informa “Esse usuário não existe.”; cliente localizado sem telefone/consentimento informa “Esse usuário não permite envio pelo WhatsApp.”.
+- O cliente escolhido aparece em um cartão de confirmação com opção Trocar.
+- No PRO, públicos em massa permanecem disponíveis como atalhos separados; no Intermediário, continuam ocultos porque o envio é individual.
