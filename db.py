@@ -1219,6 +1219,13 @@ def init_db(db_path=None, seed=True):
         else:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v184',?)",(now_ts(),))
 
+        # Migração v185: seletor pesquisável de cliente e público do WhatsApp.
+        # Sem alteração estrutural de schema; registra a versão aplicada.
+        if _is_postgres(target):
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v185',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v185',?)",(now_ts(),))
+
 def ensure_configured_staff(db_path=None):
     """Sincroniza credenciais configuradas por variáveis de ambiente.
 

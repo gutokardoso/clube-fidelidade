@@ -856,3 +856,11 @@ O conector QR é desacoplado do app e deve ser configurado no Railway com `WHATS
 - Busca sem correspondência informa “Esse usuário não existe.”; cliente localizado sem telefone/consentimento informa “Esse usuário não permite envio pelo WhatsApp.”.
 - O cliente escolhido aparece em um cartão de confirmação com opção Trocar.
 - No PRO, públicos em massa permanecem disponíveis como atalhos separados; no Intermediário, continuam ocultos porque o envio é individual.
+
+
+## v185 — UX do WhatsApp: cliente e público
+- A busca de cliente agora funciona como um seletor pesquisável: os resultados abrem diretamente abaixo do campo e desaparecem após a seleção.
+- No PRO, os públicos de envio ficam em um único select “Público”: Cliente selecionado, Todos os clientes, Aniversariantes do mês, Inativos há 30 dias e Com recompensa disponível.
+- No Intermediário, o envio continua individual e o seletor de públicos coletivos permanece oculto.
+- Busca sem correspondência informa “Esse usuário não existe.”; cliente sem permissão informa “Esse usuário não permite envio pelo WhatsApp.”.
+- O envio informa claramente quando nenhum cliente ou público foi selecionado.
