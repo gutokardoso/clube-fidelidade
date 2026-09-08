@@ -1,4 +1,12 @@
-# Fidelizaê! v182
+# Fidelizaê! v183
+
+## v183 — edição de clientes e menu Gestão avançada
+- **Clientes cadastrados → Editar** agora abre em modal, no mesmo padrão visual do Histórico.
+- O modal de edição pode ser fechado pelo X, pelo botão Cancelar, pelo fundo do modal ou pela tecla Esc.
+- **Recompensas** saiu do topo e passou a ser o segundo item de **Gestão avançada**, logo abaixo de **Cadastrar atendente**.
+- A visibilidade de Recompensas continua restrita a administradores de empresas cujo programa usa pontos.
+- Versão de aplicação e migração sincronizadas em **v183**.
+
 
 
 

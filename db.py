@@ -1205,6 +1205,13 @@ def init_db(db_path=None, seed=True):
         else:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v182',?)",(now_ts(),))
 
+        # Migração v183: edição de clientes em modal e reorganização do menu Gestão avançada.
+        # Sem alteração estrutural de schema; registra a versão aplicada.
+        if _is_postgres(target):
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v183',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v183',?)",(now_ts(),))
+
 def ensure_configured_staff(db_path=None):
     """Sincroniza credenciais configuradas por variáveis de ambiente.
 
