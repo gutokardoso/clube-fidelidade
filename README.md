@@ -1,4 +1,13 @@
-# Fidelizaê! v189
+# Fidelizaê! v190
+
+## v190 — estabilização e regressão
+
+- Corrigido o fluxo de **2FA** quando o desafio está ausente, expirado ou inválido: o servidor agora sempre responde corretamente, sem encerrar a conexão em silêncio.
+- Acesso direto à tela de 2FA sem desafio válido redireciona com segurança para o login.
+- O login agora exibe uma mensagem específica quando a verificação em duas etapas expira.
+- Adicionada configuração de testes para que `pytest -q` funcione diretamente, sem exigir `PYTHONPATH=.`.
+- Ampliada a suíte de regressão para proteger rotas públicas, arquivos estáticos, banco, autenticação e o fluxo de 2FA.
+- Marcadores de versão sincronizados e resíduos de desenvolvimento removidos do pacote final.
 
 ## v189 — correção visual do seletor de destinatário WhatsApp
 
@@ -467,7 +476,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v164
+**Versão atual:** v190
 
 
 ## Novidades da v117

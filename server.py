@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v189'
+VERSION='v190'
 _DASHBOARD_CACHE={}
 _DASHBOARD_CACHE_TTL=max(5,int(os.environ.get('DASHBOARD_CACHE_TTL','15')))
 TERMS_VERSION='1.1'
@@ -2298,6 +2298,21 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/security':
             return self.send_text((STATIC/'security.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION))
         if path == '/login/2fa':
+            challenge_cookie=self._cookies().get('clube_2fa_challenge')
+            raw=challenge_cookie.value if challenge_cookie else ''
+            if not raw:
+                return self.send_redirect('/login?error=2fa_expired',303,{'Set-Cookie':_clear_cookie('clube_2fa_challenge')})
+            th=hashlib.sha256(raw.encode()).hexdigest()
+            try:
+                with connect(DB_PATH) as conn:
+                    challenge=conn.execute('SELECT expires_at,attempts FROM auth_challenges WHERE token_hash=?',(th,)).fetchone()
+                    valid=bool(challenge and int(challenge['expires_at'] or 0)>=now_ts() and int(challenge['attempts'] or 0)<6)
+                    if not valid and challenge:
+                        conn.execute('DELETE FROM auth_challenges WHERE token_hash=?',(th,))
+                if not valid:
+                    return self.send_redirect('/login?error=2fa_expired',303,{'Set-Cookie':_clear_cookie('clube_2fa_challenge')})
+            except Exception:
+                return self.send_redirect('/login?error=2fa_expired',303,{'Set-Cookie':_clear_cookie('clube_2fa_challenge')})
             template=(STATIC/'two-factor.html').read_text(encoding='utf-8').replace('{{VERSION}}',VERSION)
             if (qs.get('error') or [''])[0]: template=template.replace('<div id="msg"></div>','<div id="msg"><div class="notice error">Código inválido ou expirado.</div></div>')
             return self.send_text(template)
@@ -2306,7 +2321,11 @@ class Handler(BaseHTTPRequestHandler):
             template=(STATIC/name).read_text(encoding='utf-8').replace('{{VERSION}}',VERSION)
             if path == '/login' and (qs.get('error') or [''])[0]:
                 login_error=(qs.get('error') or [''])[0]
-                message='Sua assinatura terminou e o acesso da empresa está encerrado. Entre em contato para reativar o plano.' if login_error=='subscription_expired' else 'E-mail ou senha inválidos.'
+                login_messages={
+                    'subscription_expired':'Sua assinatura terminou e o acesso da empresa está encerrado. Entre em contato para reativar o plano.',
+                    '2fa_expired':'A verificação em duas etapas expirou. Entre novamente para gerar um novo código de acesso.'
+                }
+                message=login_messages.get(login_error,'E-mail ou senha inválidos.')
                 template=template.replace('<div id="msg"></div>','<div id="msg"><div class="notice error">'+html.escape(message)+'</div></div>')
             return self.send_text(template)
         if path.startswith('/static/'):
@@ -3593,7 +3612,12 @@ class Handler(BaseHTTPRequestHandler):
             code=str(payload.get('code') or '').strip()
             challenge_cookie=self._cookies().get('clube_2fa_challenge')
             raw=challenge_cookie.value if challenge_cookie else ''
-            if not raw or not self._rate_ok('login-2fa-ip',10,600,self._ip(),1800): return
+            if not raw:
+                if path=='/login/2fa':
+                    return self.send_redirect('/login?error=2fa_expired',303,{'Set-Cookie':_clear_cookie('clube_2fa_challenge')})
+                return self.send_json({'ok':False,'error':'two_factor_challenge_invalid'},401,{'Set-Cookie':_clear_cookie('clube_2fa_challenge')})
+            if not self._rate_ok('login-2fa-ip',10,600,self._ip(),1800):
+                return
             th=hashlib.sha256(raw.encode()).hexdigest()
             with connect(DB_PATH) as conn:
                 row=fetchone_for_update(conn,"SELECT ac.token_hash,ac.user_id,ac.expires_at,ac.attempts,u.* FROM auth_challenges ac JOIN users u ON u.id=ac.user_id WHERE ac.token_hash=?",(th,))
