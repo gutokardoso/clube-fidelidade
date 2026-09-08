@@ -1238,6 +1238,13 @@ def init_db(db_path=None, seed=True):
         except Exception:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v187',?)",(now_ts(),))
 
+        # Migração v188: correção visual do seletor de destinatários WhatsApp.
+        # Sem alteração estrutural de schema; registra a versão aplicada.
+        if _is_postgres(target):
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v188',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v188',?)",(now_ts(),))
+
 def ensure_configured_staff(db_path=None):
     """Sincroniza credenciais configuradas por variáveis de ambiente.
 
