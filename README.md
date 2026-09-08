@@ -1,4 +1,13 @@
-# Fidelizaê! v186
+# Fidelizaê! v187
+
+## v187 — refinamento visual do destinatário WhatsApp
+
+- Busca individual fica cinza quando desabilitada e volta ao estado normal ao ser habilitada.
+- O resumo “Envio para...” fica abaixo do seletor Cliente.
+- A orientação para liberar a busca individual fica abaixo do campo de busca.
+- Resultados encontrados são exibidos como dropdown acoplado ao campo, no padrão de autocomplete/select.
+- Avisos de cliente inexistente ou sem permissão permanecem junto da busca.
+
 
 ## v186 — seleção de destinatário no WhatsApp
 - O seletor que antes se chamava **Público** agora aparece primeiro e foi renomeado para **Cliente**.

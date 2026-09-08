@@ -1232,6 +1232,11 @@ def init_db(db_path=None, seed=True):
             conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v186',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
         else:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v186',?)",(now_ts(),))
+        # Migração v187: refinamento visual do seletor de destinatários WhatsApp.
+        try:
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v187',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        except Exception:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v187',?)",(now_ts(),))
 
 def ensure_configured_staff(db_path=None):
     """Sincroniza credenciais configuradas por variáveis de ambiente.
