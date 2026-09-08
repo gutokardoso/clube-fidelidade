@@ -1,4 +1,13 @@
-# Fidelizaê! v183
+# Fidelizaê! v186
+
+## v186 — seleção de destinatário no WhatsApp
+- O seletor que antes se chamava **Público** agora aparece primeiro e foi renomeado para **Cliente**.
+- A opção individual foi renomeada de **Cliente selecionado** para **Selecione um cliente**.
+- Ao escolher **Selecione um cliente**, o campo de busca abaixo é habilitado para localizar o cliente por nome ou telefone.
+- Ao escolher qualquer público coletivo, o campo de busca individual fica desabilitado e não interfere no envio.
+- O campo de busca individual não possui mais o rótulo repetido **Cliente**, reduzindo ruído visual.
+- O cabeçalho do README foi sincronizado com a versão atual para evitar o GitHub exibir uma versão antiga após a publicação dos arquivos.
+
 
 ## v183 — edição de clientes e menu Gestão avançada
 - **Clientes cadastrados → Editar** agora abre em modal, no mesmo padrão visual do Histórico.
