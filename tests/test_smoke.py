@@ -13,9 +13,9 @@ class PlatformRegression(unittest.TestCase):
 
     def test_version_and_latest_migration(self):
         import server
-        self.assertEqual(server.VERSION,'v181')
+        self.assertEqual(server.VERSION,'v182')
         with self.db.connect(self.path) as c:
-            self.assertIsNotNone(c.execute("SELECT version FROM schema_migrations WHERE version='v181'").fetchone())
+            self.assertIsNotNone(c.execute("SELECT version FROM schema_migrations WHERE version='v182'").fetchone())
 
     def test_performance_indexes_exist(self):
         with self.db.connect(self.path) as c:
@@ -63,5 +63,17 @@ class PlatformRegression(unittest.TestCase):
     def test_worker_entrypoint_is_available(self):
         import worker
         self.assertTrue(callable(worker.main))
+
+
+    def test_customer_actions_and_campaign_delete_ui_are_present(self):
+        root=os.path.dirname(os.path.dirname(__file__))
+        html=open(os.path.join(root,'static','attendant.html'),encoding='utf-8').read()
+        server_source=open(os.path.join(root,'server.py'),encoding='utf-8').read()
+        for token in ('async function showHistory(id)','function editCustomer(id)','async function removeCustomer(id)','async function removeMarketingCampaign(id'):
+            self.assertIn(token,html)
+        self.assertIn("all:'Todos os clientes'",html)
+        self.assertIn("both:'E-mail + WhatsApp'",html)
+        self.assertIn("'Aguardando envio'",html)
+        self.assertIn("/api/admin/marketing-campaign/delete",server_source)
 
 if __name__=='__main__': unittest.main()

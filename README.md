@@ -1,5 +1,13 @@
-# Fidelizaê! v181
+# Fidelizaê! v182
 
+
+
+## v182 — clientes e Central de Campanhas
+- Restauradas as ações **Histórico**, **Editar** e **Remover** em **Clientes cadastrados**, que haviam deixado de ter as funções JavaScript correspondentes após as otimizações de paginação.
+- **Central de Campanhas** agora possui botão **Remover** em todas as campanhas, com confirmação e exclusão restrita à própria empresa.
+- Segmentos e canais da lista de campanhas foram traduzidos: `all` → **Todos os clientes** e `both` → **E-mail + WhatsApp**.
+- O estado `draft` agora é exibido como **Aguardando envio**, deixando claro que a campanha foi criada, mas ainda não foi enviada.
+- Versão de aplicação e migração sincronizadas em **v182**.
 
 ## v181 — dispositivo móvel atual do cliente
 - A métrica **Dispositivo** passa a representar o último sistema móvel conhecido de cada cliente, e não somente o aparelho usado no cadastro inicial.

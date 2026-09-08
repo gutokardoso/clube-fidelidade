@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v181'
+VERSION='v182'
 _DASHBOARD_CACHE={}
 _DASHBOARD_CACHE_TTL=max(5,int(os.environ.get('DASHBOARD_CACHE_TTL','15')))
 TERMS_VERSION='1.1'
@@ -4090,6 +4090,16 @@ class Handler(BaseHTTPRequestHandler):
                 if len(name)<2 or not message or segment not in ('all','new','active','recurrent','vip','at_risk','inactive','inactive60','inactive90','almost_reward','reward_ready','birthdays') or channel not in ('email','whatsapp','both'):return self.send_json({'ok':False,'error':'invalid_campaign'},400)
                 mid=insert_id(conn,'INSERT INTO marketing_campaigns(campaign_id,name,segment,channel,message,meta_template_name,meta_template_language,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)',(s['campaign_id'],name,segment,channel,message,meta_name or None,meta_lang,'draft',now_ts()))
                 audit(conn,s['company_id'],s['user_id'],'marketing_campaign_create','marketing_campaign',mid,details=name,ip_address=self._ip())
+                return self.send_json({'ok':True,'id':mid})
+            if path == '/api/admin/marketing-campaign/delete':
+                if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not plan_allows(conn,s['campaign_id'],'communications'):return self.send_json({'ok':False,'error':'plan_feature_not_available'},403)
+                try: mid=int(payload.get('id') or 0)
+                except: mid=0
+                mc=conn.execute('SELECT id,name,status FROM marketing_campaigns WHERE id=? AND campaign_id=?',(mid,s['campaign_id'])).fetchone()
+                if not mc:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                conn.execute('DELETE FROM marketing_campaigns WHERE id=? AND campaign_id=?',(mid,s['campaign_id']))
+                audit(conn,s['company_id'],s['user_id'],'marketing_campaign_delete','marketing_campaign',mid,details=f"{mc['name']};status={mc['status']}",ip_address=self._ip())
                 return self.send_json({'ok':True,'id':mid})
             if path == '/api/admin/marketing-campaign/send':
                 if s['role']!='attendant' or not s['is_client_admin'] or not s['campaign_id']:return self.send_json({'ok':False,'error':'forbidden'},403)
