@@ -1,4 +1,14 @@
-# Fidelizaê! v195
+# Fidelizaê! v196
+
+## v196 — refinamento visual dos gráficos
+
+- Corrigido o preenchimento preto indevido nos gráficos de linha.
+- **Crescimento da plataforma** agora usa linhas finas, pontos menores, eixos e fontes discretos, alinhados ao visual do Fidelizaê!.
+- A legenda do crescimento foi simplificada e reposicionada abaixo do gráfico.
+- Ao passar o mouse (ou focar pelo teclado) em um mês, aparece uma box com os valores daquele período: empresas cadastradas, comparação do ano anterior e projeção, quando aplicável.
+- **Evolução de empresas por plano** recebeu o mesmo tratamento visual e mostra Iniciante, Intermediário e PRO na box de informação por mês.
+- Removidos os contadores textuais Iniciante/Intermediário/PRO acima do gráfico de evolução por plano.
+- Mantidos os dados reais e a lógica de projeção já implementada na v195.
 
 ## v195 — crescimento da plataforma
 
@@ -511,7 +521,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v195
+**Versão atual:** v196
 
 
 ## Novidades da v117

@@ -1003,3 +1003,30 @@ body[data-plan="pro"] #npsCard{order:6}
 
 /* v195 — crescimento da plataforma */
 .manager-growth-legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:-4px 0 8px}.manager-growth-legend span{display:inline-flex;align-items:center;gap:7px;font-size:11px;color:#6f6259}.manager-growth-legend i{width:20px;height:0;border-top:3px solid #e27a00;border-radius:999px}.manager-growth-legend i.growth-previous{border-top-color:#a99d94}.manager-growth-legend i.growth-projection{border-top-color:#e27a00;border-top-style:dashed}.manager-growth-line{fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.manager-growth-line.growth-current{stroke:#e27a00}.manager-growth-line.growth-previous{stroke:#a99d94;stroke-width:2.4}.manager-growth-line.growth-projection{stroke:#e27a00;stroke-dasharray:7 7;stroke-width:2.6}.manager-growth-point{stroke:#fff;stroke-width:2}.manager-growth-point.growth-current{fill:#e27a00}.manager-growth-point.growth-previous{fill:#a99d94}.manager-growth-point.growth-projection{fill:#fff;stroke:#e27a00}.manager-growth-point:focus{outline:none;stroke:#2e251f;stroke-width:2.5}@media(max-width:620px){.manager-growth-legend{gap:7px 11px}.manager-growth-chart svg{min-width:720px}}
+
+/* v196 — refinamento visual dos gráficos e tooltips interativos */
+.manager-line-chart{position:relative;min-height:190px}
+.manager-line-chart svg{min-height:0}
+.manager-chart-gridline{stroke:#eee8e3;stroke-width:.8;stroke-dasharray:2 3}
+.manager-chart-ylabel,.manager-chart-xlabel{fill:#887b72;font-size:9px;font-weight:500}
+.manager-growth-line,.manager-plan-line{fill:none!important;stroke-width:2!important;vector-effect:non-scaling-stroke}
+.manager-growth-line.growth-previous{stroke:#c8bdb5;stroke-width:1.7!important}
+.manager-growth-line.growth-current{stroke:#e27a00}
+.manager-growth-line.growth-projection{stroke:#f39a4a;stroke-width:1.8!important;stroke-dasharray:5 5}
+.manager-plan-line.plan-beginner{stroke:#5f9174}.manager-plan-line.plan-intermediate{stroke:#e27a00}.manager-plan-line.plan-pro{stroke:#453b35}
+.manager-growth-point,.manager-plan-point{stroke:#fff;stroke-width:1.5;vector-effect:non-scaling-stroke}
+.manager-growth-point{r:3.2}.manager-plan-point{r:3.2}
+.manager-plan-point.plan-beginner{fill:#5f9174}.manager-plan-point.plan-intermediate{fill:#e27a00}.manager-plan-point.plan-pro{fill:#453b35}
+.manager-chart-hit{fill:transparent;stroke:none;cursor:crosshair;outline:none}
+.manager-chart-hit:focus{fill:rgba(226,122,0,.035)}
+.manager-chart-tooltip{position:absolute;z-index:8;min-width:190px;max-width:270px;padding:10px 12px;border:1px solid #eadfd5;border-radius:10px;background:rgba(255,255,255,.98);box-shadow:0 8px 24px rgba(61,45,35,.12);color:#3f352f;font-size:11px;line-height:1.25;pointer-events:none;opacity:0;transform:translateY(4px);transition:opacity .12s ease,transform .12s ease}
+.manager-chart-tooltip.visible{opacity:1;transform:translateY(0)}
+.manager-chart-tooltip>strong{display:block;margin-bottom:7px;font-size:11px;color:#302720;text-transform:capitalize}
+.manager-chart-tooltip>div{display:grid;grid-template-columns:9px minmax(0,1fr) auto;align-items:center;gap:7px;padding:3px 0}
+.manager-chart-tooltip>div i{width:7px;height:7px;border-radius:50%;background:#e27a00}
+.manager-chart-tooltip>div i.tip-previous{background:#c8bdb5}.manager-chart-tooltip>div i.tip-projection{background:#f39a4a}.manager-chart-tooltip>div i.tip-beginner{background:#5f9174}.manager-chart-tooltip>div i.tip-intermediate{background:#e27a00}.manager-chart-tooltip>div i.tip-pro{background:#453b35}
+.manager-chart-tooltip>div span{color:#756960;white-space:nowrap}.manager-chart-tooltip>div b{font-size:11px;color:#302720}
+.manager-growth-legend{justify-content:center;margin:8px 0 -2px;gap:8px 20px}
+.manager-growth-legend span{font-size:10px;color:#786c64}.manager-growth-legend span b{font-weight:600}.manager-growth-legend i{width:16px;border-top-width:2px}.manager-growth-legend i.growth-previous{border-top-color:#c8bdb5}.manager-growth-legend i.growth-projection{border-top-color:#f39a4a}
+.manager-plan-legend{display:none!important}
+@media(max-width:620px){.manager-chart-ylabel,.manager-chart-xlabel{font-size:8.5px}.manager-growth-legend{justify-content:flex-start}.manager-chart-tooltip{min-width:175px;font-size:10px}.manager-chart-tooltip>div span{white-space:normal}.manager-growth-chart svg{min-width:680px}.manager-line-chart svg{min-width:540px}}
