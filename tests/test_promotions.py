@@ -44,3 +44,14 @@ def test_manager_and_signup_ui_expose_promotions():
     manager=open('static/manager.html',encoding='utf-8').read(); signup=open('static/signup.html',encoding='utf-8').read()
     assert 'Criar promoção' in manager and 'openPromotionManager' in manager
     assert '/api/public/promotions/active' in signup and 'promotion_id' in signup
+
+
+def test_promotion_modal_is_scrollable_and_responsive():
+    manager=open('static/manager.html',encoding='utf-8').read()
+    styles=open('static/styles.css',encoding='utf-8').read()
+    assert 'promotion-manager-card' in manager
+    assert 'promotion-manager-body' in manager
+    assert 'styles.css?v=192' in manager
+    assert '.promotion-manager-body{overflow-y:auto' in styles
+    assert 'max-height:calc(100dvh - 48px)' in styles
+    assert '@media(max-width:560px)' in styles

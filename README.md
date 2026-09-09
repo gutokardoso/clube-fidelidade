@@ -1,6 +1,6 @@
-# Fidelizaê! v191
+# Fidelizaê! v192
 
-## v191 — motor de promoções e trial
+## v192 — motor de promoções e trial
 - Novo submenu **Comunicação > Criar promoção** no Administrador Geral.
 - Promoções configuráveis por plano, dias grátis, limite de empresas, período e forma de cobrança.
 - Trial do Mercado Pago configurado para não cobrar mensalidade durante o período grátis e iniciar a cobrança recorrente ao final.
@@ -485,7 +485,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v191
+**Versão atual:** v192
 
 
 ## Novidades da v117
