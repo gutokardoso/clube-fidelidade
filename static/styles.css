@@ -1055,3 +1055,17 @@ body[data-plan="pro"] #npsCard{order:6}
 .manager-last-value rect{fill:#fff7ed;stroke:#efd8bd;stroke-width:.8}.manager-last-value text{fill:#a95600;font-size:9px;font-weight:800}
 .manager-line-chart{overflow:hidden!important}.manager-line-chart svg{width:100%!important;max-width:100%!important;min-width:0!important;height:auto!important}
 @media(max-width:620px){.manager-growth-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}.manager-growth-metrics button{width:100%;padding:6px 5px;font-size:9px}.manager-line-chart{overflow:hidden!important;padding-bottom:0!important}.manager-line-chart svg,.manager-growth-chart svg{min-width:0!important;width:100%!important;max-width:100%!important}.manager-growth-legend{justify-content:flex-start;gap:6px 10px}.manager-growth-legend span{font-size:9px}.manager-chart-title>strong{font-size:20px}.manager-last-value text{font-size:8px}}
+
+
+/* v201 — tipografia legível nos gráficos em telas mobile */
+@media(max-width:620px){
+  /* O SVG de crescimento usa viewBox 980px e é reduzido para a largura do card;
+     por isso os rótulos precisam de uma escala própria no mobile. */
+  .manager-growth-chart .manager-chart-xlabel,
+  .manager-growth-chart .manager-chart-ylabel{font-size:34px!important;font-weight:600!important}
+  .manager-growth-chart .manager-last-value text{font-size:28px!important;font-weight:800!important}
+  /* O gráfico por plano usa viewBox menor (680px), então 24px resulta em
+     aproximadamente a mesma leitura visual dos rótulos do gráfico acima. */
+  #planChart .manager-chart-xlabel,
+  #planChart .manager-chart-ylabel{font-size:24px!important;font-weight:600!important}
+}

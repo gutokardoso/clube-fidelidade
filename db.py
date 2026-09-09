@@ -1327,6 +1327,12 @@ def init_db(db_path=None, seed=True):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_payments_campaign_paid ON billing_payments(campaign_id,paid_at)")
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v200',?)",(now_ts(),))
 
+        # Migração v201: ajuste responsivo de tipografia dos gráficos (sem mudança estrutural).
+        if _is_postgres(target):
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v201',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v201',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:

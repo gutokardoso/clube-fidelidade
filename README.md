@@ -1,4 +1,12 @@
-# Fidelizaê! v200
+# Fidelizaê! v201
+
+## v201 — tipografia legível nos gráficos mobile
+
+- Aumentados os rótulos de mês e valores dos eixos dos dois gráficos em telas de até 620 px, sem ampliar a largura do SVG e sem reintroduzir rolagem horizontal.
+- “Crescimento da plataforma” recebe escala tipográfica própria para compensar o viewBox maior e manter leitura equivalente ao gráfico por plano.
+- O valor destacado no último ponto real também foi ampliado no mobile.
+- Desktop permanece com a escala visual anterior.
+- Cache de CSS/JS do Painel Fidelizaê! atualizado para v201.
 
 ## v200 — crescimento multifuncional e gráficos mobile sem rolagem
 
@@ -549,7 +557,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v200
+**Versão atual:** v201
 
 
 ## Novidades da v117
