@@ -13,9 +13,9 @@ class PlatformRegression(unittest.TestCase):
 
     def test_version_and_latest_migration(self):
         import server
-        self.assertEqual(server.VERSION,'v199')
+        self.assertEqual(server.VERSION,'v200')
         with self.db.connect(self.path) as c:
-            self.assertIsNotNone(c.execute("SELECT version FROM schema_migrations WHERE version='v199'").fetchone())
+            self.assertIsNotNone(c.execute("SELECT version FROM schema_migrations WHERE version='v200'").fetchone())
 
     def test_performance_indexes_exist(self):
         with self.db.connect(self.path) as c:

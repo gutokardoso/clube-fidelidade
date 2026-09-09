@@ -1046,3 +1046,12 @@ body[data-plan="pro"] #npsCard{order:6}
 
 /* v199 — linha-guia vertical dos gráficos */
 .manager-chart-guide{stroke:#d8d1cb!important;stroke-width:1!important;vector-effect:non-scaling-stroke!important;visibility:hidden!important;pointer-events:none!important}.manager-chart-guide.visible{visibility:visible!important}
+
+
+/* v200 — seletor de métricas, rótulo do último ponto e mobile sem rolagem horizontal */
+.manager-growth-metrics{display:flex;flex-wrap:wrap;gap:6px;margin:-2px 0 10px}
+.manager-growth-metrics button{appearance:none;border:1px solid #eadfd5;background:#fffaf6;color:#6f6259;border-radius:999px;padding:6px 10px;font:inherit;font-size:10px;font-weight:700;cursor:pointer;transition:.15s ease}
+.manager-growth-metrics button:hover,.manager-growth-metrics button.active{background:#fff1df;border-color:#e6ad70;color:#a95600}
+.manager-last-value rect{fill:#fff7ed;stroke:#efd8bd;stroke-width:.8}.manager-last-value text{fill:#a95600;font-size:9px;font-weight:800}
+.manager-line-chart{overflow:hidden!important}.manager-line-chart svg{width:100%!important;max-width:100%!important;min-width:0!important;height:auto!important}
+@media(max-width:620px){.manager-growth-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}.manager-growth-metrics button{width:100%;padding:6px 5px;font-size:9px}.manager-line-chart{overflow:hidden!important;padding-bottom:0!important}.manager-line-chart svg,.manager-growth-chart svg{min-width:0!important;width:100%!important;max-width:100%!important}.manager-growth-legend{justify-content:flex-start;gap:6px 10px}.manager-growth-legend span{font-size:9px}.manager-chart-title>strong{font-size:20px}.manager-last-value text{font-size:8px}}

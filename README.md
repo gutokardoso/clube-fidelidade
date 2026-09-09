@@ -1,4 +1,13 @@
-# Fidelizaê! v199
+# Fidelizaê! v200
+
+## v200 — crescimento multifuncional e gráficos mobile sem rolagem
+
+- “Crescimento da plataforma” agora possui seletor: Empresas cadastradas, Receita, Usuários e Operações.
+- Tooltip, linha-guia, comparação anual e projeção são preservados ao trocar a métrica.
+- Último ponto real recebe um rótulo compacto com o valor atual.
+- Receita usa somente pagamentos aprovados registrados localmente a partir desta versão.
+- Em telas de até 620 px, o gráfico por plano mostra 6 meses e o crescimento reduz os pontos visíveis para caber sem barra horizontal.
+- Cache de CSS/JS atualizado para v200.
 
 ## v199 — linha-guia e contagem consistente no crescimento
 
@@ -540,7 +549,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v198
+**Versão atual:** v200
 
 
 ## Novidades da v117

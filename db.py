@@ -1317,6 +1317,16 @@ def init_db(db_path=None, seed=True):
         else:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v199',?)",(now_ts(),))
 
+        # Migração v200: métricas históricas do dashboard e registro local de receitas aprovadas.
+        if _is_postgres(target):
+            conn.execute("""CREATE TABLE IF NOT EXISTS billing_payments (id BIGSERIAL PRIMARY KEY, campaign_id BIGINT REFERENCES campaigns(id) ON DELETE SET NULL, subscription_id TEXT, authorized_payment_id TEXT NOT NULL UNIQUE, amount_cents BIGINT NOT NULL DEFAULT 0, paid_at BIGINT NOT NULL, created_at BIGINT NOT NULL)""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_payments_campaign_paid ON billing_payments(campaign_id,paid_at)")
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v200',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.execute("""CREATE TABLE IF NOT EXISTS billing_payments (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL, subscription_id TEXT, authorized_payment_id TEXT NOT NULL UNIQUE, amount_cents INTEGER NOT NULL DEFAULT 0, paid_at INTEGER NOT NULL, created_at INTEGER NOT NULL)""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_payments_campaign_paid ON billing_payments(campaign_id,paid_at)")
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v200',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:

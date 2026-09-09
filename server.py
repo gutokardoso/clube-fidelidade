@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v199'
+VERSION='v200'
 _DASHBOARD_CACHE={}
 _DASHBOARD_CACHE_TTL=max(5,int(os.environ.get('DASHBOARD_CACHE_TTL','15')))
 TERMS_VERSION='1.1'
@@ -3018,7 +3018,15 @@ class Handler(BaseHTTPRequestHandler):
                     c['brevo_api_key_enc']=None
                     c['whatsapp_access_token_enc']=None
                 staff=[rowdict(r) for r in conn.execute('''SELECT u.id,u.name,u.email,u.role,u.active,u.is_client_admin,u.created_at,u.campaign_id,c.name client_name FROM users u LEFT JOIN campaigns c ON c.id=u.campaign_id WHERE u.company_id=? ORDER BY u.role,u.name''',(cid,)).fetchall()]
-                return self.send_json({'ok':True,'metrics':metrics,'campaigns':campaigns,'staff':staff})
+                active_ids=[int(c['id']) for c in campaigns if c.get('active')]
+                dashboard_series={'memberships':[],'transactions':[],'billing_payments':[]}
+                if active_ids:
+                    ph=','.join('?' for _ in active_ids)
+                    cutoff=now-730*86400
+                    dashboard_series['memberships']=[int(r['created_at'] or 0) for r in conn.execute(f"SELECT m.created_at FROM memberships m WHERE m.campaign_id IN ({ph})",tuple(active_ids)).fetchall()]
+                    dashboard_series['transactions']=[int(r['created_at'] or 0) for r in conn.execute(f"SELECT t.created_at FROM transactions t JOIN memberships m ON m.id=t.membership_id WHERE m.campaign_id IN ({ph}) AND t.created_at>=?",(*active_ids,cutoff)).fetchall()]
+                    dashboard_series['billing_payments']=[{'paid_at':int(r['paid_at'] or 0),'amount_cents':int(r['amount_cents'] or 0)} for r in conn.execute(f"SELECT paid_at,amount_cents FROM billing_payments WHERE campaign_id IN ({ph}) AND paid_at>=?",(*active_ids,cutoff)).fetchall()]
+                return self.send_json({'ok':True,'metrics':metrics,'campaigns':campaigns,'staff':staff,'dashboard_series':dashboard_series})
         if path == '/api/public/promotions/active':
             plan=normalize_plan((qs.get('plan') or ['pro'])[0]); option=normalize_billing_option(plan,(qs.get('billing_option') or ['monthly'])[0])
             with connect(DB_PATH) as conn:
@@ -3535,6 +3543,14 @@ class Handler(BaseHTTPRequestHandler):
                                 # registramos a recusa para diagnóstico sem expor dados sensíveis.
                                 print('[BILLING] MP_SIGNUP_PAYMENT_REJECTED subscription_id=%s code=%s' % (pre_id,rejection),flush=True)
                             camp=conn.execute('SELECT * FROM campaigns WHERE subscription_id=?',(pre_id,)).fetchone()
+                            if approved and camp:
+                                amount_raw=payment.get('transaction_amount',ap.get('transaction_amount',0))
+                                try: amount_cents=max(0,int(round(float(amount_raw or 0)*100)))
+                                except (TypeError,ValueError): amount_cents=0
+                                paid_at=_mp_timestamp(payment.get('date_approved') or ap.get('date_approved') or ap.get('last_modified')) or now_ts()
+                                auth_id=str(ap.get('id') or sub_id or '').strip()
+                                if auth_id:
+                                    conn.execute("INSERT INTO billing_payments(campaign_id,subscription_id,authorized_payment_id,amount_cents,paid_at,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT (authorized_payment_id) DO NOTHING",(camp['id'],pre_id,auth_id,amount_cents,paid_at,now_ts()))
                             if approved and camp and not camp['subscription_cancel_at_period_end']:
                                 _refresh_annual_commitment_after_payment(conn,camp)
                                 camp=conn.execute('SELECT * FROM campaigns WHERE id=?',(camp['id'],)).fetchone()
