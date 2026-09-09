@@ -1,4 +1,22 @@
-# Fidelizaê! v193
+# Fidelizaê! v195
+
+## v195 — crescimento da plataforma
+
+- Adicionado ao Painel Fidelizaê! o gráfico **Crescimento da plataforma**, acima dos gráficos de plano e tipo de programa.
+- O gráfico mostra o **total acumulado de empresas cadastradas mês a mês** nos últimos 9 meses, compara com o **mesmo período do ano anterior** e apresenta uma **projeção para os próximos 3 meses**.
+- A projeção é calculada automaticamente pela média de novos cadastros dos 3 intervalos mensais mais recentes; não usa valores fictícios fixos.
+- O total atual aparece em destaque no canto superior direito e cada ponto possui detalhe ao passar o mouse/focar.
+- Mantidos **Evolução de empresas por plano**, **Tipo de programa** e **Integrações configuradas**.
+- Layout responsivo com rolagem horizontal controlada no mobile.
+
+## v194 — evolução de empresas por plano
+
+- Substituída a antiga área **Distribuição por plano** do Painel Fidelizaê! pelo gráfico **Evolução de empresas por plano**.
+- O novo gráfico compara **Iniciante**, **Intermediário** e **PRO** mês a mês nos últimos 12 meses.
+- Mantidos no topo o total de empresas ativas e, na legenda, o total atual de cada plano.
+- O gráfico utiliza as datas reais de cadastro das empresas e a classificação atual por plano, sem dados fictícios.
+- Layout responsivo, com rolagem horizontal controlada no mobile para preservar a leitura dos 12 meses.
+- Mantido o gráfico **Tipo de programa** ao lado e o restante do dashboard sem alterações funcionais.
 
 ## v193 — correção de migração e auto-reparo do motor de promoções
 
@@ -493,7 +511,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v193
+**Versão atual:** v195
 
 
 ## Novidades da v117
