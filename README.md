@@ -1,4 +1,11 @@
-# Fidelizaê! v198
+# Fidelizaê! v199
+
+## v199 — linha-guia e contagem consistente no crescimento
+
+- Adicionada uma linha-guia vertical cinza que acompanha o mês ativo nos dois gráficos e desaparece junto com o tooltip ao sair da área do gráfico.
+- A posição da linha-guia e do tooltip usa a área útil real do SVG para manter o alinhamento com os pontos.
+- “Crescimento da plataforma” agora considera somente empresas ativas, ficando consistente com o KPI “Empresas ativas”, “Evolução de empresas por plano” e “Tipo de programa”.
+- O total destacado do gráfico reflete a mesma base ativa do restante do painel.
 
 ## v198 — gráficos interativos corrigidos de forma robusta
 

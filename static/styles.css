@@ -1043,3 +1043,6 @@ body[data-plan="pro"] #npsCard{order:6}
 
 /* v198 — cache-bust e blindagem visual dos gráficos */
 .manager-line-chart{position:relative!important}.manager-line-chart svg{pointer-events:none!important;background:transparent!important}.manager-line-chart polyline{fill:none!important}.manager-chart-xlabel,.manager-chart-ylabel{font-size:9px!important;font-weight:500!important}.manager-growth-chart .manager-chart-xlabel,.manager-growth-chart .manager-chart-ylabel{font-size:9px!important}.manager-chart-tooltip{position:absolute!important;z-index:100!important;margin:0!important}.manager-chart-tooltip:not(.visible){visibility:hidden!important;opacity:0!important}.manager-chart-tooltip.visible{visibility:visible!important;opacity:1!important}
+
+/* v199 — linha-guia vertical dos gráficos */
+.manager-chart-guide{stroke:#d8d1cb!important;stroke-width:1!important;vector-effect:non-scaling-stroke!important;visibility:hidden!important;pointer-events:none!important}.manager-chart-guide.visible{visibility:visible!important}
