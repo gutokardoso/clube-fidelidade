@@ -1040,3 +1040,6 @@ body[data-plan="pro"] #npsCard{order:6}
 .manager-chart-tooltip{display:block!important;position:absolute!important;z-index:50!important}
 .manager-chart-tooltip:not(.visible){visibility:hidden!important}
 .manager-chart-tooltip.visible{visibility:visible!important}
+
+/* v198 — cache-bust e blindagem visual dos gráficos */
+.manager-line-chart{position:relative!important}.manager-line-chart svg{pointer-events:none!important;background:transparent!important}.manager-line-chart polyline{fill:none!important}.manager-chart-xlabel,.manager-chart-ylabel{font-size:9px!important;font-weight:500!important}.manager-growth-chart .manager-chart-xlabel,.manager-growth-chart .manager-chart-ylabel{font-size:9px!important}.manager-chart-tooltip{position:absolute!important;z-index:100!important;margin:0!important}.manager-chart-tooltip:not(.visible){visibility:hidden!important;opacity:0!important}.manager-chart-tooltip.visible{visibility:visible!important;opacity:1!important}

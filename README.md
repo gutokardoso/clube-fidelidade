@@ -1,4 +1,11 @@
-# Fidelizaê! v197
+# Fidelizaê! v198
+
+## v198 — gráficos interativos corrigidos de forma robusta
+
+- Corrige o cache antigo do CSS no Painel Fidelizaê!.
+- Garante linhas, pontos, grade e tipografia com atributos SVG explícitos.
+- Tooltip branco flutuante aparece dentro do gráfico ao passar o mouse.
+- “Crescimento da plataforma” passa a usar a mesma escala tipográfica do gráfico por plano.
 
 ## v197 — correção visual definitiva dos gráficos
 - Remove as áreas SVG de captura que podiam ser renderizadas como preenchimento preto.
@@ -526,7 +533,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v197
+**Versão atual:** v198
 
 
 ## Novidades da v117
