@@ -1299,11 +1299,11 @@ def init_db(db_path=None, seed=True):
         else:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v195',?)",(now_ts(),))
 
-        # Migração v196: refinamento visual e tooltips dos gráficos (sem mudança estrutural).
+        # Migração v197: refinamento visual e tooltips dos gráficos (sem mudança estrutural).
         if _is_postgres(target):
-            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v196',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v197',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
         else:
-            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v196',?)",(now_ts(),))
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v197',?)",(now_ts(),))
 
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()

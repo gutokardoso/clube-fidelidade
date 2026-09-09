@@ -1004,7 +1004,7 @@ body[data-plan="pro"] #npsCard{order:6}
 /* v195 — crescimento da plataforma */
 .manager-growth-legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:-4px 0 8px}.manager-growth-legend span{display:inline-flex;align-items:center;gap:7px;font-size:11px;color:#6f6259}.manager-growth-legend i{width:20px;height:0;border-top:3px solid #e27a00;border-radius:999px}.manager-growth-legend i.growth-previous{border-top-color:#a99d94}.manager-growth-legend i.growth-projection{border-top-color:#e27a00;border-top-style:dashed}.manager-growth-line{fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.manager-growth-line.growth-current{stroke:#e27a00}.manager-growth-line.growth-previous{stroke:#a99d94;stroke-width:2.4}.manager-growth-line.growth-projection{stroke:#e27a00;stroke-dasharray:7 7;stroke-width:2.6}.manager-growth-point{stroke:#fff;stroke-width:2}.manager-growth-point.growth-current{fill:#e27a00}.manager-growth-point.growth-previous{fill:#a99d94}.manager-growth-point.growth-projection{fill:#fff;stroke:#e27a00}.manager-growth-point:focus{outline:none;stroke:#2e251f;stroke-width:2.5}@media(max-width:620px){.manager-growth-legend{gap:7px 11px}.manager-growth-chart svg{min-width:720px}}
 
-/* v196 — refinamento visual dos gráficos e tooltips interativos */
+/* v197 — refinamento visual dos gráficos e tooltips interativos */
 .manager-line-chart{position:relative;min-height:190px}
 .manager-line-chart svg{min-height:0}
 .manager-chart-gridline{stroke:#eee8e3;stroke-width:.8;stroke-dasharray:2 3}
@@ -1030,3 +1030,13 @@ body[data-plan="pro"] #npsCard{order:6}
 .manager-growth-legend span{font-size:10px;color:#786c64}.manager-growth-legend span b{font-weight:600}.manager-growth-legend i{width:16px;border-top-width:2px}.manager-growth-legend i.growth-previous{border-top-color:#c8bdb5}.manager-growth-legend i.growth-projection{border-top-color:#f39a4a}
 .manager-plan-legend{display:none!important}
 @media(max-width:620px){.manager-chart-ylabel,.manager-chart-xlabel{font-size:8.5px}.manager-growth-legend{justify-content:flex-start}.manager-chart-tooltip{min-width:175px;font-size:10px}.manager-chart-tooltip>div span{white-space:normal}.manager-growth-chart svg{min-width:680px}.manager-line-chart svg{min-width:540px}}
+
+/* v197 — correção definitiva: SVG sem áreas de captura e tooltip flutuante */
+.manager-line-chart svg{pointer-events:none!important;background:transparent!important}
+.manager-line-chart polyline{fill:none!important}
+.manager-growth-chart{min-height:190px!important}
+.manager-growth-chart svg{height:auto!important;min-height:0!important}
+.manager-growth-chart .manager-chart-xlabel,.manager-growth-chart .manager-chart-ylabel{font-size:9px!important;font-weight:500!important}
+.manager-chart-tooltip{display:block!important;position:absolute!important;z-index:50!important}
+.manager-chart-tooltip:not(.visible){visibility:hidden!important}
+.manager-chart-tooltip.visible{visibility:visible!important}

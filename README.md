@@ -1,6 +1,11 @@
-# Fidelizaê! v196
+# Fidelizaê! v197
 
-## v196 — refinamento visual dos gráficos
+## v197 — correção visual definitiva dos gráficos
+- Remove as áreas SVG de captura que podiam ser renderizadas como preenchimento preto.
+- Tooltips passam a ser flutuantes dentro do gráfico, acompanhando o mouse.
+- Linhas permanecem sem preenchimento e com traço discreto.
+- “Crescimento da plataforma” usa a mesma escala tipográfica discreta do gráfico por plano.
+
 
 - Corrigido o preenchimento preto indevido nos gráficos de linha.
 - **Crescimento da plataforma** agora usa linhas finas, pontos menores, eixos e fontes discretos, alinhados ao visual do Fidelizaê!.
@@ -521,7 +526,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v196
+**Versão atual:** v197
 
 
 ## Novidades da v117
