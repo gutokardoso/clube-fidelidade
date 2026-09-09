@@ -344,6 +344,65 @@ def connect(db_path=None):
             conn.close()
 
 
+def ensure_promotion_schema(conn):
+    """Garante, de forma idempotente, o schema usado pelo motor de promoções.
+
+    Esta rotina pode ser chamada tanto no startup quanto imediatamente antes dos
+    endpoints de promoção. Assim, uma publicação em que o processo suba com o
+    banco ainda sem as tabelas novas se auto-recupera sem apagar dados existentes.
+    """
+    is_pg = isinstance(conn, PgConnection)
+    promo_id = "BIGSERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    int_type = "BIGINT" if is_pg else "INTEGER"
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS platform_promotions (
+        id {promo_id}, company_id {int_type} NOT NULL, name TEXT NOT NULL, description TEXT,
+        target_plan TEXT NOT NULL DEFAULT 'pro', benefit_type TEXT NOT NULL DEFAULT 'trial_days',
+        benefit_value INTEGER NOT NULL DEFAULT 30, billing_option TEXT NOT NULL DEFAULT 'monthly',
+        usage_limit INTEGER NOT NULL DEFAULT 100, starts_at BIGINT, ends_at BIGINT, require_card INTEGER NOT NULL DEFAULT 1,
+        auto_apply INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'active', created_by {int_type}, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
+    )""")
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS promotion_reservations (
+        promotion_id {int_type} NOT NULL, signup_id {int_type} NOT NULL UNIQUE, identity_hash TEXT NOT NULL,
+        expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY (promotion_id, identity_hash)
+    )""")
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS promotion_redemptions (
+        promotion_id {int_type} NOT NULL, signup_id {int_type} NOT NULL UNIQUE, campaign_id {int_type}, identity_hash TEXT NOT NULL,
+        redeemed_at BIGINT NOT NULL, PRIMARY KEY (promotion_id, identity_hash)
+    )""")
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_promotion_reservations_expiry ON promotion_reservations(expires_at)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_promotion_reservations_promo ON promotion_reservations(promotion_id,expires_at)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_promotion_redemptions_promo ON promotion_redemptions(promotion_id,redeemed_at)')
+    if is_pg:
+        conn.execute('ALTER TABLE subscription_signups ADD COLUMN IF NOT EXISTS promotion_id BIGINT')
+        conn.execute('ALTER TABLE subscription_signups ADD COLUMN IF NOT EXISTS trial_days INTEGER NOT NULL DEFAULT 0')
+    else:
+        cols={r['name'] for r in conn.execute('PRAGMA table_info(subscription_signups)').fetchall()}
+        if 'promotion_id' not in cols:
+            conn.execute('ALTER TABLE subscription_signups ADD COLUMN promotion_id INTEGER')
+        if 'trial_days' not in cols:
+            conn.execute('ALTER TABLE subscription_signups ADD COLUMN trial_days INTEGER NOT NULL DEFAULT 0')
+
+
+def validate_promotion_schema(conn):
+    """Falha explicitamente se o schema crítico de promoções não estiver disponível."""
+    required=('platform_promotions','promotion_reservations','promotion_redemptions')
+    if isinstance(conn, PgConnection):
+        for table in required:
+            row=conn.execute('SELECT to_regclass(?) AS rel',(table,)).fetchone()
+            if not row or not row['rel']:
+                raise RuntimeError(f'promotion_schema_missing:{table}')
+        cols={r['column_name'] for r in conn.execute("SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='subscription_signups'").fetchall()}
+    else:
+        for table in required:
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():
+                raise RuntimeError(f'promotion_schema_missing:{table}')
+        cols={r['name'] for r in conn.execute('PRAGMA table_info(subscription_signups)').fetchall()}
+    for col in ('promotion_id','trial_days'):
+        if col not in cols:
+            raise RuntimeError(f'promotion_schema_missing:subscription_signups.{col}')
+    return True
+
+
 def integrity_errors():
     errors = [sqlite3.IntegrityError]
     try:
@@ -1148,54 +1207,6 @@ def init_db(db_path=None, seed=True):
         else:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v181',?)",(now_ts(),))
 
-        # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
-        first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
-        if first_client:
-            conn.execute("UPDATE users SET campaign_id=? WHERE role='attendant' AND campaign_id IS NULL", (first_client['id'],))
-        if not seed:
-            return
-        count = conn.execute('SELECT COUNT(*) c FROM companies').fetchone()['c']
-        if count != 0:
-            return
-
-        ts = now_ts()
-        production = _is_postgres(target)
-        demo_enabled = os.environ.get('CLUBE_SEED_DEMO', '0' if production else '1') == '1'
-
-        if demo_enabled:
-            company_name = 'Café Taboo'
-            company_slug = 'cafe-taboo'
-            manager_name = 'Gerente Demo'
-            manager_email = 'gerente@demo.local'
-            manager_password = 'Gerente123!'
-            attendant_name = 'Atendente Demo'
-            attendant_email = 'atendente@demo.local'
-            attendant_password = 'Atendente123!'
-        else:
-            company_name = os.environ.get('CLUBE_COMPANY_NAME', 'Fidelizaê!').strip()
-            company_slug = os.environ.get('CLUBE_COMPANY_SLUG', 'clube-fidelidade').strip()
-            manager_name = os.environ.get('CLUBE_ADMIN_NAME', 'Administrador').strip()
-            manager_email = os.environ.get('CLUBE_ADMIN_EMAIL', '').strip().lower()
-            manager_password = os.environ.get('CLUBE_ADMIN_PASSWORD', '')
-            attendant_name = attendant_email = attendant_password = None
-            if '@' not in manager_email or len(manager_password) < 12:
-                raise RuntimeError(
-                    'Banco de produção vazio. Configure CLUBE_ADMIN_EMAIL e CLUBE_ADMIN_PASSWORD '
-                    '(mínimo 12 caracteres) nas variáveis do serviço antes do primeiro deploy.'
-                )
-
-        company_id = insert_id(conn,
-            'INSERT INTO companies(name,slug,primary_color,logo_text,created_at) VALUES(?,?,?,?,?)',
-            (company_name, company_slug, '#5A321F', 'CLUBE CAFÉ', ts))
-        conn.execute('INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,created_at) VALUES(?,?,?,?,?,?,?)',
-                     (company_id, manager_name, manager_email, hash_password(manager_password), 'manager', None, ts))
-        default_campaign_id = insert_id(conn, '''INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,min_stamp_interval_sec,max_stamps_per_hour,max_stamps_per_attendant_day,created_at)
-                        VALUES(?,?,?,?,?,?,?,?,?,?)''',
-                     (company_id,'CAFE5','Clube Café','1 café grátis',5,'☕',60,6,500,ts))
-        if attendant_email:
-            conn.execute('INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,created_at) VALUES(?,?,?,?,?,?,?)',
-                         (company_id, attendant_name, attendant_email, hash_password(attendant_password), 'attendant', default_campaign_id, ts))
-
 
 
         # Migração v182: correções funcionais da gestão de clientes e campanhas.
@@ -1253,30 +1264,9 @@ def init_db(db_path=None, seed=True):
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v190',?)",(now_ts(),))
 
         # Migração v191: motor de promoções comerciais e trials de assinatura.
-        promo_id = "BIGSERIAL PRIMARY KEY" if _is_postgres(target) else "INTEGER PRIMARY KEY AUTOINCREMENT"
-        int_type = "BIGINT" if _is_postgres(target) else "INTEGER"
-        conn.execute(f"""CREATE TABLE IF NOT EXISTS platform_promotions (
-            id {promo_id}, company_id {int_type} NOT NULL, name TEXT NOT NULL, description TEXT,
-            target_plan TEXT NOT NULL DEFAULT 'pro', benefit_type TEXT NOT NULL DEFAULT 'trial_days',
-            benefit_value INTEGER NOT NULL DEFAULT 30, billing_option TEXT NOT NULL DEFAULT 'monthly',
-            usage_limit INTEGER NOT NULL DEFAULT 100, starts_at BIGINT, ends_at BIGINT, require_card INTEGER NOT NULL DEFAULT 1,
-            auto_apply INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'active', created_by {int_type}, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
-        )""")
-        conn.execute(f"""CREATE TABLE IF NOT EXISTS promotion_reservations (
-            promotion_id {int_type} NOT NULL, signup_id {int_type} NOT NULL UNIQUE, identity_hash TEXT NOT NULL,
-            expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY (promotion_id, identity_hash)
-        )""")
-        conn.execute(f"""CREATE TABLE IF NOT EXISTS promotion_redemptions (
-            promotion_id {int_type} NOT NULL, signup_id {int_type} NOT NULL UNIQUE, campaign_id {int_type}, identity_hash TEXT NOT NULL,
-            redeemed_at BIGINT NOT NULL, PRIMARY KEY (promotion_id, identity_hash)
-        )""")
-        try:
-            conn.execute('ALTER TABLE subscription_signups ADD COLUMN IF NOT EXISTS promotion_id BIGINT')
-            conn.execute('ALTER TABLE subscription_signups ADD COLUMN IF NOT EXISTS trial_days INTEGER NOT NULL DEFAULT 0')
-        except Exception:
-            cols={r[1] for r in conn.execute('PRAGMA table_info(subscription_signups)').fetchall()}
-            if 'promotion_id' not in cols: conn.execute('ALTER TABLE subscription_signups ADD COLUMN promotion_id INTEGER')
-            if 'trial_days' not in cols: conn.execute('ALTER TABLE subscription_signups ADD COLUMN trial_days INTEGER NOT NULL DEFAULT 0')
+        # A rotina é deliberadamente idempotente e repara instalações parcialmente migradas.
+        ensure_promotion_schema(conn)
+        validate_promotion_schema(conn)
         if _is_postgres(target):
             conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v191',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
         else:
@@ -1288,6 +1278,64 @@ def init_db(db_path=None, seed=True):
             conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v192',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
         else:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v192',?)",(now_ts(),))
+
+        # Migração v193: auto-reparo e validação do schema de promoções em produção.
+        ensure_promotion_schema(conn)
+        validate_promotion_schema(conn)
+        if _is_postgres(target):
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v193',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v193',?)",(now_ts(),))
+
+        # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
+        first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
+        if first_client:
+            conn.execute("UPDATE users SET campaign_id=? WHERE role='attendant' AND campaign_id IS NULL", (first_client['id'],))
+        if not seed:
+            return
+        count = conn.execute('SELECT COUNT(*) c FROM companies').fetchone()['c']
+        if count != 0:
+            return
+
+        ts = now_ts()
+        production = _is_postgres(target)
+        demo_enabled = os.environ.get('CLUBE_SEED_DEMO', '0' if production else '1') == '1'
+
+        if demo_enabled:
+            company_name = 'Café Taboo'
+            company_slug = 'cafe-taboo'
+            manager_name = 'Gerente Demo'
+            manager_email = 'gerente@demo.local'
+            manager_password = 'Gerente123!'
+            attendant_name = 'Atendente Demo'
+            attendant_email = 'atendente@demo.local'
+            attendant_password = 'Atendente123!'
+        else:
+            company_name = os.environ.get('CLUBE_COMPANY_NAME', 'Fidelizaê!').strip()
+            company_slug = os.environ.get('CLUBE_COMPANY_SLUG', 'clube-fidelidade').strip()
+            manager_name = os.environ.get('CLUBE_ADMIN_NAME', 'Administrador').strip()
+            manager_email = os.environ.get('CLUBE_ADMIN_EMAIL', '').strip().lower()
+            manager_password = os.environ.get('CLUBE_ADMIN_PASSWORD', '')
+            attendant_name = attendant_email = attendant_password = None
+            if '@' not in manager_email or len(manager_password) < 12:
+                raise RuntimeError(
+                    'Banco de produção vazio. Configure CLUBE_ADMIN_EMAIL e CLUBE_ADMIN_PASSWORD '
+                    '(mínimo 12 caracteres) nas variáveis do serviço antes do primeiro deploy.'
+                )
+
+        company_id = insert_id(conn,
+            'INSERT INTO companies(name,slug,primary_color,logo_text,created_at) VALUES(?,?,?,?,?)',
+            (company_name, company_slug, '#5A321F', 'CLUBE CAFÉ', ts))
+        conn.execute('INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,created_at) VALUES(?,?,?,?,?,?,?)',
+                     (company_id, manager_name, manager_email, hash_password(manager_password), 'manager', None, ts))
+        default_campaign_id = insert_id(conn, '''INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,min_stamp_interval_sec,max_stamps_per_hour,max_stamps_per_attendant_day,created_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                     (company_id,'CAFE5','Clube Café','1 café grátis',5,'☕',60,6,500,ts))
+        if attendant_email:
+            conn.execute('INSERT INTO users(company_id,name,email,password_hash,role,campaign_id,created_at) VALUES(?,?,?,?,?,?,?)',
+                         (company_id, attendant_name, attendant_email, hash_password(attendant_password), 'attendant', default_campaign_id, ts))
+
+
 
 def ensure_configured_staff(db_path=None):
     """Sincroniza credenciais configuradas por variáveis de ambiente.

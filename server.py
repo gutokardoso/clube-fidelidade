@@ -35,7 +35,7 @@ try:
 except ImportError:
     sentry_sdk = None
 
-from db import DEFAULT_DB, init_db, ensure_configured_staff, connect, create_session, get_session, audit, insert_id, begin_write, integrity_errors, fetchone_for_update
+from db import DEFAULT_DB, init_db, ensure_configured_staff, ensure_promotion_schema, validate_promotion_schema, connect, create_session, get_session, audit, insert_id, begin_write, integrity_errors, fetchone_for_update
 from security import verify_password, hash_password, random_token, now_ts, password_is_strong, generate_totp_secret, verify_totp, encrypt_pii, decrypt_pii, pii_lookup_hash, pii_key_configured
 from antifraud import validate_stamp, FraudError
 from wallet import wallet_status, apple_pass_link, google_wallet_link, build_apple_pkpass, google_save_url, google_update_object, apple_auth_token, apple_push_update
@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v192'
+VERSION='v193'
 _DASHBOARD_CACHE={}
 _DASHBOARD_CACHE_TTL=max(5,int(os.environ.get('DASHBOARD_CACHE_TTL','15')))
 TERMS_VERSION='1.1'
@@ -955,6 +955,7 @@ def promotion_identity_hash(document,email):
     return hashlib.sha256(('fidelizae-promo|'+identity).encode()).hexdigest()
 
 def active_signup_promotion(conn, plan, billing_option='monthly', promotion_id=None):
+    ensure_promotion_schema(conn)
     now=now_ts(); conn.execute('DELETE FROM promotion_reservations WHERE expires_at<?',(now,))
     params=[normalize_plan(plan),normalize_billing_option(plan,billing_option),now,now]
     sql="""SELECT p.*, COALESCE((SELECT COUNT(*) FROM promotion_redemptions r WHERE r.promotion_id=p.id),0) used_count,
@@ -972,6 +973,7 @@ def active_signup_promotion(conn, plan, billing_option='monthly', promotion_id=N
     return None
 
 def reserve_promotion(conn,promo,signup_id,document,email,ttl=3600):
+    ensure_promotion_schema(conn)
     if not promo:return None
     ident=promotion_identity_hash(document,email); now=now_ts()
     if conn.execute('SELECT 1 FROM promotion_redemptions WHERE identity_hash=?',(ident,)).fetchone():return None
@@ -984,6 +986,7 @@ def reserve_promotion(conn,promo,signup_id,document,email,ttl=3600):
     return ident
 
 def redeem_signup_promotion(conn,row,campaign_id):
+    ensure_promotion_schema(conn)
     pid=row['promotion_id'] if 'promotion_id' in row.keys() else None
     if not pid:return
     res=conn.execute('SELECT * FROM promotion_reservations WHERE promotion_id=? AND signup_id=?',(pid,row['id'])).fetchone()
@@ -3025,6 +3028,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({'ok':True,'promotion':{'id':promo['id'],'name':promo['name'],'description':promo.get('description') or '', 'target_plan':promo['target_plan'],'trial_days':int(promo['benefit_value'] or 0),'require_card':bool(promo['require_card']),'remaining':remaining,'usage_limit':promo['usage_limit']}})
         if path == '/api/manager/promotions':
             with connect(DB_PATH) as conn:
+                ensure_promotion_schema(conn)
                 s=self._require_auth(conn,'manager')
                 if not s:return
                 now=now_ts(); conn.execute('DELETE FROM promotion_reservations WHERE expires_at<?',(now,))
@@ -3033,6 +3037,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({'ok':True,'promotions':rows})
         if path == '/api/manager/promotions/participants':
             with connect(DB_PATH) as conn:
+                ensure_promotion_schema(conn)
                 s=self._require_auth(conn,'manager')
                 if not s:return
                 try: pid=int((qs.get('promotion_id') or ['0'])[0])
@@ -5074,6 +5079,7 @@ class Handler(BaseHTTPRequestHandler):
                 audit(conn,s['company_id'],s['user_id'],'platform_alert_read','platform_alert_recipient',rid,ip_address=self._ip())
                 return self.send_json({'ok':True})
             if path == '/api/manager/promotions/save':
+                ensure_promotion_schema(conn)
                 if s['role']!='manager':return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
                 name=str(payload.get('name') or '').strip()[:120]; description=str(payload.get('description') or '').strip()[:1000]
@@ -5094,6 +5100,7 @@ class Handler(BaseHTTPRequestHandler):
                 audit(conn,s['company_id'],s['user_id'],'promotion_create','promotion',pid,details=f'{name};plan={plan};trial={days};limit={limit}',ip_address=self._ip())
                 return self.send_json({'ok':True,'promotion_id':pid})
             if path == '/api/manager/promotions/status':
+                ensure_promotion_schema(conn)
                 if s['role']!='manager':return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
                 try: pid=int(payload.get('promotion_id') or 0)

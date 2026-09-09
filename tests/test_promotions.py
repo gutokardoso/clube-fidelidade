@@ -51,7 +51,40 @@ def test_promotion_modal_is_scrollable_and_responsive():
     styles=open('static/styles.css',encoding='utf-8').read()
     assert 'promotion-manager-card' in manager
     assert 'promotion-manager-body' in manager
-    assert 'styles.css?v=192' in manager
+    assert 'styles.css?v=193' in manager
     assert '.promotion-manager-body{overflow-y:auto' in styles
     assert 'max-height:calc(100dvh - 48px)' in styles
     assert '@media(max-width:560px)' in styles
+
+
+def test_v193_repairs_partial_promotion_migration():
+    path=make_db()
+    try:
+        with db.connect(path) as c:
+            # Simula exatamente uma publicação parcial: o marcador existe, mas as tabelas novas sumiram.
+            c.execute('DROP TABLE promotion_reservations')
+            c.execute('DROP TABLE promotion_redemptions')
+            c.execute('DROP TABLE platform_promotions')
+            assert c.execute("SELECT 1 FROM schema_migrations WHERE version='v191'").fetchone()
+        db.init_db(path, seed=False)
+        with db.connect(path) as c:
+            assert db.validate_promotion_schema(c) is True
+            for table in ('platform_promotions','promotion_reservations','promotion_redemptions'):
+                assert c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone()
+            assert c.execute("SELECT 1 FROM schema_migrations WHERE version='v193'").fetchone()
+    finally:
+        os.unlink(path)
+
+def test_promotion_schema_guard_repairs_missing_table_on_demand():
+    path=make_db()
+    try:
+        with db.connect(path) as c:
+            company=c.execute('SELECT id FROM companies ORDER BY id LIMIT 1').fetchone(); assert company
+            pid=add_promo(c,company['id'],10)
+            c.execute('DROP TABLE promotion_reservations')
+            # O próprio helper usado pelos endpoints deve reparar o schema antes da consulta.
+            promo=server.active_signup_promotion(c,'pro','monthly')
+            assert promo and promo['id']==pid
+            assert c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='promotion_reservations'").fetchone()
+    finally:
+        os.unlink(path)

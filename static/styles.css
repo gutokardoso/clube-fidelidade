@@ -982,7 +982,7 @@ body[data-plan="pro"] #npsCard{order:6}
 #waRecipientResults .recipient-result-line>span{font-size:inherit!important;color:#231a16!important}
 .recipient-input-wrap:has(#waRecipientResults:not(.hidden)) #waRecipientSearch{border-radius:12px 12px 0 0!important}
 
-/* v192 — UX do gerenciador de promoções */
+/* v193 — UX do gerenciador de promoções + hardening de migração */
 .promotion-manager-modal{align-items:center;justify-items:center;padding:24px;overflow:hidden}
 .promotion-manager-card{width:min(980px,calc(100vw - 48px));max-height:calc(100dvh - 48px);padding:0;overflow:hidden;display:flex;flex-direction:column;border:1px solid #efd9c3}
 .promotion-manager-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding:22px 24px 18px;border-bottom:1px solid var(--line,#eadfd5);background:#fff;flex:0 0 auto}

@@ -1,6 +1,14 @@
-# Fidelizaê! v192
+# Fidelizaê! v193
 
-## v192 — motor de promoções e trial
+## v193 — correção de migração e auto-reparo do motor de promoções
+
+### Correção crítica v193
+- Repara automaticamente tabelas de promoções ausentes em bancos existentes antes de qualquer consulta da funcionalidade.
+- Valida no startup as tabelas `platform_promotions`, `promotion_reservations` e `promotion_redemptions`, além das colunas `promotion_id` e `trial_days` em `subscription_signups`.
+- A migração é idempotente: pode rodar novamente sem apagar promoções, cadastros ou assinaturas existentes.
+- Endpoints de promoções executam uma proteção adicional de schema, evitando `UndefinedTable` em uma publicação parcialmente migrada.
+- Inclui teste de upgrade que simula o estado visto em produção (migração marcada, tabela ausente) e confirma o auto-reparo.
+
 - Novo submenu **Comunicação > Criar promoção** no Administrador Geral.
 - Promoções configuráveis por plano, dias grátis, limite de empresas, período e forma de cobrança.
 - Trial do Mercado Pago configurado para não cobrar mensalidade durante o período grátis e iniciar a cobrança recorrente ao final.
@@ -485,7 +493,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v192
+**Versão atual:** v193
 
 
 ## Novidades da v117
