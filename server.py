@@ -47,7 +47,7 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
 SESSION_COOKIE = 'clube_session'
-VERSION='v190'
+VERSION='v191'
 _DASHBOARD_CACHE={}
 _DASHBOARD_CACHE_TTL=max(5,int(os.environ.get('DASHBOARD_CACHE_TTL','15')))
 TERMS_VERSION='1.1'
@@ -878,7 +878,7 @@ def _mp_subscription_diagnostic(sub, event='MP_SUBSCRIPTION'):
     return safe
 
 
-def create_mp_subscription(email,plan,reference,device_id=None,billing_option='monthly'):
+def create_mp_subscription(email,plan,reference,device_id=None,billing_option='monthly',trial_days=0):
     billing_option,cfg=billing_config(plan,billing_option)
     amount=cfg['amount']; base=(os.environ.get('PUBLIC_BASE_URL') or 'https://app.fidelizae.com.br').rstrip('/')
     # O payer de teste só pode substituir o e-mail real fora de produção.
@@ -897,6 +897,8 @@ def create_mp_subscription(email,plan,reference,device_id=None,billing_option='m
     # encaminhado somente como header de risco. Nunca é persistido nem registrado em log.
     risk_headers={'X-meli-session-id':str(device_id or '').strip()} if str(device_id or '').strip() else None
     recurring={'frequency':cfg['frequency'],'frequency_type':cfg['frequency_type'],'transaction_amount':amount,'currency_id':'BRL'}
+    trial_days=max(0,min(365,int(trial_days or 0)))
+    if trial_days: recurring['free_trial']={'frequency':trial_days,'frequency_type':'days'}
     sub=mp_request('POST','/preapproval',{'reason':f"Fidelizaê! {plan.title()} • {cfg['label']}",'external_reference':reference,'payer_email':payer_email,'auto_recurring':recurring,'back_url':base+'/signup/payment-return','status':'pending'},extra_headers=risk_headers)
     _mp_subscription_diagnostic(sub,'MP_CREATE_RESPONSE')
     # Uma leitura imediata do recurso ajuda a identificar diferenças entre a resposta do POST
@@ -948,6 +950,48 @@ def validate_mp_webhook_signature(headers,query):
     return hmac.compare_digest(expected,received)
 
 
+def promotion_identity_hash(document,email):
+    identity=(re.sub(r'\D','',str(document or '')) or normalize_email(email)).strip().lower()
+    return hashlib.sha256(('fidelizae-promo|'+identity).encode()).hexdigest()
+
+def active_signup_promotion(conn, plan, billing_option='monthly', promotion_id=None):
+    now=now_ts(); conn.execute('DELETE FROM promotion_reservations WHERE expires_at<?',(now,))
+    params=[normalize_plan(plan),normalize_billing_option(plan,billing_option),now,now]
+    sql="""SELECT p.*, COALESCE((SELECT COUNT(*) FROM promotion_redemptions r WHERE r.promotion_id=p.id),0) used_count,
+      COALESCE((SELECT COUNT(*) FROM promotion_reservations z WHERE z.promotion_id=p.id AND z.expires_at>?),0) reserved_count
+      FROM platform_promotions p WHERE p.status='active' AND p.target_plan=? AND p.billing_option=?
+      AND (p.starts_at IS NULL OR p.starts_at<=?) AND (p.ends_at IS NULL OR p.ends_at>=?)"""
+    params=[now]+params
+    if promotion_id:
+        sql+=' AND p.id=?'; params.append(int(promotion_id))
+    else: sql+=' AND p.auto_apply=1'
+    sql+=' ORDER BY p.id DESC'
+    for row in conn.execute(sql,tuple(params)).fetchall():
+        d=rowdict(row); limit=int(d.get('usage_limit') or 0)
+        if limit<=0 or int(d['used_count'])+int(d['reserved_count'])<limit:return d
+    return None
+
+def reserve_promotion(conn,promo,signup_id,document,email,ttl=3600):
+    if not promo:return None
+    ident=promotion_identity_hash(document,email); now=now_ts()
+    if conn.execute('SELECT 1 FROM promotion_redemptions WHERE identity_hash=?',(ident,)).fetchone():return None
+    if conn.execute('SELECT 1 FROM promotion_reservations WHERE identity_hash=? AND expires_at>?',(ident,now)).fetchone():return None
+    limit=int(promo.get('usage_limit') or 0)
+    used=conn.execute('SELECT COUNT(*) n FROM promotion_redemptions WHERE promotion_id=?',(promo['id'],)).fetchone()['n']
+    reserved=conn.execute('SELECT COUNT(*) n FROM promotion_reservations WHERE promotion_id=? AND expires_at>?',(promo['id'],now)).fetchone()['n']
+    if limit>0 and int(used)+int(reserved)>=limit:return None
+    conn.execute('INSERT INTO promotion_reservations(promotion_id,signup_id,identity_hash,expires_at,created_at) VALUES(?,?,?,?,?)',(promo['id'],signup_id,ident,now+ttl,now))
+    return ident
+
+def redeem_signup_promotion(conn,row,campaign_id):
+    pid=row['promotion_id'] if 'promotion_id' in row.keys() else None
+    if not pid:return
+    res=conn.execute('SELECT * FROM promotion_reservations WHERE promotion_id=? AND signup_id=?',(pid,row['id'])).fetchone()
+    ident=(res['identity_hash'] if res else promotion_identity_hash(row['document'],row['email']))
+    if not conn.execute('SELECT 1 FROM promotion_redemptions WHERE identity_hash=?',(ident,)).fetchone():
+        conn.execute('INSERT INTO promotion_redemptions(promotion_id,signup_id,campaign_id,identity_hash,redeemed_at) VALUES(?,?,?,?,?)',(pid,row['id'],campaign_id,ident,now_ts()))
+    conn.execute('DELETE FROM promotion_reservations WHERE signup_id=?',(row['id'],))
+
 def send_subscription_welcome(name,email,company,plan,billing_option=None):
     cfg=global_email_config()
     if not email_configured(cfg): return {'sent':False,'reason':'email_not_configured'}
@@ -971,6 +1015,7 @@ def provision_signup(conn,row,subscription=None):
     _,bcfg=billing_config(plan,billing_option); commitment_until=(now+bcfg['commitment_days']*86400) if bcfg['commitment_days'] else None
     cid=insert_id(conn,"INSERT INTO campaigns(company_id,code,name,reward_name,goal,icon,card_theme,plan,loyalty_type,points_spend_cents,logo_image,subscription_provider,subscription_id,subscription_status,subscription_started_at,subscription_current_period_end,subscription_next_payment_at,subscription_status_updated_at,billing_option,billing_amount,commitment_until,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(company_id,code,row['company_name'],'Recompensa do programa',5,'__LOGO__','orange',plan,loyalty,200,row['logo_image'] if 'logo_image' in row.keys() else None,'mercadopago' if plan!='beginner' else 'free',row['subscription_id'], 'active',now,next_ts,next_ts,now,billing_option,bcfg['amount'],commitment_until,now))
     uid=insert_id(conn,"INSERT INTO users(company_id,name,email,password_hash,role,active,is_client_admin,campaign_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(company_id,row['responsible_name'],row['email'],row['password_hash'],'attendant',1,1,cid,now))
+    redeem_signup_promotion(conn,row,cid)
     conn.execute("UPDATE subscription_signups SET status='active',provisioned_at=? WHERE id=?",(now,row['id']))
     conn.execute("UPDATE legal_acceptances SET campaign_id=COALESCE(campaign_id,?),user_id=COALESCE(user_id,?),email=COALESCE(email,?) WHERE signup_id=?",(cid,uid,row['email'],row['id']))
     audit(conn,company_id,uid,'subscription_signup','campaign',cid,details=plan)
@@ -2971,6 +3016,31 @@ class Handler(BaseHTTPRequestHandler):
                     c['whatsapp_access_token_enc']=None
                 staff=[rowdict(r) for r in conn.execute('''SELECT u.id,u.name,u.email,u.role,u.active,u.is_client_admin,u.created_at,u.campaign_id,c.name client_name FROM users u LEFT JOIN campaigns c ON c.id=u.campaign_id WHERE u.company_id=? ORDER BY u.role,u.name''',(cid,)).fetchall()]
                 return self.send_json({'ok':True,'metrics':metrics,'campaigns':campaigns,'staff':staff})
+        if path == '/api/public/promotions/active':
+            plan=normalize_plan((qs.get('plan') or ['pro'])[0]); option=normalize_billing_option(plan,(qs.get('billing_option') or ['monthly'])[0])
+            with connect(DB_PATH) as conn:
+                promo=active_signup_promotion(conn,plan,option)
+                if not promo:return self.send_json({'ok':True,'promotion':None})
+                remaining=max(0,int(promo['usage_limit'] or 0)-int(promo['used_count'])-int(promo['reserved_count'])) if int(promo['usage_limit'] or 0)>0 else None
+                return self.send_json({'ok':True,'promotion':{'id':promo['id'],'name':promo['name'],'description':promo.get('description') or '', 'target_plan':promo['target_plan'],'trial_days':int(promo['benefit_value'] or 0),'require_card':bool(promo['require_card']),'remaining':remaining,'usage_limit':promo['usage_limit']}})
+        if path == '/api/manager/promotions':
+            with connect(DB_PATH) as conn:
+                s=self._require_auth(conn,'manager')
+                if not s:return
+                now=now_ts(); conn.execute('DELETE FROM promotion_reservations WHERE expires_at<?',(now,))
+                rows=[]
+                for r in conn.execute("""SELECT p.*,COALESCE((SELECT COUNT(*) FROM promotion_redemptions x WHERE x.promotion_id=p.id),0) used_count,COALESCE((SELECT COUNT(*) FROM promotion_reservations z WHERE z.promotion_id=p.id AND z.expires_at>?),0) reserved_count FROM platform_promotions p WHERE p.company_id=? ORDER BY p.id DESC""",(now,s['company_id'])).fetchall():rows.append(rowdict(r))
+                return self.send_json({'ok':True,'promotions':rows})
+        if path == '/api/manager/promotions/participants':
+            with connect(DB_PATH) as conn:
+                s=self._require_auth(conn,'manager')
+                if not s:return
+                try: pid=int((qs.get('promotion_id') or ['0'])[0])
+                except (TypeError,ValueError):pid=0
+                owned=conn.execute('SELECT id,name FROM platform_promotions WHERE id=? AND company_id=?',(pid,s['company_id'])).fetchone()
+                if not owned:return self.send_json({'ok':False,'error':'promotion_not_found'},404)
+                rows=[rowdict(r) for r in conn.execute("""SELECT pr.redeemed_at,ss.company_name,ss.responsible_name,ss.email,ss.plan,ss.trial_days,c.id campaign_id FROM promotion_redemptions pr JOIN subscription_signups ss ON ss.id=pr.signup_id LEFT JOIN campaigns c ON c.id=pr.campaign_id WHERE pr.promotion_id=? ORDER BY pr.redeemed_at DESC LIMIT 500""",(pid,)).fetchall()]
+                return self.send_json({'ok':True,'promotion':{'id':owned['id'],'name':owned['name']},'participants':rows})
         if path == '/api/manager/communication':
             with connect(DB_PATH) as conn:
                 s=self._require_auth(conn,'manager')
@@ -3405,13 +3475,26 @@ class Handler(BaseHTTPRequestHandler):
                                 return self.send_json({'ok':True,'active':False,'checkout_url':existing.get('init_point'),'reused':True})
                         except Exception as exc:
                             print('[BILLING] MP_REUSE_CHECK_UNAVAILABLE type=%s' % type(exc).__name__,flush=True)
-                token=secrets.token_urlsafe(24); _,bcfg=billing_config(plan,billing_option); sid=insert_id(conn,'INSERT INTO subscription_signups(token,company_name,responsible_name,email,phone,document,password_hash,plan,loyalty_type,status,created_at,logo_image,billing_option,billing_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(token,company,name,email,phone,document,hash_password(password),plan,loyalty,'pending',now_ts(),logo_image,billing_option,bcfg['amount']))
+                token=secrets.token_urlsafe(24); _,bcfg=billing_config(plan,billing_option)
+                requested_promo=payload.get('promotion_id'); promo=None; trial_days=0
+                if plan!='beginner':
+                    try: promo=active_signup_promotion(conn,plan,billing_option,int(requested_promo) if requested_promo else None)
+                    except (TypeError,ValueError): promo=None
+                sid=insert_id(conn,'INSERT INTO subscription_signups(token,company_name,responsible_name,email,phone,document,password_hash,plan,loyalty_type,status,created_at,logo_image,billing_option,billing_amount,promotion_id,trial_days) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(token,company,name,email,phone,document,hash_password(password),plan,loyalty,'pending',now_ts(),logo_image,billing_option,bcfg['amount'],promo['id'] if promo else None,0))
+                if promo:
+                    ident=reserve_promotion(conn,promo,sid,document,email)
+                    if ident:
+                        trial_days=int(promo['benefit_value'] or 0) if promo['benefit_type']=='trial_days' else 0
+                        conn.execute('UPDATE subscription_signups SET trial_days=? WHERE id=?',(trial_days,sid))
+                    else: promo=None
                 conn.execute('INSERT INTO legal_acceptances(signup_id,email,terms_version,privacy_version,accepted_at,ip_address) VALUES(?,?,?,?,?,?)',(sid,email,TERMS_VERSION,PRIVACY_VERSION,now_ts(),self._ip()))
                 row=conn.execute('SELECT * FROM subscription_signups WHERE id=?',(sid,)).fetchone()
                 if plan=='beginner':
                     provision_signup(conn,row); return self.send_json({'ok':True,'active':True,'redirect':'/login'})
-                try: sub=create_mp_subscription(email,plan,'signup:'+token,device_id=device_id,billing_option=billing_option)
-                except RuntimeError as exc:return self.send_json({'ok':False,'error':str(exc)},503)
+                try: sub=create_mp_subscription(email,plan,'signup:'+token,device_id=device_id,billing_option=billing_option,trial_days=trial_days)
+                except RuntimeError as exc:
+                    conn.execute('DELETE FROM promotion_reservations WHERE signup_id=?',(sid,))
+                    return self.send_json({'ok':False,'error':str(exc)},503)
                 conn.execute('UPDATE subscription_signups SET subscription_id=? WHERE id=?',(sub.get('id'),sid))
                 return self.send_json({'ok':True,'active':False,'checkout_url':sub.get('init_point')})
         if path=='/api/webhooks/mercadopago':
@@ -4989,6 +5072,37 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     conn.execute('INSERT OR REPLACE INTO platform_alert_reads(alert_recipient_id,user_id,read_at) VALUES(?,?,?)',(rid,s['user_id'],now_ts()))
                 audit(conn,s['company_id'],s['user_id'],'platform_alert_read','platform_alert_recipient',rid,ip_address=self._ip())
+                return self.send_json({'ok':True})
+            if path == '/api/manager/promotions/save':
+                if s['role']!='manager':return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                name=str(payload.get('name') or '').strip()[:120]; description=str(payload.get('description') or '').strip()[:1000]
+                plan=normalize_plan(payload.get('target_plan')); option=normalize_billing_option(plan,payload.get('billing_option'))
+                try: days=max(1,min(365,int(payload.get('trial_days') or 30))); limit=max(1,min(100000,int(payload.get('usage_limit') or 100)))
+                except (TypeError,ValueError):return self.send_json({'ok':False,'error':'invalid_promotion_values'},400)
+                if not name or plan=='beginner':return self.send_json({'ok':False,'error':'invalid_promotion'},400)
+                starts_at=payload.get('starts_at'); ends_at=payload.get('ends_at')
+                def parse_dt(v):
+                    if not v:return None
+                    try:return int(datetime.fromisoformat(str(v).replace('Z','+00:00')).timestamp())
+                    except Exception:return None
+                starts=parse_dt(starts_at); ends=parse_dt(ends_at)
+                if starts_at and not starts:return self.send_json({'ok':False,'error':'invalid_start_date'},400)
+                if ends_at and not ends:return self.send_json({'ok':False,'error':'invalid_end_date'},400)
+                if starts and ends and ends<=starts:return self.send_json({'ok':False,'error':'invalid_date_range'},400)
+                pid=insert_id(conn,"INSERT INTO platform_promotions(company_id,name,description,target_plan,benefit_type,benefit_value,billing_option,usage_limit,starts_at,ends_at,require_card,auto_apply,status,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(s['company_id'],name,description,plan,'trial_days',days,option,limit,starts,ends,1,1,'active',s['user_id'],now_ts(),now_ts()))
+                audit(conn,s['company_id'],s['user_id'],'promotion_create','promotion',pid,details=f'{name};plan={plan};trial={days};limit={limit}',ip_address=self._ip())
+                return self.send_json({'ok':True,'promotion_id':pid})
+            if path == '/api/manager/promotions/status':
+                if s['role']!='manager':return self.send_json({'ok':False,'error':'forbidden'},403)
+                if not self.csrf_ok():return self.send_json({'ok':False,'error':'csrf_failed'},403)
+                try: pid=int(payload.get('promotion_id') or 0)
+                except (TypeError,ValueError):pid=0
+                status=str(payload.get('status') or '').lower()
+                if status not in ('active','paused','ended'):return self.send_json({'ok':False,'error':'invalid_status'},400)
+                row=conn.execute('SELECT id FROM platform_promotions WHERE id=? AND company_id=?',(pid,s['company_id'])).fetchone()
+                if not row:return self.send_json({'ok':False,'error':'promotion_not_found'},404)
+                conn.execute('UPDATE platform_promotions SET status=?,updated_at=? WHERE id=?',(status,now_ts(),pid)); audit(conn,s['company_id'],s['user_id'],'promotion_status','promotion',pid,details=status,ip_address=self._ip())
                 return self.send_json({'ok':True})
             if path == '/api/manager/communication/send':
                 if s['role']!='manager':return self.send_json({'ok':False,'error':'forbidden'},403)

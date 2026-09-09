@@ -1252,6 +1252,36 @@ def init_db(db_path=None, seed=True):
         else:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v190',?)",(now_ts(),))
 
+        # Migração v191: motor de promoções comerciais e trials de assinatura.
+        promo_id = "BIGSERIAL PRIMARY KEY" if _is_postgres(target) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        int_type = "BIGINT" if _is_postgres(target) else "INTEGER"
+        conn.execute(f"""CREATE TABLE IF NOT EXISTS platform_promotions (
+            id {promo_id}, company_id {int_type} NOT NULL, name TEXT NOT NULL, description TEXT,
+            target_plan TEXT NOT NULL DEFAULT 'pro', benefit_type TEXT NOT NULL DEFAULT 'trial_days',
+            benefit_value INTEGER NOT NULL DEFAULT 30, billing_option TEXT NOT NULL DEFAULT 'monthly',
+            usage_limit INTEGER NOT NULL DEFAULT 100, starts_at BIGINT, ends_at BIGINT, require_card INTEGER NOT NULL DEFAULT 1,
+            auto_apply INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'active', created_by {int_type}, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
+        )""")
+        conn.execute(f"""CREATE TABLE IF NOT EXISTS promotion_reservations (
+            promotion_id {int_type} NOT NULL, signup_id {int_type} NOT NULL UNIQUE, identity_hash TEXT NOT NULL,
+            expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY (promotion_id, identity_hash)
+        )""")
+        conn.execute(f"""CREATE TABLE IF NOT EXISTS promotion_redemptions (
+            promotion_id {int_type} NOT NULL, signup_id {int_type} NOT NULL UNIQUE, campaign_id {int_type}, identity_hash TEXT NOT NULL,
+            redeemed_at BIGINT NOT NULL, PRIMARY KEY (promotion_id, identity_hash)
+        )""")
+        try:
+            conn.execute('ALTER TABLE subscription_signups ADD COLUMN IF NOT EXISTS promotion_id BIGINT')
+            conn.execute('ALTER TABLE subscription_signups ADD COLUMN IF NOT EXISTS trial_days INTEGER NOT NULL DEFAULT 0')
+        except Exception:
+            cols={r[1] for r in conn.execute('PRAGMA table_info(subscription_signups)').fetchall()}
+            if 'promotion_id' not in cols: conn.execute('ALTER TABLE subscription_signups ADD COLUMN promotion_id INTEGER')
+            if 'trial_days' not in cols: conn.execute('ALTER TABLE subscription_signups ADD COLUMN trial_days INTEGER NOT NULL DEFAULT 0')
+        if _is_postgres(target):
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v191',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        else:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v191',?)",(now_ts(),))
+
 def ensure_configured_staff(db_path=None):
     """Sincroniza credenciais configuradas por variáveis de ambiente.
 
