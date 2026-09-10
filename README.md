@@ -1,3 +1,11 @@
+## v212 — Correção de overflow e validação responsiva das automações
+
+- Corrigido o corte lateral do bloco de automações em telas desktop e intermediárias.
+- Removidos mínimos rígidos de largura que faziam o grid ultrapassar o contêiner.
+- Canal, Ativa, Mensagem do e-mail e Salvar Automação permanecem alinhados sem estourar a largura.
+- Mensagem do WhatsApp e histórico respeitam 100% da largura disponível.
+- Cache do CSS atualizado para `v212`.
+
 ## v211 — Correção definitiva do layout das automações
 
 - Corrigido o alinhamento de Canal, Ativa e Salvar com a base da mensagem.
@@ -23,7 +31,7 @@
 - Menu interno “Visão Geral” renomeado para “Dashboard”, apontando para o início do dashboard financeiro.
 - Tooltip do gráfico financeiro reduzido e corrigido para não herdar altura do gráfico.
 
-# Fidelizaê! v211
+# Fidelizaê! v212
 
 ## v208 — Dashboard financeiro idêntico ao Crescimento da plataforma
 
@@ -618,7 +626,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v211
+**Versão atual:** v212
 
 
 ## Novidades da v117
