@@ -1,3 +1,9 @@
+## v213 — Notificações de atualização da Wallet após compras
+
+- Apple Wallet: o passe usa `changeMessage` para avisar alterações de selos/pontos após compra.
+- Google Wallet: usa mensagem `TEXT_AND_NOTIFY` com fallback para notificação de atualização do saldo.
+- Mensagens: selos mostram o progresso atual; pontos mostram quantos pontos foram ganhos na compra.
+
 ## v212 — Correção de overflow e validação responsiva das automações
 
 - Corrigido o corte lateral do bloco de automações em telas desktop e intermediárias.
@@ -31,7 +37,7 @@
 - Menu interno “Visão Geral” renomeado para “Dashboard”, apontando para o início do dashboard financeiro.
 - Tooltip do gráfico financeiro reduzido e corrigido para não herdar altura do gráfico.
 
-# Fidelizaê! v212
+# Fidelizaê! v213
 
 ## v208 — Dashboard financeiro idêntico ao Crescimento da plataforma
 
@@ -626,7 +632,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v212
+**Versão atual:** v213
 
 
 ## Novidades da v117

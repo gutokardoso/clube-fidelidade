@@ -234,7 +234,20 @@ def build_apple_pkpass(card):
       'webServiceURL':public_url+'/api/apple-wallet/v1',
       'authenticationToken':apple_auth_token(card['public_id']),
       'generic':{
-        'primaryFields':[{'key':'balance','label':'PONTOS' if card.get('loyalty_type')=='points' else 'SELOS','value':str(card.get('points_balance',0)) if card.get('loyalty_type')=='points' else f"{card.get('progress',0)} de {card.get('goal',0)}"}],
+        'primaryFields':[{
+          'key':'balance',
+          'label':'PONTOS' if card.get('loyalty_type')=='points' else 'SELOS',
+          'value':str(card.get('points_balance',0)) if card.get('loyalty_type')=='points' else f"{card.get('progress',0)} de {card.get('goal',0)}",
+          # A Apple Wallet só exibe alerta de alteração quando o campo possui
+          # changeMessage com o marcador %@. Para selos o novo valor já é o
+          # progresso "X de Y". Para pontos preservamos o texto solicitado e
+          # acrescentamos o saldo atual, que é o valor substituído pelo iOS.
+          'changeMessage':(
+            f"Sua compra foi registrada. Você ganhou {int(card.get('latest_purchase_points') or 0)} pontos. Saldo atual: %@ pontos."
+            if card.get('loyalty_type')=='points' and int(card.get('latest_purchase_points') or 0)>0
+            else ('Seu cartão foi atualizado. Agora você tem %@ selos.' if card.get('loyalty_type')=='stamps' else 'Seu saldo foi atualizado para %@ pontos.')
+          )
+        }],
         'secondaryFields':[{'key':'reward','label':'RECOMPENSAS' if card.get('loyalty_type')=='points' else 'RECOMPENSA','value':'Consulte o catálogo no cartão' if card.get('loyalty_type')=='points' else (card.get('reward_name') or '')}],
         'auxiliaryFields':[{'key':'code','label':'CÓDIGO','value':'CLUBE:'+card['public_id']}]
       },
@@ -315,6 +328,30 @@ def _google_insert(resource, body):
     with urllib.request.urlopen(req,timeout=15) as r:
         return json.loads(r.read().decode('utf-8') or '{}')
 
+def google_add_update_notification(card, message, notification_id=None):
+    """Adiciona uma mensagem ao passe Google Wallet e solicita push no Android."""
+    if not wallet_status()['google']['ready'] or not message:
+        return False
+    obj=_google_object(card)
+    msg_id=re.sub(r'[^A-Za-z0-9_.-]','_',str(notification_id or int(time.time()*1000)))[:120]
+    body={'message':{
+        'header':'Fidelizaê!',
+        'body':str(message)[:500],
+        'id':'purchase_'+msg_id,
+        'messageType':'TEXT_AND_NOTIFY'
+    }}
+    req=urllib.request.Request(
+        'https://walletobjects.googleapis.com/walletobjects/v1/loyaltyObject/'+urllib.parse.quote(obj['id'],safe='.')+'/addMessage',
+        data=json.dumps(body,ensure_ascii=False,separators=(',',':')).encode('utf-8'),method='POST',
+        headers={'Authorization':'Bearer '+_google_access_token(),'Content-Type':'application/json'}
+    )
+    try:
+        with urllib.request.urlopen(req,timeout=15) as r:r.read()
+        return True
+    except Exception as exc:
+        print('[GOOGLE_WALLET] notification failed:',repr(exc))
+        return False
+
 def google_ensure_class(card):
     if not wallet_status()['google']['ready']: return False
     klass=_google_class_object(card)
@@ -352,10 +389,14 @@ def google_update_class(card):
     return google_ensure_class(card)
 
 
-def google_update_object(card):
+def google_update_object(card, notify=False):
     if not wallet_status()['google']['ready']: return False
     obj=_google_object(card)
     body={k:v for k,v in obj.items() if k not in ('id','classId','state')}
+    if notify:
+        # notifyPreference é transitório: precisa ser enviado em cada PATCH em
+        # que desejamos solicitar ao Google uma notificação de atualização.
+        body['notifyPreference']='NOTIFY'
     try:
         google_update_class(card)
         _google_patch('loyaltyObject',obj['id'],body)

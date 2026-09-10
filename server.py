@@ -38,7 +38,7 @@ except ImportError:
 from db import DEFAULT_DB, init_db, ensure_configured_staff, ensure_promotion_schema, validate_promotion_schema, connect, create_session, get_session, audit, insert_id, begin_write, integrity_errors, fetchone_for_update
 from security import verify_password, hash_password, random_token, now_ts, password_is_strong, generate_totp_secret, verify_totp, encrypt_pii, decrypt_pii, pii_lookup_hash, pii_key_configured
 from antifraud import validate_stamp, FraudError
-from wallet import wallet_status, apple_pass_link, google_wallet_link, build_apple_pkpass, google_save_url, google_update_object, apple_auth_token, apple_push_update
+from wallet import wallet_status, apple_pass_link, google_wallet_link, build_apple_pkpass, google_save_url, google_update_object, google_add_update_notification, apple_auth_token, apple_push_update
 from platform_features import has_permission, session_permissions, active_multiplier, add_point_lot, consume_point_lots, expire_points_once, record_purchase
 from integrations import platform_order
 from intelligence import customer_intelligence, campaign_intelligence, customer_intelligence_bulk
@@ -49,7 +49,7 @@ DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFA
 SESSION_COOKIE = 'clube_session'  # legado; mantido apenas para migração transparente
 MANAGER_SESSION_COOKIE = 'fidelizae_manager_session'
 COMPANY_SESSION_COOKIE = 'fidelizae_company_session'
-VERSION='v212'
+VERSION='v213'
 _DASHBOARD_CACHE={}
 _DASHBOARD_CACHE_TTL=max(5,int(os.environ.get('DASHBOARD_CACHE_TTL','15')))
 TERMS_VERSION='1.1'
@@ -2085,15 +2085,42 @@ def background_loop():
         time.sleep(2)
 
 def card_record(conn,public_id):
-    row=conn.execute('''SELECT m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,m.created_at,cu.name customer_name,c.name campaign_name,c.code campaign_code,c.reward_name,c.goal,c.icon,c.logo_image,c.card_theme,c.loyalty_type,c.points_spend_cents
+    row=conn.execute('''SELECT m.id membership_id,m.public_id,m.progress,m.points_balance,m.rewards_available,m.status,m.created_at,cu.name customer_name,c.name campaign_name,c.code campaign_code,c.reward_name,c.goal,c.icon,c.logo_image,c.card_theme,c.loyalty_type,c.points_spend_cents
       FROM memberships m JOIN customers cu ON cu.id=m.customer_id JOIN campaigns c ON c.id=m.campaign_id WHERE m.public_id=?''',(public_id,)).fetchone()
-    return rowdict(row)
+    card=rowdict(row)
+    if not card:return card
+    # Últimos pontos realmente originados de uma compra. Esse dado permite que
+    # o changeMessage do passe Apple informe quanto foi ganho na compra.
+    if card.get('loyalty_type')=='points':
+        last=conn.execute('''SELECT t.value,t.id transaction_id FROM purchase_records p JOIN transactions t ON t.id=p.transaction_id WHERE p.membership_id=? AND t.value>0 ORDER BY p.created_at DESC,p.id DESC LIMIT 1''',(card['membership_id'],)).fetchone()
+        card['latest_purchase_points']=int(last['value']) if last else 0
+        card['latest_purchase_transaction_id']=int(last['transaction_id']) if last else 0
+    return card
 
-def notify_wallet_updates(conn,public_id):
+def wallet_purchase_message(card,earned_points=None):
+    if card.get('loyalty_type')=='points':
+        earned=max(0,int(earned_points if earned_points is not None else card.get('latest_purchase_points') or 0))
+        return f'Sua compra foi registrada. Você ganhou {earned} pontos.' if earned else ''
+    return f"Seu cartão foi atualizado. Agora você tem {int(card.get('progress') or 0)} de {int(card.get('goal') or 0)} selos."
+
+def notify_wallet_updates(conn,public_id,purchase=False,earned_points=None,transaction_id=None):
     card=card_record(conn,public_id)
     if not card:return
-    try: google_update_object(card)
+    # Primeiro sincroniza o saldo do passe. Em compras, tentamos uma notificação
+    # explícita no Google Wallet; caso a mensagem não seja aceita (ex.: cota do
+    # Google), fazemos fallback para a notificação por atualização de saldo.
+    google_synced=False
+    try: google_synced=google_update_object(card)
     except Exception: pass
+    if purchase:
+        message=wallet_purchase_message(card,earned_points)
+        google_notified=False
+        if message:
+            try: google_notified=google_add_update_notification(card,message,transaction_id)
+            except Exception: pass
+        if not google_notified:
+            try: google_update_object(card,notify=True)
+            except Exception: pass
     regs=conn.execute('''SELECT wr.push_token FROM wallet_registrations wr JOIN memberships m ON m.id=wr.membership_id WHERE m.public_id=?''',(public_id,)).fetchall()
     for r in regs:
         try: apple_push_update(r['push_token'])
@@ -3858,7 +3885,7 @@ class Handler(BaseHTTPRequestHandler):
                     if existing: conn.execute('UPDATE ecommerce_orders SET order_status=?,customer_ref=?,total_cents=?,reward_value=?,transaction_id=?,processed_at=?,reversed_at=NULL,reversal_transaction_id=NULL,updated_at=? WHERE id=?',(info['status'],customer_ref,info['total_cents'],reward,tx_id,now_ts(),now_ts(),existing['id']))
                     else: conn.execute('INSERT INTO ecommerce_orders(campaign_id,platform,order_id,order_status,customer_ref,total_cents,reward_value,transaction_id,processed_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(campaign_id,platform,info['order_id'],info['status'],customer_ref,info['total_cents'],reward,tx_id,now_ts(),now_ts(),now_ts()))
                     conn.execute("UPDATE campaigns SET ecommerce_status='connected',ecommerce_connected_at=COALESCE(ecommerce_connected_at,?) WHERE id=?",(now_iso(),campaign_id))
-                    audit(conn,c['company_id'],None,'ecommerce_reward','membership',member['public_id'],details=f'{platform};pedido={info["order_id"]};valor={info["total_cents"]};recompensa={reward}',ip_address=self._ip()); notify_wallet_updates(conn,member['public_id'])
+                    audit(conn,c['company_id'],None,'ecommerce_reward','membership',member['public_id'],details=f'{platform};pedido={info["order_id"]};valor={info["total_cents"]};recompensa={reward}',ip_address=self._ip()); notify_wallet_updates(conn,member['public_id'],purchase=True,earned_points=(reward if c['loyalty_type']=='points' else None),transaction_id=tx_id)
                     return self.send_json({'ok':True,'order_id':info['order_id'],'customer_name':member['customer_name'],'reward':reward,'loyalty_type':c['loyalty_type']})
                 if not existing or not existing.get('processed_at') or existing.get('reversed_at'): return self.send_json({'ok':True,'ignored':True,'reason':'nothing_to_reverse'})
                 tx=conn.execute('SELECT * FROM transactions WHERE id=?',(existing['transaction_id'],)).fetchone()
@@ -4779,7 +4806,7 @@ class Handler(BaseHTTPRequestHandler):
                     if earned<1:return self.send_json({'ok':False,'error':'purchase_below_point_rule','message':'O valor da compra não gera nenhum ponto nesta regra.'},409)
                     prev=int(m['points_balance'] or 0); new=prev+earned; ts=now_ts()
                     tx_id=insert_id(conn,"INSERT INTO transactions(membership_id,user_id,branch_id,type,value,previous_progress,new_progress,rewards_delta,idempotency_key,device_id,ip_address,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",(m['id'],s['user_id'],current_branch_id(conn,s['user_id'],s['campaign_id']),'adjustment',earned,prev,new,0,idem,str(payload.get('device_id',''))[:120],self._ip(),f'Pontos por compra de R$ {purchase_cents/100:.2f} • {factor:g}x',ts))
-                    conn.execute("UPDATE memberships SET points_balance=? WHERE id=?",(new,m['id'])); camp_exp=conn.execute('SELECT points_expiry_days FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone(); add_point_lot(conn,m['id'],tx_id,earned,int(camp_exp['points_expiry_days'] or 180),ts); record_purchase(conn,m['id'],tx_id,purchase_cents,'in_store',ts); audit(conn,s['company_id'],s['user_id'],'points_earn','membership',m['public_id'],details=f'R${purchase_cents/100:.2f};+{earned} pontos;{factor:g}x',ip_address=self._ip()); notify_wallet_updates(conn,m['public_id'])
+                    conn.execute("UPDATE memberships SET points_balance=? WHERE id=?",(new,m['id'])); camp_exp=conn.execute('SELECT points_expiry_days FROM campaigns WHERE id=?',(s['campaign_id'],)).fetchone(); add_point_lot(conn,m['id'],tx_id,earned,int(camp_exp['points_expiry_days'] or 180),ts); record_purchase(conn,m['id'],tx_id,purchase_cents,'in_store',ts); audit(conn,s['company_id'],s['user_id'],'points_earn','membership',m['public_id'],details=f'R${purchase_cents/100:.2f};+{earned} pontos;{factor:g}x',ip_address=self._ip()); notify_wallet_updates(conn,m['public_id'],purchase=True,earned_points=earned,transaction_id=tx_id)
                 return self.send_json({'ok':True,'transaction_id':tx_id,'customer_name':m['customer_name'],'points_earned':earned,'points_balance':new})
             if path == '/api/attendant/points/redeem':
                 if s['role']=='attendant' and not self._need_permission(s,'redeem_reward'): return
@@ -4831,7 +4858,7 @@ class Handler(BaseHTTPRequestHandler):
                     conn.execute('UPDATE memberships SET progress=?, rewards_available=rewards_available+? WHERE id=?',(new,rewards,m['id']))
                     purchase_cents=max(0,int(payload.get('purchase_cents') or 0))
                     if purchase_cents: record_purchase(conn,m['id'],tx_id,purchase_cents,'in_store',now_ts())
-                    audit(conn,s['company_id'],s['user_id'],'stamp','membership',m['public_id'],details=f'qty={qty};reward+={rewards};valor={purchase_cents}',ip_address=self._ip()); notify_wallet_updates(conn,m['public_id'])
+                    audit(conn,s['company_id'],s['user_id'],'stamp','membership',m['public_id'],details=f'qty={qty};reward+={rewards};valor={purchase_cents}',ip_address=self._ip()); notify_wallet_updates(conn,m['public_id'],purchase=True,transaction_id=tx_id)
                     return self.send_json({'ok':True,'transaction_id':tx_id,'customer_name':m['customer_name'],'previous_progress':prev,'progress':new,'reward_added':rewards})
                 except FraudError as e:
                     audit(conn,s['company_id'],s['user_id'],'stamp_blocked','membership',token,details=e.code,ip_address=self._ip())
