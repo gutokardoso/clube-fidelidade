@@ -1350,6 +1350,12 @@ def init_db(db_path=None, seed=True):
         except Exception:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v204',?)",(now_ts(),))
 
+        # Migração v205: unificação visual do dashboard financeiro e responsividade da lista de empresas.
+        try:
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v205',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        except Exception:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v205',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:

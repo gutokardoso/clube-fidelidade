@@ -1074,7 +1074,7 @@ body[data-plan="pro"] #npsCard{order:6}
 .manager-company-archived{opacity:.72;background:#faf8f6}
 .manager-company-archived td{color:#766b64}
 
-/* v204 - ações de empresas sempre visíveis no Painel Fidelizaê! */
+/* v205 - ações de empresas sempre visíveis no Painel Fidelizaê! */
 .manager-company-table td[data-label="Ações"]{min-width:220px!important;overflow:visible!important}
 .manager-company-table .manager-company-actions{display:grid!important;grid-template-columns:repeat(2,minmax(96px,1fr));gap:7px!important;width:100%;min-width:210px;justify-content:stretch!important}
 .manager-company-table .manager-company-actions .btn{width:100%;margin:0!important;white-space:nowrap!important;visibility:visible!important;opacity:1!important}
@@ -1082,3 +1082,39 @@ body[data-plan="pro"] #npsCard{order:6}
 @media(max-width:1150px){.manager-company-table .manager-company-actions{grid-template-columns:1fr;min-width:135px}.manager-company-table td[data-label="Ações"]{min-width:145px!important}}
 @media(max-width:700px){.manager-company-table td[data-label="Ações"]{min-width:0!important}.manager-company-table .manager-company-actions{grid-template-columns:1fr 1fr;min-width:0}.manager-company-table .manager-company-actions .btn{white-space:normal!important}}
 @media(max-width:480px){.manager-company-table .manager-company-actions{grid-template-columns:1fr}}
+
+/* v205 — dashboard financeiro unificado e tabela de empresas responsiva */
+.finance-line-chart.manager-line-chart{display:block!important;width:100%!important;height:auto!important;min-height:190px!important;margin-top:18px!important;padding-top:12px!important;border-top:1px solid #eee8e3!important;overflow:hidden!important}
+.finance-line-chart.manager-line-chart svg{display:block!important;width:100%!important;max-width:100%!important;min-width:0!important;height:auto!important;overflow:visible!important}
+.finance-line-chart.manager-line-chart .manager-growth-line.growth-current{fill:none!important;stroke:#e27a00!important;stroke-width:2!important;vector-effect:non-scaling-stroke!important}
+.finance-line-chart.manager-line-chart .manager-growth-point.growth-current{fill:#e27a00!important;stroke:#fff!important;stroke-width:1.5!important;vector-effect:non-scaling-stroke!important}
+.finance-line-chart.manager-line-chart .manager-chart-gridline{stroke:#eee8e3!important;stroke-width:.8!important;stroke-dasharray:2 3!important}
+.finance-line-chart.manager-line-chart .manager-chart-xlabel,.finance-line-chart.manager-line-chart .manager-chart-ylabel{fill:#8b7b6f!important;font-size:9px!important;font-weight:500!important}
+.finance-line-chart.manager-line-chart .manager-last-value rect{fill:#fff7ed!important;stroke:#efd8bd!important;stroke-width:.8!important}
+.finance-line-chart.manager-line-chart .manager-last-value text{fill:#a95600!important;font-size:9px!important;font-weight:800!important}
+@media(max-width:620px){
+  .finance-line-chart.manager-line-chart{min-height:0!important}
+  .finance-line-chart.manager-line-chart svg{min-width:0!important;width:100%!important;max-width:100%!important}
+  .finance-line-chart.manager-line-chart .manager-chart-xlabel,.finance-line-chart.manager-line-chart .manager-chart-ylabel{font-size:30px!important;font-weight:600!important}
+  .finance-line-chart.manager-line-chart .manager-last-value text{font-size:25px!important;font-weight:800!important}
+}
+
+/* A tabela passa para cartões antes de começar a cortar a coluna de ações. */
+@media(max-width:1180px){
+  .manager-company-table{display:block!important;width:100%!important;overflow:visible!important;border-collapse:separate!important}
+  .manager-company-table tbody{display:grid!important;gap:12px!important;width:100%!important}
+  .manager-company-table tbody>tr:first-child{display:none!important}
+  .manager-company-table tbody>tr:not(:first-child){display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:0 18px!important;width:100%!important;padding:14px!important;border:1px solid #eadfd5!important;border-radius:16px!important;background:#fff!important;box-shadow:0 4px 14px rgba(70,45,25,.035)!important}
+  .manager-company-table tbody>tr.manager-company-archived{background:#faf8f6!important}
+  .manager-company-table tbody>tr:not(:first-child)>td{display:grid!important;grid-template-columns:minmax(94px,34%) minmax(0,1fr)!important;align-items:start!important;gap:8px!important;width:100%!important;min-width:0!important;padding:8px 2px!important;border-bottom:1px solid #f0e7df!important;text-align:left!important;overflow:visible!important;overflow-wrap:anywhere!important;word-break:break-word!important}
+  .manager-company-table tbody>tr:not(:first-child)>td::before{content:attr(data-label)!important;font-size:10px!important;font-weight:900!important;letter-spacing:.055em!important;text-transform:uppercase!important;color:#8b7b6f!important;line-height:1.45!important}
+  .manager-company-table tbody>tr:not(:first-child)>td[data-label="Ações"]{grid-column:1/-1!important;display:block!important;border-bottom:0!important;padding-top:12px!important;min-width:0!important}
+  .manager-company-table tbody>tr:not(:first-child)>td[data-label="Ações"]::before{display:none!important}
+  .manager-company-table .manager-company-actions{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:7px!important;width:100%!important;min-width:0!important}
+  .manager-company-table .manager-company-actions .btn{width:100%!important;min-width:0!important;white-space:normal!important}
+}
+@media(max-width:760px){
+  .manager-company-table tbody>tr:not(:first-child){grid-template-columns:1fr!important}
+  .manager-company-table .manager-company-actions{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+}
+@media(max-width:430px){.manager-company-table .manager-company-actions{grid-template-columns:1fr!important}}

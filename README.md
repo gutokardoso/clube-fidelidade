@@ -1,14 +1,25 @@
-# Fidelizaê! v204
+# Fidelizaê! v205
 
-## v204 — exclusão definitiva segura e limpeza de dados
+## v205 — dashboard financeiro unificado e responsividade das empresas
 
-- **Arquivar** e **Excluir empresa** agora são ações diferentes no Painel Fidelizaê!.
+- O gráfico **Dashboard financeiro** do painel da empresa agora usa a mesma linguagem visual do gráfico **Crescimento da plataforma**: linha laranja fina, grade pontilhada, pontos compactos, eixos discretos e destaque do último valor.
+- O gráfico financeiro deixou de depender de rolagem horizontal; no mobile exibe os 3 meses mais recentes com tipografia ampliada para manter a leitura.
+- Os botões de exclusão das empresas foram simplificados para **Excluir**, tanto em empresas ativas quanto arquivadas.
+- A tabela **Empresas cadastradas** passa para layout em cartões antes de a coluna de ações sair da tela; os botões permanecem visíveis e responsivos em resoluções intermediárias e mobile.
+- A migração v204 foi preservada e a v205 adicionada separadamente, mantendo o histórico de versões do banco.
+
+## v204 — ações de empresas visíveis
+
+- Empresas ativas exibem **Detalhes, Editar, Arquivar e Excluir**.
+- Empresas arquivadas exibem **Detalhes, Editar, Restaurar e Excluir**.
+- Ações receberam organização própria para evitar desaparecimento por falta de largura.
+
+## v203 — exclusão definitiva segura e limpeza de dados
+
+- **Arquivar** e **Excluir empresa** são ações diferentes no Painel Fidelizaê!.
 - Arquivar apenas desativa a empresa e permite restauração posterior.
-- Excluir empresa é irreversível: bloqueia acessos/automações imediatamente, cancela e confirma no Mercado Pago todas as recorrências vinculadas e somente então remove os dados da empresa.
-- Administradores e atendentes vinculados são excluídos automaticamente, junto com sessões, cartões, históricos, campanhas, integrações, filas, webhooks e demais registros dependentes.
-- Clientes globais só são apagados quando não possuem vínculo com nenhuma outra empresa.
-- Se o Mercado Pago não confirmar o cancelamento, a empresa permanece bloqueada e os dados não são apagados, evitando cobrança/uso indevido e perda parcial de dados.
-- Cobranças já concluídas não são estornadas automaticamente; o cancelamento interrompe cobranças recorrentes futuras.
+- Excluir empresa é irreversível: bloqueia acessos/automações, cancela e confirma recorrências no Mercado Pago e só então remove os dados vinculados.
+- Administradores e atendentes vinculados são excluídos automaticamente; clientes globais só são apagados quando não possuem vínculo com outra empresa.
 
 ## v202 — estabilização de sessões e ações do Administrador Geral
 
@@ -576,7 +587,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v204
+**Versão atual:** v205
 
 
 ## Novidades da v117
