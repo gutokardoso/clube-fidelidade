@@ -1073,3 +1073,12 @@ body[data-plan="pro"] #npsCard{order:6}
 /* v203 — ações distintas de arquivamento e exclusão definitiva */
 .manager-company-archived{opacity:.72;background:#faf8f6}
 .manager-company-archived td{color:#766b64}
+
+/* v204 - ações de empresas sempre visíveis no Painel Fidelizaê! */
+.manager-company-table td[data-label="Ações"]{min-width:220px!important;overflow:visible!important}
+.manager-company-table .manager-company-actions{display:grid!important;grid-template-columns:repeat(2,minmax(96px,1fr));gap:7px!important;width:100%;min-width:210px;justify-content:stretch!important}
+.manager-company-table .manager-company-actions .btn{width:100%;margin:0!important;white-space:nowrap!important;visibility:visible!important;opacity:1!important}
+.manager-company-table .manager-archive-btn,.manager-company-table .manager-restore-btn{display:inline-flex!important;align-items:center;justify-content:center}
+@media(max-width:1150px){.manager-company-table .manager-company-actions{grid-template-columns:1fr;min-width:135px}.manager-company-table td[data-label="Ações"]{min-width:145px!important}}
+@media(max-width:700px){.manager-company-table td[data-label="Ações"]{min-width:0!important}.manager-company-table .manager-company-actions{grid-template-columns:1fr 1fr;min-width:0}.manager-company-table .manager-company-actions .btn{white-space:normal!important}}
+@media(max-width:480px){.manager-company-table .manager-company-actions{grid-template-columns:1fr}}

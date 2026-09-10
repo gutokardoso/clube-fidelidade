@@ -1,6 +1,6 @@
-# Fidelizaê! v203
+# Fidelizaê! v204
 
-## v203 — exclusão definitiva segura e limpeza de dados
+## v204 — exclusão definitiva segura e limpeza de dados
 
 - **Arquivar** e **Excluir empresa** agora são ações diferentes no Painel Fidelizaê!.
 - Arquivar apenas desativa a empresa e permite restauração posterior.
@@ -576,7 +576,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v203
+**Versão atual:** v204
 
 
 ## Novidades da v117

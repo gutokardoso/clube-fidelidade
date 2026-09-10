@@ -51,7 +51,7 @@ def test_promotion_modal_is_scrollable_and_responsive():
     styles=open('static/styles.css',encoding='utf-8').read()
     assert 'promotion-manager-card' in manager
     assert 'promotion-manager-body' in manager
-    assert 'styles.css?v=203' in manager
+    assert 'styles.css?v=204' in manager
     assert '.promotion-manager-body{overflow-y:auto' in styles
     assert 'max-height:calc(100dvh - 48px)' in styles
     assert '@media(max-width:560px)' in styles
