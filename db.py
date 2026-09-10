@@ -1373,6 +1373,12 @@ def init_db(db_path=None, seed=True):
         except Exception:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v208',?)",(now_ts(),))
 
+        # Migração v209: alinhamento visual dos controles das automações.
+        try:
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v209',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        except Exception:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v209',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:

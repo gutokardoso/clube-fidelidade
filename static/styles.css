@@ -1261,3 +1261,14 @@ body[data-plan="pro"] #npsCard{order:6}
   .automation-row .automation-settings{grid-template-columns:1fr}
   .automation-row .automation-whatsapp-title{flex-direction:column;align-items:flex-start}
 }
+
+/* v209 — alinhamento da base dos controles das automações */
+@media(min-width:1181px){
+  .automation-row .automation-settings{
+    align-self:end;
+  }
+  .automation-row .automation-actions{
+    align-self:end;
+    padding-top:0;
+  }
+}
