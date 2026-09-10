@@ -49,7 +49,7 @@ DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFA
 SESSION_COOKIE = 'clube_session'  # legado; mantido apenas para migração transparente
 MANAGER_SESSION_COOKIE = 'fidelizae_manager_session'
 COMPANY_SESSION_COOKIE = 'fidelizae_company_session'
-VERSION='v202'
+VERSION='v203'
 _DASHBOARD_CACHE={}
 _DASHBOARD_CACHE_TTL=max(5,int(os.environ.get('DASHBOARD_CACHE_TTL','15')))
 TERMS_VERSION='1.1'
@@ -1040,6 +1040,141 @@ def _best_effort_cancel_subscription(subscription_id):
         return False
 
 
+def _cancel_subscription_verified(subscription_id):
+    """Cancela uma recorrência no Mercado Pago e confirma o estado remoto.
+
+    Exclusão permanente é fail-closed: se o provedor não puder confirmar o
+    cancelamento, os dados não são apagados. A empresa, porém, já fica
+    desativada e sem sessões para impedir novas operações enquanto o gerente
+    tenta novamente.
+    """
+    if not subscription_id:
+        return True
+    sid=str(subscription_id).strip()
+    if not sid:
+        return True
+    path='/preapproval/'+urllib.parse.quote(sid,safe='')
+    cancelled={'cancelled','canceled'}
+    try:
+        current=mp_request('GET',path)
+        if str((current or {}).get('status') or '').lower() in cancelled:
+            return True
+        mp_request('PUT',path,{'status':'cancelled'})
+        fresh=mp_request('GET',path)
+        ok=str((fresh or {}).get('status') or '').lower() in cancelled
+        if not ok:
+            print('[BILLING] cancellation not confirmed subscription=%s status=%s' % (sid,str((fresh or {}).get('status') or 'unknown')),flush=True)
+        return ok
+    except Exception as exc:
+        print('[BILLING] verified cancellation failed subscription=%s type=%s' % (sid,type(exc).__name__),flush=True)
+        return False
+
+
+def _permanently_delete_campaign(conn,campaign,actor_user_id=None,ip_address=None):
+    """Remove definitivamente uma empresa/cliente da plataforma.
+
+    Ordem de segurança:
+      1. desativa a empresa e encerra seus acessos;
+      2. confirma o cancelamento de todas as recorrências/checkout remotos;
+      3. apaga os dados vinculados e clientes que ficarem órfãos.
+
+    A etapa 1 é confirmada no banco antes da chamada externa. Assim, mesmo se
+    o Mercado Pago estiver indisponível, nenhuma automação/acesso da empresa
+    continua ativo. A exclusão só é dada como concluída após confirmação do
+    cancelamento remoto.
+    """
+    if not campaign:
+        raise RuntimeError('campaign_not_found')
+    campaign_id=int(campaign['id'])
+    company_id=int(campaign['company_id'])
+    now=now_ts()
+
+    users=conn.execute('SELECT id,email FROM users WHERE campaign_id=?',(campaign_id,)).fetchall()
+    user_ids=[int(r['id']) for r in users]
+    customer_rows=conn.execute('SELECT DISTINCT customer_id FROM memberships WHERE campaign_id=?',(campaign_id,)).fetchall()
+    customer_ids=[int(r['customer_id']) for r in customer_rows]
+
+    # Captura os cadastros que deram origem a esta empresa para apagar também
+    # dados de onboarding, aceite legal e reservas promocionais relacionadas.
+    signup_ids=set()
+    for row in conn.execute('SELECT signup_id FROM legal_acceptances WHERE campaign_id=? AND signup_id IS NOT NULL',(campaign_id,)).fetchall():
+        signup_ids.add(int(row['signup_id']))
+    for row in conn.execute('SELECT signup_id FROM promotion_redemptions WHERE campaign_id=? AND signup_id IS NOT NULL',(campaign_id,)).fetchall():
+        signup_ids.add(int(row['signup_id']))
+
+    subscription_ids=[]
+    for key in ('subscription_id','pending_subscription_id','previous_subscription_id'):
+        try: sid=campaign[key]
+        except Exception: sid=None
+        if sid and str(sid) not in subscription_ids:
+            subscription_ids.append(str(sid))
+    if signup_ids:
+        ph=','.join('?' for _ in signup_ids)
+        for row in conn.execute(f'SELECT id,subscription_id FROM subscription_signups WHERE id IN ({ph})',tuple(signup_ids)).fetchall():
+            sid=row['subscription_id']
+            if sid and str(sid) not in subscription_ids:
+                subscription_ids.append(str(sid))
+    if subscription_ids:
+        ph=','.join('?' for _ in subscription_ids)
+        for row in conn.execute(f'SELECT id FROM subscription_signups WHERE subscription_id IN ({ph})',tuple(subscription_ids)).fetchall():
+            signup_ids.add(int(row['id']))
+
+    # Fail-safe: primeiro corta acessos e atividades e confirma esta mudança.
+    conn.execute("UPDATE campaigns SET active=0,subscription_status='cancelling',subscription_next_payment_at=NULL WHERE id=?",(campaign_id,))
+    conn.execute('UPDATE users SET active=0 WHERE campaign_id=?',(campaign_id,))
+    conn.execute("UPDATE message_queue SET status='failed',last_error='campaign_deletion_in_progress' WHERE campaign_id=? AND status IN ('pending','retry','processing')",(campaign_id,))
+    conn.execute('UPDATE automation_rules SET enabled=0 WHERE campaign_id=?',(campaign_id,))
+    conn.execute('UPDATE webhook_subscriptions SET active=0 WHERE campaign_id=?',(campaign_id,))
+    if user_ids:
+        ph=','.join('?' for _ in user_ids)
+        conn.execute(f'DELETE FROM sessions WHERE user_id IN ({ph})',tuple(user_ids))
+    conn.commit()
+
+    # Nenhum dado é apagado até o provedor confirmar que não haverá novas cobranças.
+    for sid in subscription_ids:
+        if not _cancel_subscription_verified(sid):
+            raise RuntimeError('billing_cancel_failed')
+
+    # Tabelas cujo FK usa SET NULL ou que não possuem FK: limpeza explícita.
+    for table in ('platform_alert_recipients','platform_email_recipients','whatsapp_webhook_events','notifications','billing_payments'):
+        conn.execute(f'DELETE FROM {table} WHERE campaign_id=?',(campaign_id,))
+    conn.execute('DELETE FROM legal_acceptances WHERE campaign_id=?',(campaign_id,))
+    conn.execute('DELETE FROM promotion_redemptions WHERE campaign_id=?',(campaign_id,))
+    if signup_ids:
+        ph=','.join('?' for _ in signup_ids)
+        params=tuple(signup_ids)
+        conn.execute(f'DELETE FROM promotion_reservations WHERE signup_id IN ({ph})',params)
+        conn.execute(f'DELETE FROM promotion_redemptions WHERE signup_id IN ({ph})',params)
+        conn.execute(f'DELETE FROM legal_acceptances WHERE signup_id IN ({ph})',params)
+        conn.execute(f'DELETE FROM subscription_signups WHERE id IN ({ph})',params)
+
+    # Auditorias e usuários da empresa são removidos; FKs ON DELETE CASCADE
+    # cuidam de cartões, transações, recompensas, campanhas de marketing,
+    # automações, filas, webhooks, unidades, cupons, gift cards etc.
+    conn.execute('DELETE FROM audit_log WHERE campaign_id=?',(campaign_id,))
+    if user_ids:
+        ph=','.join('?' for _ in user_ids)
+        params=tuple(user_ids)
+        conn.execute(f'DELETE FROM audit_log WHERE user_id IN ({ph})',params)
+    conn.execute('DELETE FROM users WHERE campaign_id=?',(campaign_id,))
+    conn.execute('DELETE FROM campaigns WHERE id=? AND company_id=?',(campaign_id,company_id))
+
+    # Customers são globais: só removemos quem não possui mais nenhum cartão
+    # em outra empresa, evitando apagar um consumidor compartilhado.
+    deleted_customers=0
+    for customer_id in customer_ids:
+        if not conn.execute('SELECT 1 FROM memberships WHERE customer_id=? LIMIT 1',(customer_id,)).fetchone():
+            conn.execute('DELETE FROM customers WHERE id=?',(customer_id,))
+            deleted_customers+=1
+
+    return {
+        'campaign_id':campaign_id,
+        'cancelled_subscriptions':len(subscription_ids),
+        'deleted_users':len(user_ids),
+        'deleted_customers':deleted_customers,
+    }
+
+
 def _approved_subscription_invoice_count(subscription_id):
     """Conta somente faturas da assinatura cujo pagamento foi efetivamente aprovado."""
     if not subscription_id:return 0
@@ -1655,6 +1790,12 @@ def enqueue_message(conn, campaign_id, kind, recipient, payload, delay=0):
 
 def _queue_send(item, conn):
     payload=json.loads(item['payload_json'] or '{}'); kind=item['kind']; campaign_id=item['campaign_id']
+    # Nunca envia mensagens/webhooks de uma empresa arquivada ou em processo de exclusão.
+    # A checagem ocorre imediatamente antes do envio para fechar a janela de corrida com o worker.
+    if campaign_id:
+        state=conn.execute('SELECT active FROM campaigns WHERE id=?',(campaign_id,)).fetchone()
+        if not state or not int(state['active'] or 0):
+            return {'sent':False,'reason':'campaign_inactive'}
     if kind=='customer_welcome':
         c=conn.execute('SELECT * FROM campaigns WHERE id=?',(campaign_id,)).fetchone();
         return send_customer_welcome_email(payload['name'],payload['email'],c['name'],payload['public_id'],rowdict(c),email_config_for_client(conn,campaign_id))
@@ -4994,34 +5135,14 @@ class Handler(BaseHTTPRequestHandler):
                 u=conn.execute('SELECT password_hash FROM users WHERE id=?',(s['user_id'],)).fetchone()
                 if not u or not verify_password(password,u['password_hash']):return self.send_json({'ok':False,'error':'invalid_password'},403)
                 c=conn.execute('SELECT * FROM campaigns WHERE id=? AND company_id=?',(s['campaign_id'],s['company_id'])).fetchone()
-                now=now_ts(); option=normalize_billing_option(c['plan'],c['billing_option']) if c else 'free'; commitment=int(c['commitment_until'] or 0) if c else 0
-                # No anual parcelado, excluir a conta no meio do compromisso retiraria o acesso
-                # enquanto as parcelas continuariam vencendo. Por isso a exclusão fica disponível
-                # após o término do compromisso; o cliente pode cancelar a renovação imediatamente.
-                if c and option=='annual_monthly' and commitment and commitment>now:
-                    return self.send_json({'ok':False,'error':'annual_commitment_delete_blocked','commitment_until':commitment,'renewal_cancelled':bool(c['subscription_cancel_at_period_end'])},409)
-                # Antes de apagar acessos, garantimos que não ficará nenhuma assinatura/checkout
-                # remoto cobrando a empresa. Se o provedor falhar, não concluímos a exclusão.
-                ids=[]
-                if c:
-                    for key in ('subscription_id','pending_subscription_id','previous_subscription_id'):
-                        sid=c[key]
-                        if sid and sid not in ids:ids.append(sid)
-                for sid in ids:
-                    if not _best_effort_cancel_subscription(sid):return self.send_json({'ok':False,'error':'billing_cancel_failed'},503)
-                conn.execute('UPDATE campaigns SET active=0,subscription_status=?,subscription_cancel_at_period_end=1,renewal_cancelled_at=COALESCE(renewal_cancelled_at,?),subscription_next_payment_at=NULL WHERE id=?',('cancelled',now,s['campaign_id']))
-                # Encerra os acessos e libera os e-mails para um cadastro futuro sem apagar
-                # os IDs históricos usados por auditoria/transações. O endereço original não
-                # permanece na tabela users e, portanto, não bloqueia a restrição UNIQUE(email).
-                deleted_at=now
-                campaign_users=conn.execute('SELECT id FROM users WHERE campaign_id=?',(s['campaign_id'],)).fetchall()
-                for deleted_user in campaign_users:
-                    uid=int(deleted_user['id'])
-                    tombstone=f'deleted-{uid}-{deleted_at}-{secrets.token_hex(4)}@deleted.invalid'
-                    conn.execute('UPDATE users SET active=0,email=?,password_hash=? WHERE id=?',(tombstone,hash_password(secrets.token_urlsafe(32)),uid))
-                    conn.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
-                audit(conn,s['company_id'],s['user_id'],'client_admin_account_delete','campaign',s['campaign_id'],details='billing_cancelled;emails_released;billing_option='+option,ip_address=self._ip())
-                return self.send_json({'ok':True})
+                if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                try:
+                    result=_permanently_delete_campaign(conn,c,actor_user_id=s['user_id'],ip_address=self._ip())
+                except RuntimeError as exc:
+                    if str(exc)=='billing_cancel_failed':
+                        return self.send_json({'ok':False,'error':'billing_cancel_failed','company_disabled':True,'message':'Sua conta foi bloqueada para novas operações, mas a exclusão definitiva ainda não foi concluída porque o Mercado Pago não confirmou o cancelamento da recorrência. Tente novamente em instantes.'},503)
+                    raise
+                return self.send_json({'ok':True,'deleted':True,**result})
             if path == '/api/client-admin/staff/create':
                 if s['role']!='attendant' or not s['is_client_admin']:return self.send_json({'ok':False,'error':'forbidden'},403)
                 name=str(payload.get('name','')).strip()[:80]; email=normalize_email(payload.get('email')); password=str(payload.get('password','')).strip(); branch_raw=payload.get('branch_id')
@@ -5524,15 +5645,29 @@ class Handler(BaseHTTPRequestHandler):
                     qid=enqueue_message(conn,None,'attendant_welcome',email,{'name':name,'client_name':client['name']}); email_result={'queued':True,'queue_id':qid}
                     audit(conn,s['company_id'],s['user_id'],'staff_welcome_queued','user',new_id,details=f'queue={qid}',ip_address=self._ip())
                 return self.send_json({'ok':True,'user_id':new_id,'client_name':client['name'],'welcome_email':email_result})
-            if path == '/api/manager/campaign/delete':
+            if path == '/api/manager/campaign/archive':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 try: campaign_id=int(payload.get('campaign_id',0))
                 except (TypeError,ValueError): campaign_id=0
                 c=conn.execute('SELECT id,name,code FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id'])).fetchone()
                 if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
                 conn.execute('UPDATE campaigns SET active=0 WHERE id=? AND company_id=?',(campaign_id,s['company_id']))
-                audit(conn,s['company_id'],s['user_id'],'client_delete','campaign',campaign_id,details=c['code'],ip_address=self._ip())
+                audit(conn,s['company_id'],s['user_id'],'client_archive','campaign',campaign_id,details=c['code'],ip_address=self._ip())
                 return self.send_json({'ok':True,'archived_campaign_id':campaign_id})
+            if path == '/api/manager/campaign/delete':
+                if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
+                try: campaign_id=int(payload.get('campaign_id',0))
+                except (TypeError,ValueError): campaign_id=0
+                c=conn.execute('SELECT * FROM campaigns WHERE id=? AND company_id=?',(campaign_id,s['company_id'])).fetchone()
+                if not c:return self.send_json({'ok':False,'error':'campaign_not_found'},404)
+                try:
+                    result=_permanently_delete_campaign(conn,c,actor_user_id=s['user_id'],ip_address=self._ip())
+                except RuntimeError as exc:
+                    code=str(exc)
+                    if code=='billing_cancel_failed':
+                        return self.send_json({'ok':False,'error':'billing_cancel_failed','company_disabled':True,'message':'A empresa foi bloqueada para novas operações, mas a exclusão não foi concluída porque o Mercado Pago ainda não confirmou o cancelamento da recorrência. Tente novamente.'},503)
+                    raise
+                return self.send_json({'ok':True,'deleted_campaign_id':campaign_id,**result})
             if path == '/api/manager/campaign/restore':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
                 try: campaign_id=int(payload.get('campaign_id',0))

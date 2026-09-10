@@ -1069,3 +1069,7 @@ body[data-plan="pro"] #npsCard{order:6}
   #planChart .manager-chart-xlabel,
   #planChart .manager-chart-ylabel{font-size:24px!important;font-weight:600!important}
 }
+
+/* v203 — ações distintas de arquivamento e exclusão definitiva */
+.manager-company-archived{opacity:.72;background:#faf8f6}
+.manager-company-archived td{color:#766b64}

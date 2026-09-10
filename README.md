@@ -1,4 +1,14 @@
-# Fidelizaê! v202
+# Fidelizaê! v203
+
+## v203 — exclusão definitiva segura e limpeza de dados
+
+- **Arquivar** e **Excluir empresa** agora são ações diferentes no Painel Fidelizaê!.
+- Arquivar apenas desativa a empresa e permite restauração posterior.
+- Excluir empresa é irreversível: bloqueia acessos/automações imediatamente, cancela e confirma no Mercado Pago todas as recorrências vinculadas e somente então remove os dados da empresa.
+- Administradores e atendentes vinculados são excluídos automaticamente, junto com sessões, cartões, históricos, campanhas, integrações, filas, webhooks e demais registros dependentes.
+- Clientes globais só são apagados quando não possuem vínculo com nenhuma outra empresa.
+- Se o Mercado Pago não confirmar o cancelamento, a empresa permanece bloqueada e os dados não são apagados, evitando cobrança/uso indevido e perda parcial de dados.
+- Cobranças já concluídas não são estornadas automaticamente; o cancelamento interrompe cobranças recorrentes futuras.
 
 ## v202 — estabilização de sessões e ações do Administrador Geral
 
@@ -566,7 +576,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v202
+**Versão atual:** v203
 
 
 ## Novidades da v117
