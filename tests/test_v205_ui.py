@@ -25,6 +25,6 @@ def test_v205_company_action_labels_and_responsive_breakpoint():
 def test_v205_cache_and_migration_history():
     manager=(ROOT/'static/manager.html').read_text(encoding='utf-8')
     db=(ROOT/'db.py').read_text(encoding='utf-8')
-    assert 'styles.css?v=205' in manager
+    assert 'styles.css?v=206' in manager
     assert "VALUES('v204',?)" in db
     assert "VALUES('v205',?)" in db

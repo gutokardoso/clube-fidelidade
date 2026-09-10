@@ -1,4 +1,10 @@
-# Fidelizaê! v205
+# Fidelizaê! v206
+
+## v206 — Dashboard financeiro idêntico ao Crescimento da plataforma
+
+- Dashboard financeiro agora replica o layout e a interação do Crescimento da plataforma: fundo branco, grade, linha-guia vertical no hover, tooltip flutuante e destaque do último valor.
+- Meses do eixo X usam abreviações em português (jan, fev, mar, abr, mai...), em vez de 05/26.
+- Mantida a responsividade sem rolagem horizontal.
 
 ## v205 — dashboard financeiro unificado e responsividade das empresas
 
@@ -587,7 +593,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v205
+**Versão atual:** v206
 
 
 ## Novidades da v117
