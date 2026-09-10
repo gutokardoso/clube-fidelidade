@@ -1,4 +1,10 @@
-## v210 — Alinhamento dos controles das automações
+## v211 — Correção definitiva do layout das automações
+
+- Corrigido o alinhamento de Canal, Ativa e Salvar com a base da mensagem.
+- Corrigido o carregamento do CSS com cache-busting `v211`.
+- Preservado o layout bloqueado do WhatsApp e a responsividade.
+
+## v211 — Alinhamento dos controles das automações
 
 - Alinha a base dos campos **Canal** e **Ativa** e do botão **SALVAR AUTOMAÇÃO** com a base do campo **Mensagem do e-mail** no desktop.
 - Mantém o comportamento responsivo já existente em telas menores.
@@ -17,7 +23,7 @@
 - Menu interno “Visão Geral” renomeado para “Dashboard”, apontando para o início do dashboard financeiro.
 - Tooltip do gráfico financeiro reduzido e corrigido para não herdar altura do gráfico.
 
-# Fidelizaê! v210
+# Fidelizaê! v211
 
 ## v208 — Dashboard financeiro idêntico ao Crescimento da plataforma
 
@@ -612,7 +618,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v210
+**Versão atual:** v211
 
 
 ## Novidades da v117

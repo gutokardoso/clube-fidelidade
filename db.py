@@ -1379,6 +1379,12 @@ def init_db(db_path=None, seed=True):
         except Exception:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v210',?)",(now_ts(),))
 
+        # Migração v211: correção definitiva do layout das automações.
+        try:
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v211',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        except Exception:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v211',?)",(now_ts(),))
+
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
         if first_client:

@@ -1321,3 +1321,126 @@ body[data-plan="pro"] #npsCard{order:6}
     grid-template-areas:"settings" "message" "emailhelp" "actions" "wa" "last";
   }
 }
+
+
+/* v211 — correção definitiva do layout das automações e cache-busting */
+@media (min-width:1181px){
+  #automationRules .automation-row .automation-content{
+    display:grid!important;
+    width:100%!important;
+    box-sizing:border-box!important;
+    grid-template-columns:minmax(360px, .95fr) minmax(560px, 2fr) minmax(230px, .72fr)!important;
+    grid-template-areas:
+      "settings message actions"
+      ". emailhelp ."
+      "wa wa wa"
+      "last last last"!important;
+    grid-template-rows:auto auto auto auto!important;
+    column-gap:24px!important;
+    row-gap:0!important;
+    align-items:end!important;
+  }
+  #automationRules .automation-row .automation-settings{
+    grid-area:settings!important;
+    display:grid!important;
+    grid-template-columns:1fr 1fr!important;
+    gap:14px!important;
+    align-self:end!important;
+    min-width:0!important;
+    margin:0!important;
+  }
+  #automationRules .automation-row .automation-settings>div{
+    display:flex!important;
+    min-width:0!important;
+    flex-direction:column!important;
+    justify-content:flex-end!important;
+  }
+  #automationRules .automation-row .automation-settings label,
+  #automationRules .automation-row .automation-email-editor>label{
+    display:block!important;
+    margin:0 0 7px!important;
+    line-height:1.2!important;
+  }
+  #automationRules .automation-row .automation-settings select{
+    width:100%!important;
+    height:52px!important;
+    margin:0!important;
+    box-sizing:border-box!important;
+  }
+  #automationRules .automation-row .automation-message{
+    grid-area:message!important;
+    display:block!important;
+    min-width:0!important;
+    width:100%!important;
+    align-self:end!important;
+    margin:0!important;
+  }
+  #automationRules .automation-row .automation-email-editor{
+    display:flex!important;
+    min-width:0!important;
+    width:100%!important;
+    flex-direction:column!important;
+    justify-content:flex-end!important;
+  }
+  #automationRules .automation-row .auto-message{
+    display:block!important;
+    width:100%!important;
+    height:108px!important;
+    min-height:108px!important;
+    max-width:none!important;
+    margin:0!important;
+    box-sizing:border-box!important;
+    resize:vertical!important;
+  }
+  #automationRules .automation-row .automation-actions{
+    grid-area:actions!important;
+    display:flex!important;
+    align-items:flex-end!important;
+    align-self:end!important;
+    min-width:0!important;
+    padding:0!important;
+    margin:0!important;
+  }
+  #automationRules .automation-row .automation-actions .btn{
+    width:100%!important;
+    min-width:230px!important;
+    height:52px!important;
+    margin:0!important;
+    white-space:nowrap!important;
+  }
+  #automationRules .automation-row .automation-email-help{
+    grid-area:emailhelp!important;
+    display:block!important;
+    min-width:0!important;
+    margin:8px 0 16px!important;
+    white-space:nowrap!important;
+    line-height:1.35!important;
+  }
+  #automationRules .automation-row .automation-whatsapp-detail{
+    grid-area:wa!important;
+    width:100%!important;
+    min-width:0!important;
+    margin:0!important;
+  }
+  #automationRules .automation-row .automation-last{
+    grid-area:last!important;
+    width:100%!important;
+    box-sizing:border-box!important;
+    margin:14px 0 0!important;
+  }
+}
+@media (max-width:1180px){
+  #automationRules .automation-row .automation-content{
+    width:100%!important;
+    box-sizing:border-box!important;
+  }
+  #automationRules .automation-row .automation-message,
+  #automationRules .automation-row .automation-whatsapp-detail,
+  #automationRules .automation-row .automation-last{
+    width:100%!important;
+    min-width:0!important;
+  }
+  #automationRules .automation-row .automation-email-help{
+    white-space:normal!important;
+  }
+}

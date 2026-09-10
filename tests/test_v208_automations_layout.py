@@ -12,4 +12,4 @@ def test_automation_layout_v208():
     assert 'background:transparent' in block
     assert 'border:0' in block
     assert 'white-space:nowrap' in css
-    assert '/static/styles.css?v=209' in html
+    assert '/static/styles.css?v=211' in html
