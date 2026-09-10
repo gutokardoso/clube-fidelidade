@@ -1,4 +1,13 @@
-# Fidelizaê! v201
+# Fidelizaê! v202
+
+## v202 — estabilização de sessões e ações do Administrador Geral
+
+- Sessões do Administrador Geral e do painel das empresas usam cookies independentes, permitindo os dois contextos abertos no mesmo navegador.
+- Compatibilidade com a sessão legada durante a transição.
+- Revalidação de CSRF com uma única repetição quando a sessão permanece válida.
+- Exclusão de empresa mantém os dados preservados para restauração e usa mensagens amigáveis.
+- Códigos internos de sessão não são mais exibidos no fluxo de exclusão.
+- Testes de regressão para isolamento de sessão e exclusão.
 
 ## v201 — tipografia legível nos gráficos mobile
 
@@ -557,7 +566,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v201
+**Versão atual:** v202
 
 
 ## Novidades da v117

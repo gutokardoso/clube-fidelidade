@@ -1332,6 +1332,11 @@ def init_db(db_path=None, seed=True):
             conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v201',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
         else:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v201',?)",(now_ts(),))
+        # Migração v202: isolamento de cookies de sessão por contexto (sem mudança estrutural no banco).
+        try:
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v202',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        except Exception:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v202',?)",(now_ts(),))
 
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()

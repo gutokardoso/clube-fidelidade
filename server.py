@@ -46,8 +46,10 @@ from intelligence import customer_intelligence, campaign_intelligence, customer_
 BASE = Path(__file__).resolve().parent
 STATIC = BASE / 'static'
 DB_PATH = os.environ.get('DATABASE_URL') or os.environ.get('CLUBE_DB_PATH', DEFAULT_DB)
-SESSION_COOKIE = 'clube_session'
-VERSION='v201'
+SESSION_COOKIE = 'clube_session'  # legado; mantido apenas para migração transparente
+MANAGER_SESSION_COOKIE = 'fidelizae_manager_session'
+COMPANY_SESSION_COOKIE = 'fidelizae_company_session'
+VERSION='v202'
 _DASHBOARD_CACHE={}
 _DASHBOARD_CACHE_TTL=max(5,int(os.environ.get('DASHBOARD_CACHE_TTL','15')))
 TERMS_VERSION='1.1'
@@ -304,8 +306,9 @@ def _cookie_secure():
     return os.environ.get('CLUBE_SECURE_COOKIE',default_secure)=='1'
 
 
-def _session_cookie(token,max_age=28800):
-    value=f'{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={int(max_age)}'
+def _session_cookie(token,max_age=28800,role=None):
+    cookie_name = MANAGER_SESSION_COOKIE if role == 'manager' else COMPANY_SESSION_COOKIE if role in ('attendant','admin') else SESSION_COOKIE
+    value=f'{cookie_name}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={int(max_age)}'
     if _cookie_secure(): value+='; Secure'
     return value
 
@@ -2072,9 +2075,33 @@ class Handler(BaseHTTPRequestHandler):
         c.load(self.headers.get('Cookie', ''))
         return c
 
+    def _preferred_session_cookie(self):
+        path=urllib.parse.urlparse(getattr(self,'path','') or '').path
+        if path.startswith('/api/manager') or path.startswith('/manager'):
+            return MANAGER_SESSION_COOKIE
+        if path.startswith('/api/admin') or path.startswith('/api/attendant') or path.startswith('/attendant') or path.startswith('/loyalty') or path.startswith('/rewards'):
+            return COMPANY_SESSION_COOKIE
+        # Endpoints compartilhados (/api/session, segurança e logout) seguem o painel que originou a chamada.
+        ref=urllib.parse.urlparse(self.headers.get('Referer','') or '').path
+        if ref.startswith('/manager'): return MANAGER_SESSION_COOKIE
+        if ref.startswith('/security'):
+            ref_qs=urllib.parse.parse_qs(urllib.parse.urlparse(self.headers.get('Referer','') or '').query)
+            return MANAGER_SESSION_COOKIE if (ref_qs.get('context') or [''])[0]=='manager' else COMPANY_SESSION_COOKIE
+        if ref.startswith(('/attendant','/loyalty','/rewards')): return COMPANY_SESSION_COOKIE
+        return None
+
     def _session_token(self):
-        c = self._cookies().get(SESSION_COOKIE)
-        return c.value if c else None
+        jar=self._cookies(); preferred=self._preferred_session_cookie()
+        if preferred:
+            item=jar.get(preferred)
+            if item:return item.value
+        # Compatibilidade com sessões abertas antes da v202. Não sobrescreve os novos cookies.
+        legacy=jar.get(SESSION_COOKIE)
+        if legacy:return legacy.value
+        # Em endpoint compartilhado sem Referer, aceita uma única sessão moderna disponível.
+        modern=[jar.get(MANAGER_SESSION_COOKIE),jar.get(COMPANY_SESSION_COOKIE)]
+        modern=[x for x in modern if x]
+        return modern[0].value if len(modern)==1 else None
 
     def _session(self, conn):
         return get_session(conn, self._session_token())
@@ -3739,7 +3766,7 @@ class Handler(BaseHTTPRequestHandler):
                 token,csrf=create_session(conn,row['id'])
                 persistent_rate_reset('login-account:'+hashlib.sha256(str(row['email']).lower().encode()).hexdigest()[:32])
                 audit(conn,row['company_id'],row['id'],'login_success','user',row['id'],details='2fa',ip_address=self._ip())
-                auth_cookies=[_session_cookie(token),_clear_cookie('clube_2fa_challenge')]
+                auth_cookies=[_session_cookie(token,role=row['role']),_clear_cookie('clube_2fa_challenge')]
                 if path=='/login/2fa': return self.send_redirect('/manager' if row['role']=='manager' else '/attendant',303,{'Set-Cookie':auth_cookies})
                 return self.send_json({'ok':True,'role':row['role'],'csrf':csrf},200,{'Set-Cookie':auth_cookies})
 
@@ -3787,15 +3814,20 @@ class Handler(BaseHTTPRequestHandler):
                 persistent_rate_reset('login-account:'+hashlib.sha256(str(email).lower().encode()).hexdigest()[:32])
                 token,csrf=create_session(conn,u['id']); audit(conn,u['company_id'],u['id'],'login_success','user',u['id'],details='password',ip_address=self._ip())
                 print(f'[AUTH] LOGIN_SUCCESS user={_email_tag(email)} role={u["role"]}')
-                cookie=_session_cookie(token)
+                cookie=_session_cookie(token,role=u['role'])
                 if path=='/login': return self.send_redirect('/manager' if u['role']=='manager' else '/attendant',303,{'Set-Cookie':cookie})
                 return self.send_json({'ok':True,'role':u['role'],'csrf':csrf},200,{'Set-Cookie':cookie})
         if path == '/api/logout':
+            role=None
             with connect(DB_PATH) as conn:
                 token=self._session_token(); s=self._session(conn)
+                if s: role=s['role']
                 if token: conn.execute('DELETE FROM sessions WHERE token=?',(token,))
                 if s: audit(conn,s['company_id'],s['user_id'],'logout',ip_address=self._ip())
-            return self.send_json({'ok':True},200,{'Set-Cookie':[_clear_cookie(SESSION_COOKIE),_clear_cookie('clube_2fa_challenge')]})
+            role_cookie=MANAGER_SESSION_COOKIE if role=='manager' else COMPANY_SESSION_COOKIE if role else None
+            clears=[_clear_cookie(SESSION_COOKIE),_clear_cookie('clube_2fa_challenge')]
+            if role_cookie: clears.append(_clear_cookie(role_cookie))
+            return self.send_json({'ok':True},200,{'Set-Cookie':clears})
         if path in ['/api/join','/join']:
             if not self._rate_ok('join',12,600,self._ip(),900): return
             code=str(payload.get('campaign_code','')).upper().strip()
@@ -4331,7 +4363,7 @@ class Handler(BaseHTTPRequestHandler):
                 new_token,new_csrf=create_session(conn,s['user_id'])
                 audit(conn,s['company_id'],s['user_id'],'password_change','user',s['user_id'],details='sessions_revoked',ip_address=self._ip())
                 print(f'[AUTH] ATTENDANT_PASSWORD_CHANGED user_id={s["user_id"]} sessions_revoked=True')
-                return self.send_json({'ok':True,'csrf':new_csrf},200,{'Set-Cookie':_session_cookie(new_token)})
+                return self.send_json({'ok':True,'csrf':new_csrf},200,{'Set-Cookie':_session_cookie(new_token,role='attendant')})
             if path == '/api/attendant/customer/update':
                 if s['role']!='attendant' or not s['is_client_admin']: return self.send_json({'ok':False,'error':'forbidden'},403)
                 if not s['campaign_id']: return self.send_json({'ok':False,'error':'attendant_without_client'},403)
@@ -5384,7 +5416,7 @@ class Handler(BaseHTTPRequestHandler):
                 new_token,new_csrf=create_session(conn,s['user_id'])
                 audit(conn,s['company_id'],s['user_id'],'password_change','user',s['user_id'],details='manager_sessions_revoked',ip_address=self._ip())
                 print(f'[AUTH] MANAGER_PASSWORD_CHANGED user_id={s["user_id"]} sessions_revoked=True')
-                return self.send_json({'ok':True,'csrf':new_csrf},200,{'Set-Cookie':_session_cookie(new_token)})
+                return self.send_json({'ok':True,'csrf':new_csrf},200,{'Set-Cookie':_session_cookie(new_token,role='manager')})
 
             if path == '/api/manager/admin':
                 if s['role']!='manager': return self.send_json({'ok':False,'error':'forbidden'},403)
