@@ -1,12 +1,20 @@
-## v207 — Dashboard reorganizado e tooltip compacto
+## v208 — Automações reorganizadas
+
+- Recria os cards de automação com faixa superior destacada contendo nome, status e gatilho da automação.
+- Alinha Canal, Ativa, Mensagem do e-mail e Salvar automação com melhor hierarquia visual.
+- Mantém o texto de ajuda logo abaixo da mensagem do e-mail e em uma única linha quando houver espaço.
+- Remove o fundo branco interno da mensagem oficial do WhatsApp, mantendo somente o contorno do bloco para reforçar que o texto não é editável.
+- Adiciona responsividade para tablet e mobile sem quebrar os campos.
+
+## v208 — Dashboard reorganizado e tooltip compacto
 
 - Dashboard financeiro, Clientes por gênero, Clientes por idade e Dispositivos agora aparecem antes de RETENÇÃO E DESEMPENHO.
 - Menu interno “Visão Geral” renomeado para “Dashboard”, apontando para o início do dashboard financeiro.
 - Tooltip do gráfico financeiro reduzido e corrigido para não herdar altura do gráfico.
 
-# Fidelizaê! v207
+# Fidelizaê! v208
 
-## v207 — Dashboard financeiro idêntico ao Crescimento da plataforma
+## v208 — Dashboard financeiro idêntico ao Crescimento da plataforma
 
 - Dashboard financeiro agora replica o layout e a interação do Crescimento da plataforma: fundo branco, grade, linha-guia vertical no hover, tooltip flutuante e destaque do último valor.
 - Meses do eixo X usam abreviações em português (jan, fev, mar, abr, mai...), em vez de 05/26.
@@ -599,7 +607,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v207
+**Versão atual:** v208
 
 
 ## Novidades da v117

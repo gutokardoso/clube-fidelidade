@@ -1147,3 +1147,117 @@ body[data-plan="pro"] #npsCard{order:6}
   .dashboard-retention-head{margin-top:20px!important;padding-top:18px!important}
   .finance-line-chart.manager-line-chart>.manager-chart-tooltip{min-width:138px!important;max-width:165px!important;padding:7px 9px!important}
 }
+
+/* v208 — automações reorganizadas conforme layout de referência */
+#automationRules{gap:18px}
+.automation-row{
+  display:block;
+  padding:0;
+  margin:0;
+  overflow:hidden;
+  border:1px solid #eadfd6;
+  border-radius:18px;
+  background:#fff;
+}
+.automation-row .automation-head{
+  display:block;
+  padding:14px 18px;
+  margin:0;
+  background:#fff1df;
+  border-bottom:1px solid #f1d3b0;
+}
+.automation-head-main{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  flex-wrap:wrap;
+}
+.automation-head-main>b{font-size:18px;line-height:1.2;color:#3b2f29}
+.automation-head-main>small{margin:0!important;color:#7b6658!important;font-size:13px;line-height:1.35}
+.automation-row .automation-state{flex:0 0 auto}
+.automation-row .automation-content{
+  display:grid;
+  grid-template-columns:minmax(250px,320px) minmax(0,1fr) auto;
+  grid-template-areas:
+    "settings message actions"
+    "wa wa wa"
+    "last last last";
+  gap:14px 18px;
+  align-items:start;
+  padding:18px;
+}
+.automation-row .automation-settings{grid-area:settings;display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+.automation-row .automation-message{grid-area:message;min-width:0}
+.automation-row .automation-actions{grid-area:actions;align-self:start;padding-top:27px}
+.automation-row .automation-settings label,
+.automation-row .automation-email-editor>label{display:block;margin:0 0 6px;font-weight:700}
+.automation-row .automation-settings select{width:100%;height:48px;margin:0}
+.automation-row .automation-email-editor{display:block;min-width:0}
+.automation-row .auto-message{
+  display:block;
+  width:100%;
+  height:104px;
+  min-height:104px;
+  margin:0;
+  box-sizing:border-box;
+  resize:vertical;
+}
+.automation-row .automation-email-help{
+  display:block;
+  margin:7px 0 0;
+  white-space:nowrap;
+  line-height:1.35;
+}
+.automation-row .automation-actions .btn{height:48px;min-width:170px;margin:0}
+.automation-row .automation-whatsapp-detail{grid-area:wa;min-width:0}
+.automation-row .automation-whatsapp-box{
+  border:1px solid #e4d8cf;
+  border-radius:14px;
+  background:#fbf9f7;
+  padding:15px 16px;
+}
+.automation-row .automation-whatsapp-title{margin-bottom:10px}
+.automation-row .automation-whatsapp-copy{
+  min-height:0;
+  padding:2px 0 4px;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  color:#332b27;
+  line-height:1.5;
+  cursor:default;
+  user-select:text;
+}
+.automation-row .automation-whatsapp-help{margin-top:8px;padding-top:9px;border-top:1px solid #e6ddd6}
+.automation-row .automation-last{grid-area:last;margin:0}
+@media(max-width:1180px){
+  .automation-row .automation-content{
+    grid-template-columns:minmax(220px,300px) minmax(0,1fr);
+    grid-template-areas:
+      "settings message"
+      "actions actions"
+      "wa wa"
+      "last last";
+  }
+  .automation-row .automation-actions{padding-top:0}
+  .automation-row .automation-actions .btn{width:100%}
+  .automation-row .automation-email-help{white-space:normal}
+}
+@media(max-width:760px){
+  .automation-row .automation-head{padding:13px 14px}
+  .automation-head-main{align-items:flex-start}
+  .automation-head-main>small{flex-basis:100%}
+  .automation-row .automation-content{
+    grid-template-columns:1fr;
+    grid-template-areas:"settings" "message" "actions" "wa" "last";
+    padding:14px;
+  }
+  .automation-row .automation-settings{grid-template-columns:1fr 1fr}
+  .automation-row .auto-message{height:120px;min-height:120px}
+  .automation-row .automation-email-help{white-space:normal}
+  .automation-row .automation-whatsapp-title{flex-direction:row;align-items:center}
+}
+@media(max-width:480px){
+  .automation-row .automation-settings{grid-template-columns:1fr}
+  .automation-row .automation-whatsapp-title{flex-direction:column;align-items:flex-start}
+}

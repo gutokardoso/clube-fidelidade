@@ -1367,6 +1367,11 @@ def init_db(db_path=None, seed=True):
             conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v207',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
         except Exception:
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v207',?)",(now_ts(),))
+        # Migração v208: layout das automações reorganizado e mensagem WhatsApp visualmente bloqueada.
+        try:
+            conn.execute("INSERT INTO schema_migrations(version,applied_at) VALUES('v208',?) ON CONFLICT (version) DO NOTHING",(now_ts(),))
+        except Exception:
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('v208',?)",(now_ts(),))
 
         # Compatibilidade: atendentes antigos são associados ao primeiro cliente ativo.
         first_client = conn.execute('SELECT id FROM campaigns WHERE active=1 ORDER BY id LIMIT 1').fetchone()
