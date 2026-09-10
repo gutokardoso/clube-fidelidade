@@ -1272,3 +1272,52 @@ body[data-plan="pro"] #npsCard{order:6}
     padding-top:0;
   }
 }
+
+
+/* v210 — base dos controles alinhada exatamente ao textarea */
+@media(min-width:1181px){
+  .automation-row .automation-content{
+    grid-template-areas:
+      "settings message actions"
+      ". emailhelp ."
+      "wa wa wa"
+      "last last last";
+    grid-template-rows:auto auto auto auto;
+    row-gap:0;
+    column-gap:18px;
+  }
+  .automation-row .automation-settings{
+    align-self:end;
+    margin-bottom:0;
+  }
+  .automation-row .automation-message{
+    align-self:start;
+  }
+  .automation-row .automation-actions{
+    align-self:end;
+    padding-top:0;
+    margin-bottom:0;
+  }
+  .automation-row .automation-email-help{
+    grid-area:emailhelp;
+    margin:7px 0 14px;
+    white-space:nowrap;
+  }
+  .automation-row .automation-whatsapp-detail{margin-top:0}
+}
+@media(max-width:1180px){
+  .automation-row .automation-content{
+    grid-template-areas:
+      "settings message"
+      ". emailhelp"
+      "actions actions"
+      "wa wa"
+      "last last";
+  }
+  .automation-row .automation-email-help{grid-area:emailhelp;margin:7px 0 0}
+}
+@media(max-width:760px){
+  .automation-row .automation-content{
+    grid-template-areas:"settings" "message" "emailhelp" "actions" "wa" "last";
+  }
+}
