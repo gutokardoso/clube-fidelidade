@@ -1,6 +1,12 @@
-# Fidelizaê! v206
+## v207 — Dashboard reorganizado e tooltip compacto
 
-## v206 — Dashboard financeiro idêntico ao Crescimento da plataforma
+- Dashboard financeiro, Clientes por gênero, Clientes por idade e Dispositivos agora aparecem antes de RETENÇÃO E DESEMPENHO.
+- Menu interno “Visão Geral” renomeado para “Dashboard”, apontando para o início do dashboard financeiro.
+- Tooltip do gráfico financeiro reduzido e corrigido para não herdar altura do gráfico.
+
+# Fidelizaê! v207
+
+## v207 — Dashboard financeiro idêntico ao Crescimento da plataforma
 
 - Dashboard financeiro agora replica o layout e a interação do Crescimento da plataforma: fundo branco, grade, linha-guia vertical no hover, tooltip flutuante e destaque do último valor.
 - Meses do eixo X usam abreviações em português (jan, fev, mar, abr, mai...), em vez de 05/26.
@@ -593,7 +599,7 @@ CLUBE_ALLOW_ADMIN_REPAIR=0
 - Alteração de plano pelo painel é bloqueada enquanto houver compromisso anual vigente.
 - Mantidas as melhorias de segurança/Device ID e diagnóstico do Mercado Pago da v118.
 
-**Versão atual:** v206
+**Versão atual:** v207
 
 
 ## Novidades da v117
